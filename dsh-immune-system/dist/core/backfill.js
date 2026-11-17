@@ -42,31 +42,42 @@ export const BACKFILL_TOOLS = new Set([
  * fetched in bounded chunks with bound parameters.
  */
 /** Full input/output per callID, shared with core/audit.ts. */
-export function loadParts(db, sessionIds) {
+export function loadParts(db, sessionIds, neededCallIds) {
     const map = new Map();
-    const CHUNK = 200;
+    if (sessionIds.length === 0)
+        return map;
+    const CHUNK = 100;
     for (let i = 0; i < sessionIds.length; i += CHUNK) {
         const chunk = sessionIds.slice(i, i + CHUNK);
         const placeholders = chunk.map(() => '?').join(',');
+        // Extract ONLY callID + bounded state.input, and pre-filter on substr(data, 1, 200)
+        // so SQLite never walks multi-GB overflow pages of non-tool text/reasoning blobs.
         const rows = db
-            .prepare(`SELECT data FROM part
+            .prepare(`SELECT json_extract(data, '$.callID') AS call_id,
+                CASE
+                  WHEN length(json_extract(data, '$.state.input')) <= 8192 THEN json_extract(data, '$.state.input')
+                  ELSE substr(json_extract(data, '$.state.input'), 1, 1500)
+                END AS input_json
+           FROM part
           WHERE session_id IN (${placeholders})
-            AND json_extract(data, '$.type') = 'tool'
-          ORDER BY time_created ASC`)
+            AND (substr(data, 1, 200) LIKE '%"type":"tool"%' OR substr(data, 1, 200) LIKE '%"type": "tool"%')
+            AND json_extract(data, '$.type') = 'tool'`)
             .all(...chunk);
         for (const row of rows) {
-            try {
-                const d = JSON.parse(row.data);
-                if (typeof d.callID === 'string') {
-                    map.set(d.callID, {
-                        input: d.state?.input ?? null,
-                        output: typeof d.state?.output === 'string' ? d.state.output : '',
-                    });
+            if (typeof row.call_id !== 'string')
+                continue;
+            if (neededCallIds && !neededCallIds.has(row.call_id))
+                continue;
+            let input = null;
+            if (typeof row.input_json === 'string' && row.input_json.length <= 16_384) {
+                try {
+                    input = JSON.parse(row.input_json);
+                }
+                catch {
+                    input = row.input_json;
                 }
             }
-            catch {
-                // A malformed part is skipped; the error_message path still works.
-            }
+            map.set(row.call_id, { input, output: '' });
         }
     }
     return map;

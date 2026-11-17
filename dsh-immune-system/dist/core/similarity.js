@@ -46,6 +46,14 @@ export function charSet(text) {
  */
 export function prescriptionSimilarity(left, right) {
     const trigram = jaccard(charTrigrams(left), charTrigrams(right));
+    const aClean = left.trim();
+    const bClean = right.trim();
+    const hasCjk = /[\u4e00-\u9fff]/.test(aClean) || /[\u4e00-\u9fff]/.test(bClean);
+    // Character-set Jaccard bridges 1-char shifts in short CJK phrases ("装依赖" vs "安装依赖"),
+    // but over 26-letter English text longer than ~24 chars it falsely collides unrelated advice.
+    if (!hasCjk && Math.max(aClean.length, bClean.length) > 24) {
+        return trigram;
+    }
     const chars = jaccard(charSet(left), charSet(right));
     return Math.max(trigram, chars);
 }

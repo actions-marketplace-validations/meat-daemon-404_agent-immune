@@ -11,10 +11,18 @@
  */
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { ImmuneStore } from '../../core/store/index.js';
-import { applyAction, evolutionStats, readState, resolveBudgetMs } from '../../core/ui/query.js';
+import {
+  applyAction,
+  evolutionStats,
+  readState,
+  readWorkspaces,
+  resolveBudgetMs,
+  runHygieneAction,
+} from '../../core/ui/query.js';
 import { exportLibrary, importLibrary } from '../../core/sync.js';
 import { renderSkillMarkdown } from '../../core/export.js';
 import { shareSanityCheck } from '../../core/share-guard.js';
+import { scanMagpieTelemetry } from '../../core/audit/magpie.js';
 
 /** The slice of the host's `webServer` service this needs. */
 interface WebServerLike {
@@ -118,8 +126,19 @@ export function registerImmuneUiRoute(
             return;
           }
 
+          if (req.method === 'GET' && path.endsWith('/workspaces')) {
+            sendJson(res, 200, { workspaces: readWorkspaces(store) });
+            return;
+          }
+
+          if (req.method === 'GET' && path.endsWith('/models')) {
+            sendJson(res, 200, store.modelImmunity(scanMagpieTelemetry()));
+            return;
+          }
+
           if (req.method === 'GET') {
-            const view = url.searchParams.get('view') === 'shared' ? 'shared' : 'project';
+            const rawView = url.searchParams.get('view');
+            const view = rawView === 'shared' ? 'shared' : rawView === 'quarantined' ? 'quarantined' : 'project';
             const query = url.searchParams.get('q') ?? '';
             // evolution rides on top of the shared readState payload so BOTH
             // UIs render the strip from one query layer (AGENTS.md #14).
@@ -127,6 +146,29 @@ export function registerImmuneUiRoute(
               ...readState(store, view, query, getBudgetMs?.() ?? resolveBudgetMs()),
               evolution: evolutionStats(store),
             });
+            return;
+          }
+
+          if (req.method === 'POST' && path.endsWith('/hygiene')) {
+            if (!isSameOrigin(req)) {
+              sendJson(res, 403, { error: 'cross-origin mutation refused' });
+              return;
+            }
+            const type = String(req.headers['content-type'] ?? '');
+            if (!type.includes('application/json')) {
+              sendJson(res, 415, { error: 'content-type must be application/json' });
+              return;
+            }
+            const body = await readBody(req);
+            let dryRun = false;
+            try {
+              const parsed = body.trim() ? (JSON.parse(body) as Record<string, unknown>) : {};
+              dryRun = parsed.dryRun === true;
+            } catch {
+              sendJson(res, 400, { error: 'invalid json' });
+              return;
+            }
+            sendJson(res, 200, { ok: true, report: runHygieneAction(store, dryRun) });
             return;
           }
 

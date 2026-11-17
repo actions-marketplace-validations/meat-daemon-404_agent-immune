@@ -12,6 +12,8 @@ export interface DistillJob {
   repair_path?: string[];
   /** ROADMAP 1.4b: '' (self-repair) or 'user_correction'. */
   origin?: string;
+  project_scope?: string;
+  cwd?: string;
   status: string;
   note: string;
   created_at: number;
@@ -27,13 +29,15 @@ export function enqueueJob(
   humanHint = '',
   repairPath: string[] = [],
   origin = '',
+  projectScope = '*',
+  cwd = '',
 ): number {
   const now = Date.now();
   const info = db
     .prepare(
       `INSERT INTO distill_jobs
-         (tool_name, failure_trace, success_trace, injected_ids, human_hint, repair_path, origin, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+         (tool_name, failure_trace, success_trace, injected_ids, human_hint, repair_path, origin, project_scope, cwd, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
     )
     .run(
       toolName,
@@ -43,6 +47,8 @@ export function enqueueJob(
       humanHint,
       JSON.stringify(repairPath.slice(-3)),
       origin,
+      projectScope,
+      cwd,
       now,
       now,
     );

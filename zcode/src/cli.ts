@@ -1,1049 +1,159 @@
 #!/usr/bin/env node
 /**
- * Command-line surface for the immune database.
+ * Command-line router for `agent-immune` (`dsh-immune-system`).
  *
- * Slash commands in this plugin are Markdown prompts, so they cannot call the
- * database themselves. They ask the model to run this CLI instead, which keeps
- * the logic testable and out of the prompt.
- *
- * Usage: node dist/zcode/src/cli.js
- *   <list|stats|coverage|export|prune|forget|search|rewrite|consolidate|backup|connect|seed|backfill|audit|sync-doc|ui|doctor|demo> [...]
+ * All command handlers live in focused sub-modules under `zcode/src/commands/`.
  */
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
 import { ImmuneStore } from '../../core/store/index.js';
-import { renderSkillMarkdown } from '../../core/export.js';
-import { strings } from '../../core/i18n.js';
-import { SNAPSHOT_FORMAT, exportLibrary, importLibrary } from '../../core/sync.js';
-import { syncDoc } from '../../core/sync-doc.js';
-import { backfill } from '../../core/backfill.js';
-import { readLlmConfig } from '../../core/llm.js';
-import { ROUND_TRIPS_PER_REPEAT, estimateAvoided, formatTokens } from '../../core/value.js';
-import { coverage } from '../../core/coverage.js';
-import { echoCandidates, rewriteEchoes } from '../../core/rewrite.js';
-import { auditHistory, renderAuditReport } from '../../core/audit.js';
-import { detectProjectBaselineDetail, filterRulesByBaseline, parseBaselineFlag } from '../../core/baseline.js';
-import { BUILTIN_PACKS } from '../../core/packs.js';
-import { ingestSkillPaths, normalizeSkillPackId } from '../../core/skill-ingest.js';
 import {
-  CONSOLIDATE_SIMILARITY,
-  consolidateRules,
-  findConsolidationCandidates,
-  findLessonGroups,
-} from '../../core/consolidate.js';
-import { sleepReviewGroupsOf } from '../../core/sleep-consolidate.js';
-import { HOSTS, connectAllDetected, connectHost, connectStatus, disconnectHost } from '../../core/connect.js';
-import { ciCheck, formatShareViolations, parseManagedBlock, shareSanityCheck } from '../../core/share-guard.js';
-import type { ConnectHostId } from '../../core/connect.js';
-import { startUiServer } from '../../core/ui/server.js';
-import { runDoctor } from './doctor.js';
-import { dshDirOf, selfMarkers } from './root-marker.js';
-import { drainJobs } from './drain.js';
-
-const WIDE =
-  /[\u1100-\u115f\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe6f\uff00-\uff60\uffe0-\uffe6]/;
-
-/** Terminal columns a string occupies; CJK glyphs are double width. */
-function width(text: string): number {
-  let total = 0;
-  for (const ch of text) total += WIDE.test(ch) ? 2 : 1;
-  return total;
-}
-
-function pad(value: string, columns: number): string {
-  const used = width(value);
-  return used >= columns ? value : value + ' '.repeat(columns - used);
-}
-
-/** Clamp to a column budget without splitting a double-width glyph. */
-function clamp(value: string, columns: number): string {
-  if (width(value) <= columns) return value;
-  let out = '';
-  let used = 0;
-  for (const ch of value) {
-    const w = WIDE.test(ch) ? 2 : 1;
-    if (used + w > columns - 1) break;
-    out += ch;
-    used += w;
-  }
-  return `${out}…`;
-}
-
-function parseSeedCliArgs(
-  args: string[],
-  valueFlags: string[],
-): { positional: string[]; values: Map<string, string>; booleans: Set<string> } {
-  const valueSet = new Set(valueFlags);
-  const positional: string[] = [];
-  const values = new Map<string, string>();
-  const booleans = new Set<string>();
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
-    if (arg === undefined) continue;
-    if (!arg.startsWith('--')) {
-      positional.push(arg);
-      continue;
-    }
-    const eq = arg.indexOf('=');
-    if (eq > 0) {
-      const flag = arg.slice(0, eq);
-      if (valueSet.has(flag)) values.set(flag, arg.slice(eq + 1));
-      continue;
-    }
-    if (valueSet.has(arg) && i + 1 < args.length) {
-      const nextVal = args[++i];
-      if (nextVal !== undefined) values.set(arg, nextVal);
-      continue;
-    }
-    booleans.add(arg);
-  }
-  return { positional, values, booleans };
-}
-
-function cmdList(store: ImmuneStore, includeRetired: boolean): void {
-  const t = strings();
-  const rows = store.listAll(includeRetired);
-  if (rows.length === 0) {
-    process.stdout.write(`${t.noAntibodies}\n`);
-    return;
-  }
-  const indent = ' '.repeat(27);
-  const header = `${pad('#', 5)}${pad('hits', 6)}${pad('fails', 7)}${pad('status', 9)}${t.trigger}\n`;
-  process.stdout.write(header);
-  for (const ab of rows) {
-    process.stdout.write(
-      `${pad(String(ab.id), 5)}${pad(String(ab.hit_count), 6)}${pad(String(ab.fail_count), 7)}` +
-        `${pad(ab.status, 9)}${clamp(ab.trigger_pattern, 64)}\n` +
-        `${indent}${t.avoid}: ${clamp(ab.symptom, 90)}\n` +
-        `${indent}${t.do}: ${clamp(ab.prescription, 90)}\n`,
-    );
-    // Provenance rides on its own line, and only when there is any: a plain
-    // rule stays two lines, a rule with a story carries it visibly.
-    const marks: string[] = [];
-    if (ab.origin === 'user_correction') marks.push('origin: user correction');
-    else if (ab.origin === 'self_healing_experiment') marks.push('origin: self-healing');
-    if ((ab.parent_id ?? 0) > 0) marks.push(`mutated from #${ab.parent_id}`);
-    if ((ab.probation_at ?? 0) > 0 && ab.status === 'active') marks.push('env probation');
-    if (ab.retire_reason) marks.push(ab.retire_reason);
-    if (ab.prescription_source === 'llm' || ab.prescription_source === 'human' || ab.prescription_source === 'host_llm') {
-      marks.push(`prescription: ${ab.prescription_source}`);
-    }
-    if (marks.length > 0) process.stdout.write(`${indent}— ${marks.join(' · ')}\n`);
-  }
-}
-
-function cmdStats(store: ImmuneStore): void {
-  const all = store.listAll(true);
-  const active = all.filter((a) => a.status === 'active');
-  const retired = all.length - active.length;
-  // Lifetime delivery, retired rules included: their injections happened, and
-  // computing this from `active` made the total shrink whenever anti-rot
-  // retired a rule. Same definition as the dashboard.
-  const hits = all.reduce((sum, a) => sum + a.hit_count, 0);
-  // Delivery is not the same as value: `injections` counts how often the
-  // library was used, the penalties say how often it held. Printing both keeps
-  // a growing library from looking like a working one.
-  const fails = all.reduce((sum, a) => sum + a.fail_count, 0);
-  const heldLine =
-    hits > 0
-      ? `held up: ${Math.max(0, hits - fails)} of ${hits} injections (${Math.round((fails / hits) * 100)}% blamed for a later failure)\n`
-      : '';
-  const s = store.stats();
-  // The two counters an operator cannot infer from the rows themselves:
-  // repeats the suppression window caught, and whether the configured model
-  // actually produced rules or kept falling back.
-  const model =
-    s.llmDistilled > 0 || s.llmFallbacks > 0
-      ? `model distillation: ${s.llmDistilled} from the model, ${s.llmFallbacks} degraded to the rule path\n`
-      : '';
-  // Attribution answers "is a model worse here, and did a lesson survive a
-  // model switch" — neither is visible from a single library total.
-  const byModel = store.modelBreakdown().filter((r) => r.model !== 'unknown');
-  const cross = store.crossModelRules();
-  const attribution =
-    byModel.length > 0
-      ? 'by model:\n' +
-        byModel
-          .slice(0, 6)
-          .map((r) => `  ${r.model}: ${r.hits} deliveries, ${r.fails} failed, ${r.rules} rule(s)\n`)
-          .join('') +
-        (cross > 0 ? `cross-model rules: ${cross} (held under more than one model)\n` : '')
-      : '';
-  // Measured, never asserted: the round-trip size comes from this project's own
-  // usage rows, and the only assumption (two round-trips per suppressed repeat)
-  // is printed with the number.
-  const avoided = estimateAvoided(s.suppressedRepeats);
-  const valueLine = avoided
-    ? `value: ${avoided.suppressed} suppressed repeat(s) ≈ ${formatTokens(avoided.avoidedTokens)} tokens not spent ` +
-      `(median round-trip ${formatTokens(avoided.medianRequestTokens)} × ${ROUND_TRIPS_PER_REPEAT}, ${avoided.samples} samples)\n`
-    : '';
-  // ROADMAP 2.4b: the sleep scan queues review clusters; here is where the
-  // operator finds out without remembering that `immune consolidate` exists.
-  const sleepGroups = sleepReviewGroupsOf(store);
-  const sleepLine =
-    sleepGroups > 0
-      ? `sleep review: ${sleepGroups} cluster(s) of 5+ same-lesson rules — run \`immune consolidate --dry-run\`\n`
-      : '';
-  process.stdout.write(
-    `antibodies: ${all.length} (active ${active.length}, retired ${retired})\n` +
-      `injections: ${hits}\n` +
-      heldLine +
-      `repeats suppressed: ${s.suppressedRepeats}\n` +
-      `queued distill jobs: ${store.pendingJobCount()}\n` +
-      model +
-      attribution +
-      valueLine +
-      sleepLine +
-      `database: ${store.dbPath}\n`,
-  );
-}
-
-function cmdExport(store: ImmuneStore, args: string[]): void {
-  const minHits = Number(args[0] ?? '');
-  const threshold = Number.isFinite(minHits) && minHits > 0 ? minHits : 3;
-  const rows = store.exportable(threshold);
-  if (rows.length === 0) {
-    process.stdout.write(`${strings().noExport}\n`);
-    return;
-  }
-
-  // ROADMAP 3.2: the share gate. A rule that still carries a machine path or a
-  // secret-shaped string must FAIL the export, not ship to the team — redaction
-  // at capture time (#10) is the first line; this is the second.
-  const violations = shareSanityCheck(rows);
-  if (violations.length > 0) {
-    process.stderr.write(`${formatShareViolations(violations)}\n`);
-    process.exitCode = 1;
-    return;
-  }
-
-  const outPath = args[1]
-    ? resolve(args[1])
-    : join(dshDirOf(), 'skills', 'project-pitfalls', 'SKILL.md');
-  mkdirSync(dirname(outPath), { recursive: true });
-  writeFileSync(outPath, renderSkillMarkdown(rows, { minHits: threshold }), 'utf8');
-  process.stdout.write(`${strings().exported} ${rows.length} -> ${outPath}\n`);
-}
+  cmdBackupAsync,
+  cmdCiCheck,
+  cmdExport,
+  cmdExportJson,
+  cmdForget,
+  cmdImportJson,
+  cmdLearn,
+  cmdList,
+  cmdSearch,
+  cmdSyncDoc,
+} from './commands/library.js';
+import {
+  cmdConsolidate,
+  cmdCoverage,
+  cmdDetours,
+  cmdHygiene,
+  cmdModels,
+  cmdReceipts,
+  cmdRewriteSyncOrAsync,
+  cmdStats,
+  cmdTriage,
+} from './commands/intelligence.js';
+import {
+  cmdAudit,
+  cmdBackfillAsync,
+  cmdIngestDisk,
+  cmdIngestSkill,
+  cmdSeed,
+  cmdWorkspaces,
+} from './commands/ingest.js';
+import { cmdConnect, cmdDoctor, cmdUi, runDemo } from './commands/system.js';
 
 function main(argv: string[]): number {
   const [command = 'list', ...args] = argv;
-
-  // Async commands that outlive main() own the store close themselves; the
-  // shared finally below must not close theirs out from under them.
   let deferStoreClose = false;
 
-  // `demo` needs no user database and runs the REAL pipeline (distill, recall,
-  // render) on an in-memory store, so the quickstart cannot pollute anything.
-  // main() is synchronous, so the async demo pins the process with a timer
-  // until its promise settles — otherwise node exits before step [2].
   if (command === 'demo') {
     const keepAlive = setInterval(() => {}, 60_000);
     runDemo()
       .catch((error: unknown) => {
-        process.stderr.write(
-          `demo failed: ${error instanceof Error ? error.message : String(error)}\n`,
-        );
+        process.stderr.write(`demo failed: ${error instanceof Error ? error.message : String(error)}\n`);
         process.exitCode = 1;
       })
       .finally(() => clearInterval(keepAlive));
     return 0;
   }
 
-  // `connect` only edits other hosts' hook config files — it never opens the
-  // store, so it is handled before the short-lived store below, like `demo`.
-  if (command === 'connect') {
-    const hostArg = args.find((arg) => !arg.startsWith('--'));
-    const remove = args.includes('--remove');
-    if (!hostArg) {
-      if (args.includes('--status')) {
-        // `connect --status`: read-only survey of the hosts this machine knows
-        // about. The only zero-arg form that stays read-only.
-        const rows = connectStatus();
-        process.stdout.write('Hosts immune can hook (connect <host> [--remove]):\n');
-        for (const row of rows) {
-          process.stdout.write(`  ${row.label.padEnd(12)} ${row.state.padEnd(14)} ${row.configPath}\n`);
-        }
-        return 0;
-      }
-      // Zero-arg `connect`: detect installed hosts and wire each one
-      // idempotently (ROADMAP 1.2). Nothing detected is a no-op with guidance.
-      try {
-        const report = connectAllDetected({ refresh: args.includes('--refresh') });
-        if (report.detected.length === 0) {
-          process.stdout.write(
-            'connect: no supported host detected (~/.claude, ~/.codex, ~/.gemini/antigravity). ' +
-              'Install a host first, or wire one explicitly: connect claude-code\n',
-          );
-          return 0;
-        }
-        for (const candidate of report.detected) {
-          if (candidate.wired) continue;
-          process.stdout.write(`  ${candidate.label}: detected (${candidate.marker}) — ${candidate.reason}\n`);
-        }
-        if (report.wired.length === 0) {
-          process.stdout.write('connect: detected hosts are wired through their own plugin systems; nothing to write\n');
-          return 0;
-        }
-        for (const wired of report.wired) {
-          process.stdout.write(`connected ${wired.label} -> ${wired.configPath}\n`);
-          const counts: string[] = [];
-          if (wired.added > 0) counts.push(`${wired.added} event(s) wired`);
-          if (wired.upgraded > 0) counts.push(`${wired.upgraded} stale entry(ies) upgraded`);
-          if (wired.alreadyPresent > 0) counts.push(`${wired.alreadyPresent} already present`);
-          process.stdout.write(`  ${counts.join(' · ')}: ${wired.eventsWired.join(', ')}\n`);
-          if (wired.vendorDir) {
-            process.stdout.write(
-              `  vendored: ${wired.vendorDir} (v${wired.vendorVersion ?? '?'}${wired.vendorRefreshed ? ', refreshed' : ''})\n`,
-            );
-          }
-          process.stdout.write(`  scripts: ${wired.scriptDir}\n`);
-          if (wired.backupPath) process.stdout.write(`  backup: ${wired.backupPath}\n`);
-          for (const note of wired.notes) process.stdout.write(`  note: ${note}\n`);
-        }
-        return 0;
-      } catch (error) {
-        process.stderr.write(`connect failed: ${error instanceof Error ? error.message : String(error)}\n`);
-        return 1;
-      }
-    }
-    const definition = (HOSTS as Record<string, (typeof HOSTS)[ConnectHostId]>)[hostArg];
-    if (!definition) {
-      process.stderr.write(
-        `connect: unknown host "${hostArg}". Supported: ${Object.keys(HOSTS).join(', ')}\n`,
-      );
-      return 2;
-    }
-    try {
-      if (remove) {
-        const report = disconnectHost(definition.id);
-        process.stdout.write(
-          report.removed > 0
-            ? `removed ${report.removed} immune hook(s) from ${report.configPath}\n`
-            : `no immune hooks found in ${report.configPath}\n`,
-        );
-        if (report.vendorDir) process.stdout.write(`  vendored install removed: ${report.vendorDir}\n`);
-        return 0;
-      }
-      const report = connectHost(definition.id, { refresh: args.includes('--refresh') });
-      process.stdout.write(`connected ${report.label} -> ${report.configPath}\n`);
-      const counts: string[] = [];
-      if (report.added > 0) counts.push(`${report.added} event(s) wired`);
-      if (report.upgraded > 0) counts.push(`${report.upgraded} stale entry(ies) upgraded`);
-      if (report.alreadyPresent > 0) counts.push(`${report.alreadyPresent} already present`);
-      process.stdout.write(`  ${counts.join(' · ')}: ${report.eventsWired.join(', ')}\n`);
-      if (report.vendorDir) {
-        process.stdout.write(
-          `  vendored: ${report.vendorDir} (v${report.vendorVersion ?? '?'}${report.vendorRefreshed ? ', refreshed' : ''})\n`,
-        );
-      }
-      process.stdout.write(`  scripts: ${report.scriptDir}\n`);
-      if (report.backupPath) process.stdout.write(`  backup: ${report.backupPath}\n`);
-      for (const note of report.notes) process.stdout.write(`  note: ${note}\n`);
-      return 0;
-    } catch (error) {
-      process.stderr.write(
-        `connect failed: ${error instanceof Error ? error.message : String(error)}\n`,
-      );
-      return 1;
-    }
-  }
-
-  // `ui` owns its own store (it lives for the whole server lifetime), so it is
-  // handled before the short-lived store below is opened.
-  if (command === 'ui') {
-    const portArg = args.indexOf('--port');
-    const wanted = portArg >= 0 ? Number(args[portArg + 1]) : 7788;
-    const port = Number.isInteger(wanted) && wanted >= 0 ? wanted : 7788;
-
-    startUiServer({ port })
-      .then((handle) => {
-        process.stdout.write(
-          `免疫仪表盘 / Immune dashboard: ${handle.url}\n` +
-            `仅本机可访问 / bound to 127.0.0.1 · Ctrl+C 停止 / press Ctrl+C to stop\n`,
-        );
-        const stop = (): void => {
-          handle.close().then(() => process.exit(0));
-        };
-        process.on('SIGINT', stop);
-        process.on('SIGTERM', stop);
-      })
-      .catch((error: unknown) => {
-        process.stderr.write(
-          `failed to start UI: ${error instanceof Error ? error.message : String(error)}\n`,
-        );
-        process.exit(1);
-      });
-    // The server keeps the event loop alive; no exit code is set.
-    return 0;
-  }
+  if (command === 'connect') return cmdConnect(args);
+  if (command === 'ui') return cmdUi(args);
+  if (command === 'ci-check') return cmdCiCheck(args);
+  if (command === 'doctor') return cmdDoctor();
 
   const store = new ImmuneStore();
   try {
     switch (command) {
       case 'list':
-        cmdList(store, args.includes('--all'));
-        return 0;
-      case 'stats':
-        cmdStats(store);
-        return 0;
-      case 'detours': {
-        // ROADMAP 2.3b: convergent detours are review candidates — the CLI
-        // shows them; minting a shortcut rule stays on `immune rewrite`.
-        const rows = store.recentDetours(20);
-        if (rows.length === 0) {
-          process.stdout.write('no convergent detours recorded (4+ same-target probes before the fix)\n');
-          return 0;
-        }
-        process.stdout.write('convergent detours (telemetry — `immune rewrite` is the minting path):\n');
-        for (const row of rows) {
-          const when = new Date(row.created_at).toISOString().slice(0, 16).replace('T', ' ');
-          process.stdout.write(`  ${when}  ${String(row.probes).padStart(2)} probes  ${row.signature}\n`);
-        }
-        return 0;
-      }
-      case 'ci-check': {
-        // ROADMAP 3.2: stateless CI gate. Rules come from the repo's committed
-        // managed AGENTS.md block — CI has no immune database. Added diff lines
-        // whose text touches a rule's trigger tokens are findings; a nonzero
-        // exit makes the gate wireable in GitHub Actions. The store was only
-        // opened for the dispatch; hand it to the shared close below.
-        deferStoreClose = true;
-        store.close();
-        const diffArg = args.indexOf('--diff');
-        const docArg = args.indexOf('--doc');
-        let diffText = '';
-        if (diffArg >= 0) {
-          diffText = readFileSync(resolve(args[diffArg + 1] ?? ''), 'utf8');
-        } else {
-          diffText = readFileSync(0, 'utf8');
-        }
-        const doc = docArg >= 0 ? resolve(args[docArg + 1] ?? '') : resolve(process.cwd(), 'AGENTS.md');
-        const rules = parseManagedBlock(doc);
-        const report = ciCheck(diffText, rules);
-        const asJson = args.includes('--json');
-        if (asJson) {
-          process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
-        } else {
-          process.stdout.write(
-            `immune ci-check: ${report.addedLines} added line(s) vs ${report.rulesConsidered} managed rule(s)\n`,
-          );
-          for (const finding of report.findings) {
-            process.stdout.write(`  L${finding.line}: ${finding.trigger} — "${finding.text}"\n`);
-          }
-        }
-        return report.findings.length > 0 ? 1 : 0;
-      }
-      case 'coverage': {
-        // What the library does NOT cover. `stats` can look healthy while every
-        // failure that actually happens is one no rule matches.
-        const daysArg = args.indexOf('--days');
-        const topArg = args.indexOf('--top');
-        const dbArg = args.indexOf('--db');
-        const report = coverage(store, {
-          days: daysArg >= 0 ? Number(args[daysArg + 1] ?? '30') : 30,
-          top: topArg >= 0 ? Number(args[topArg + 1] ?? '10') : 10,
-          ...(dbArg >= 0 ? { sourceDb: resolve(args[dbArg + 1] ?? '') } : {}),
-        });
-        if (report.failures === 0) {
-          process.stdout.write(
-            'no host errors found - set IMMUNE_HOST_DB if this host keeps them elsewhere\n',
-          );
-          return 0;
-        }
-        const judged = report.failures - report.noise;
-        const pct = judged > 0 ? Math.round((report.covered / judged) * 100) : 0;
-        process.stdout.write(
-          `coverage: last ${report.days} days · ${judged} judgeable failure(s) · ` +
-            `${report.covered} known (${pct}%) · ${report.deliverable} still injected · ` +
-            `${report.uncovered} uncovered` +
-            (report.noise > 0 ? ` · ${report.noise} ignored as noise` : '') +
-            '\n',
-        );
-        if (report.covered > report.deliverable) {
-          process.stdout.write(
-            `  ${report.covered - report.deliverable} failure(s) match a retired rule: ` +
-              'the advice exists but is not injected (see `immune list --all`)\n',
-          );
-        }
-        if (report.clusters.length > 0) {
-          process.stdout.write('top uncovered signatures:\n');
-          for (const cluster of report.clusters) {
-            process.stdout.write(
-              `  ${cluster.count}× ${cluster.tool}  ${cluster.signature} ` +
-                `(${cluster.sessions} session(s))\n`,
-            );
-          }
-        }
-        return 0;
-      }
-      case 'export':
-        cmdExport(store, args);
-        return 0;
-      case 'backfill': {
-        // Mine the host's own session history for failed-then-fixed episodes
-        // and distil them with the deterministic rule (fast, no API calls).
-        deferStoreClose = true;
-        const dbArg = args.indexOf('--db');
-        const daysArg = args.indexOf('--days');
-        const sessionArg = args.indexOf('--session');
-        const budgetArg = args.indexOf('--budget-ms');
-        const maxArg = args.indexOf('--max');
-        const report = backfill(store, {
-          sourceDb: dbArg >= 0 ? resolve(args[dbArg + 1] ?? '') : undefined,
-          days: daysArg >= 0 ? Number(args[daysArg + 1] ?? '120') : 120,
-          sessionId: sessionArg >= 0 ? args[sessionArg + 1] : undefined,
-          ...(maxArg >= 0 ? { max: Number(args[maxArg + 1] ?? '0') } : {}),
-          selfMarkers: selfMarkers(),
-        });
-        const budget = budgetArg >= 0 ? Number(args[budgetArg + 1] ?? '60000') : 60_000;
-        // Backfill is the LLM path's best use case: hundreds of real episodes
-        // with the repair evidence a deterministic echo cannot phrase. The
-        // rule path runs when no LLM is configured or --no-llm is passed.
-        const noLlm = args.includes('--no-llm');
-        const llm = noLlm ? null : readLlmConfig();
-        // main() is synchronous: pin the process with a timer while the async
-        // drain loop settles (the same pattern the demo uses).
-        const keepAlive = setInterval(() => {}, 60_000);
-        let drained = 0;
-        const drainLoop = (async () => {
-          for (;;) {
-            const r = await drainJobs(store, Number.isFinite(budget) ? budget : 60_000, {
-              llm,
-            });
-            drained += r.processed;
-            if (store.pendingJobCount() === 0 || r.processed === 0) break;
-          }
-        })();
-        drainLoop
-          .then(() => {
-            const s = store.stats();
-            const path =
-              llm === null
-                ? 'deterministic rule path'
-                : `${s.llmDistilled} by the model · ${s.llmFallbacks} degraded`;
-            process.stdout.write(
-              `scanned ${report.scanned} calls · ${report.failures} failures · ` +
-                `${report.paired} paired (${report.superseded} superseded) · ` +
-                `${report.enqueued} enqueued (${report.skippedSelf} self-noise skipped)\n` +
-                `distilled ${drained} episode(s) — ${path} · ` +
-                `${store.pendingJobCount()} left queued\n`,
-            );
-          })
-          .catch((error: unknown) => {
-            process.stderr.write(
-              `backfill drain failed: ${error instanceof Error ? error.message : String(error)}\n`,
-            );
-            process.exitCode = 1;
-          })
-          .finally(() => {
-            clearInterval(keepAlive);
-            store.close();
-          });
-        return 0;
-      }
-      case 'audit': {
-        // The cold-start command: replay the pairing loop over every host's
-        // history on this machine, print a shareable summary, then distil.
-        deferStoreClose = true;
-        const daysArg = args.indexOf('--days');
-        const sourceArg = args.indexOf('--source');
-        const maxArg = args.indexOf('--max');
-        const budgetArg = args.indexOf('--budget-ms');
-        const dryRun = args.includes('--dry-run');
-        const source = sourceArg >= 0 ? (args[sourceArg + 1] ?? 'auto') : 'auto';
-        if (!['auto', 'zcode', 'codex', 'claude-code', 'antigravity'].includes(source)) {
-          process.stderr.write(`audit: unknown source "${source}"\n`);
-          store.close();
-          return 2;
-        }
-        const report = auditHistory(store, {
-          days: daysArg >= 0 ? Number(args[daysArg + 1] ?? '30') : 30,
-          source: source as 'auto' | 'zcode' | 'codex' | 'claude-code' | 'antigravity',
-          ...(maxArg >= 0 ? { max: Number(args[maxArg + 1] ?? '0') } : {}),
-          dryRun,
-          selfMarkers: selfMarkers(),
-        });
-        process.stdout.write(
-          renderAuditReport(
-            report,
-            daysArg >= 0 && Number.isFinite(Number(args[daysArg + 1])) ? Number(args[daysArg + 1] ?? '30') : 30,
-            dryRun,
-          ) + '\n',
-        );
-        if (dryRun) {
-          store.close();
-          return 0;
-        }
-        // Same drain contract as backfill: LLM when configured, rule path
-        // otherwise; the budget caps how long the user's turn waits.
-        const noLlm = args.includes('--no-llm');
-        const llm = noLlm ? null : readLlmConfig();
-        const budget = budgetArg >= 0 ? Number(args[budgetArg + 1] ?? '60000') : 60_000;
-        const keepAlive = setInterval(() => {}, 60_000);
-        let drained = 0;
-        const drainLoop = (async () => {
-          for (;;) {
-            const r = await drainJobs(store, Number.isFinite(budget) ? budget : 60_000, { llm });
-            drained += r.processed;
-            if (store.pendingJobCount() === 0 || r.processed === 0) break;
-          }
-        })();
-        drainLoop
-          .then(() => {
-            const s = store.stats();
-            const path =
-              llm === null
-                ? 'deterministic rule path'
-                : `${s.llmDistilled} by the model · ${s.llmFallbacks} degraded`;
-            process.stdout.write(
-              `distilled ${drained} episode(s) — ${path} · ${store.pendingJobCount()} left queued\n`,
-            );
-          })
-          .catch((error: unknown) => {
-            process.stderr.write(
-              `audit drain failed: ${error instanceof Error ? error.message : String(error)}\n`,
-            );
-            process.exitCode = 1;
-          })
-          .finally(() => {
-            clearInterval(keepAlive);
-            store.close();
-          });
-        return 0;
-      }
-      case 'rewrite': {
-        // The rule path can only echo the command that worked. This is the one
-        // operation that turns an existing echo rule into advice, and it can
-        // only run with a model: rewriting deterministically would reproduce
-        // the same dump.
-        const maxArg = args.indexOf('--max');
-        const max = maxArg >= 0 ? Number(args[maxArg + 1] ?? '0') : 0;
-        const idArg = args.indexOf('--id');
-        const ids =
-          idArg >= 0
-            ? (args[idArg + 1] ?? '')
-                .split(',')
-                .map(Number)
-                .filter((n) => Number.isInteger(n) && n > 0)
-            : [];
-        const dryRun = args.includes('--dry-run');
-        const llm = readLlmConfig();
-        if (!llm) {
-          const candidates = echoCandidates(store);
-          process.stdout.write(
-            `no model configured (IMMUNE_LLM_BASE_URL / IMMUNE_LLM_MODEL); ` +
-              `${candidates.length} echo-grade rule(s) would be rewritten:\n` +
-              candidates
-                .map((a) => `  #${a.id} h${a.hit_count} ${a.prescription.slice(0, 70)}\n`)
-                .join(''),
-          );
-          return 0;
-        }
-        deferStoreClose = true;
-        const keepAlive = setInterval(() => {}, 60_000);
-        rewriteEchoes(store, { llm, max, dryRun, ids })
-          .then((report) => {
-            process.stdout.write(
-              `rewrite: ${report.candidates} candidate(s) · ${report.rewritten} rewritten · ` +
-                `${report.skipped} skipped · ${report.failed} failed${report.dryRun ? ' (dry run)' : ''}\n`,
-            );
-            for (const item of report.items) {
-              const tail = item.to
-                ? ` -> ${item.to}`
-                : item.detail
-                  ? ` (${item.detail})`
-                  : '';
-              process.stdout.write(`  #${item.id} ${item.status}${tail}\n`);
-            }
-          })
-          .catch((error: unknown) => {
-            process.stderr.write(
-              `rewrite failed: ${error instanceof Error ? error.message : String(error)}\n`,
-            );
-            process.exitCode = 1;
-          })
-          .finally(() => {
-            clearInterval(keepAlive);
-            store.close();
-          });
-        return 0;
-      }
-      case 'backup': {
-        // The database is WAL; `cp immune.sqlite x` can produce an empty file
-        // (measured during release work). node:sqlite's backup API reads
-        // through the log and writes one consistent snapshot.
-        deferStoreClose = true;
-        const target = args[0]
-          ? resolve(args[0])
-          : `${store.dbPath}.${new Date().toISOString().slice(0, 10)}.bak.sqlite`;
-        const keepAlive = setInterval(() => {}, 60_000);
-        store
-          .backupTo(target)
-          .then(() => process.stdout.write(`backup -> ${target}\n`))
-          .catch((error: unknown) => {
-            process.stderr.write(
-              `backup failed: ${error instanceof Error ? error.message : String(error)}\n`,
-            );
-            process.exitCode = 1;
-          })
-          .finally(() => {
-            clearInterval(keepAlive);
-            store.close();
-          });
-        return 0;
-      }
-      case 'seed': {
-        // Cold-start starter rules. Hand-authored by the maintainers (the
-        // trust class of core/lessons.ts, not model output), installed through
-        // the normal insert path so duplicates merge and removal is tracked.
-        const flags = parseSeedCliArgs(args, ['--baseline']);
-        const packId = flags.positional[0];
-        const remove = flags.booleans.has('--remove');
-        const baselineRaw = flags.values.get('--baseline');
-        const explicitBaseline = parseBaselineFlag(baselineRaw);
-        if (baselineRaw !== undefined && !explicitBaseline) {
-          process.stderr.write(`seed: invalid --baseline "${baselineRaw}" (expected widely or newly)\n`);
-          return 2;
-        }
-        if (!packId) {
-          const counts = store.seededPackCounts();
-          const detected = detectProjectBaselineDetail(process.cwd());
-          process.stdout.write(
-            `Builtin seed packs (immune seed <id> [--baseline widely|newly] [--remove], project baseline: ${detected.level}` +
-              (detected.source ? ` from ${detected.source}` : '') +
-              '):\n',
-          );
-          for (const pack of BUILTIN_PACKS) {
-            const installed = counts.get(pack.id) ?? 0;
-            process.stdout.write(
-              `  ${pack.id.padEnd(12)} ${String(installed).padStart(2)}/${pack.rules.length} seeded · ` +
-                `${pack.label} — ${pack.description}\n`,
-            );
-          }
-          const skillPacks = [...counts.entries()].filter(([id]) => id.startsWith('skill:'));
-          if (skillPacks.length > 0) {
-            process.stdout.write('Ingested skill packs (`immune ingest-skill <path...> [--remove]`):\n');
-            for (const [id, count] of skillPacks) {
-              process.stdout.write(`  ${id.padEnd(20)} ${count} rule(s) indexed on demand\n`);
-            }
-          }
-          return 0;
-        }
-        const pack = BUILTIN_PACKS.find((candidate) => candidate.id === packId);
-        if (!pack && !packId.startsWith('skill:')) {
-          process.stderr.write(
-            `seed: unknown pack "${packId}". Builtin packs: ${BUILTIN_PACKS.map((p) => p.id).join(', ')}\n`,
-          );
-          return 2;
-        }
-        if (remove) {
-          const targetId = pack ? pack.id : packId;
-          const report = store.removeSeedPack(targetId);
-          const kept = report.keptChanged + report.keptProven;
-          process.stdout.write(
-            `removed ${report.removed} seeded rule(s) from ${targetId}` +
-              (kept > 0
-                ? ` · kept ${kept} (changed or proven since seeding, evidence preserved)\n`
-                : '\n'),
-          );
-          return 0;
-        }
-        if (!pack) {
-          process.stderr.write(`seed: use \`immune ingest-skill <path> --pack ${packId}\` to install external skills\n`);
-          return 2;
-        }
-        const hasBaselineRules = pack.rules.some((rule) => rule.baseline === 'newly');
-        const activeBaseline =
-          explicitBaseline ?? (hasBaselineRules ? detectProjectBaselineDetail(process.cwd()).level : 'newly');
-        const filteredRules = filterRulesByBaseline(pack.rules, activeBaseline);
-        const skippedBaseline = pack.rules.length - filteredRules.length;
-        const report = store.seedPack(pack.id, filteredRules);
-        const baselineNote =
-          hasBaselineRules || explicitBaseline
-            ? ` (baseline: ${activeBaseline}${skippedBaseline > 0 ? `, filtered ${skippedBaseline} newly-only` : ''})`
-            : '';
-        process.stdout.write(
-          `seeded ${pack.id}${baselineNote}: ${report.inserted} rule(s) added · ${report.alreadySeeded} already seeded\n`,
-        );
-        return 0;
-      }
-      case 'ingest-skill': {
-        const flags = parseSeedCliArgs(args, ['--pack', '--baseline']);
-        const remove = flags.booleans.has('--remove');
-        const packOpt = flags.values.get('--pack');
-        const baselineRaw = flags.values.get('--baseline');
-        const explicitBaseline = parseBaselineFlag(baselineRaw);
-        if (baselineRaw !== undefined && !explicitBaseline) {
-          process.stderr.write(`ingest-skill: invalid --baseline "${baselineRaw}" (expected widely or newly)\n`);
-          return 2;
-        }
-        if (remove) {
-          const rawPack = packOpt ?? flags.positional[0];
-          if (!rawPack) {
-            process.stderr.write('usage: immune ingest-skill --remove --pack <name>\n');
-            return 2;
-          }
-          const packId = normalizeSkillPackId(rawPack);
-          const report = store.removeSeedPack(packId);
-          const kept = report.keptChanged + report.keptProven;
-          process.stdout.write(
-            `removed ${report.removed} ingested rule(s) from ${packId}` +
-              (kept > 0 ? ` · kept ${kept} (changed or proven, evidence preserved)\n` : '\n'),
-          );
-          return 0;
-        }
-        if (flags.positional.length === 0) {
-          process.stderr.write(
-            'usage: immune ingest-skill <path...> [--pack <name>] [--baseline widely|newly] [--remove]\n',
-          );
-          return 2;
-        }
-        const report = ingestSkillPaths(store, flags.positional, {
-          ...(packOpt ? { pack: packOpt } : {}),
-          ...(explicitBaseline ? { baseline: explicitBaseline } : {}),
-        });
-        if (report.filesRead === 0) {
-          process.stderr.write(
-            `ingest-skill: no readable .md/.mdx/.txt guidance files found in: ${flags.positional.join(', ')}\n`,
-          );
-          return 2;
-        }
-        process.stdout.write(
-          `ingested ${report.packId}: ${report.inserted} rule(s) indexed on demand · ` +
-            `${report.alreadySeeded} already indexed (${report.parsed} parsed from ${report.filesRead} file(s), ` +
-            `baseline: ${report.baseline}` +
-            (report.baselineFiltered > 0 ? `, filtered ${report.baselineFiltered} newly-only` : '') +
-            ')\n',
-        );
-        return 0;
-      }
-      case 'consolidate': {
-        // Deliberately separate from rewrite: merging two useful wordings is a
-        // deterministic data operation, not a request to invent new advice.
-        const candidates = findConsolidationCandidates(store);
-        // Same-symptom groups that did NOT clear the merge bar: the tool will
-        // not touch them, but staying silent about a five-rule lesson taught in
-        // five different wordings is worse than showing it.
-        const near = findLessonGroups(store).filter(
-          (group) =>
-            group.maxSimilarity < CONSOLIDATE_SIMILARITY &&
-            !candidates.some((c) => group.rules.some((r) => r.id === c.keepId)),
-        );
-        if (candidates.length === 0) {
-          process.stdout.write('No duplicate lessons found.\n');
-          if (near.length > 0) {
-            process.stdout.write('Same symptom, different wording (manual review, not merged):\n');
-            for (const group of near) {
-              process.stdout.write(
-                `  ${group.symptom.slice(0, 50)} · ` +
-                  group.rules.map((r) => `#${r.id}(h${r.hits})`).join(' ') +
-                  ` · max ${Math.round(group.maxSimilarity * 100)}%\n`,
-              );
-            }
-          }
-          return 0;
-        }
-        process.stdout.write(`Duplicate lesson pair(s): ${candidates.length}\n`);
-        for (const c of candidates) {
-          process.stdout.write(
-            `  keep #${c.keepId} (h${c.keepHits}) <- retire #${c.retireId} (h${c.retireHits}) ` +
-              `[${Math.round(c.similarity * 100)}%] ${c.keepPrescription}\n`,
-          );
-        }
-        if (args.includes('--dry-run')) {
-          process.stdout.write('Dry run: no rules changed. Run without --dry-run to apply.\n');
-          return 0;
-        }
-        const result = consolidateRules(store, candidates);
-        process.stdout.write(
-          `Consolidated ${result.retired} duplicate rule(s); retired rows remain recoverable.\n`,
-        );
-        return 0;
-      }
-      case 'sync-doc': {
-        // Write proven rules into AGENTS.md / CLAUDE.md as a managed section,
-        // so agents WITHOUT our hooks still get the lessons.
-        const outArg = args.indexOf('--out');
-        const hitsArg = args.indexOf('--min-hits');
-        const candidates = [
-          outArg >= 0 ? args[outArg + 1] ?? '' : '',
-          'AGENTS.md',
-          'CLAUDE.md',
-        ].filter((v) => v.trim().length > 0);
-        const target = resolve(candidates[0] ?? 'AGENTS.md');
-        const minHits = hitsArg >= 0 ? Number(args[hitsArg + 1] ?? '3') : 3;
-        const report = syncDoc(store, {
-          file: target,
-          minHits: Number.isFinite(minHits) && minHits >= 0 ? minHits : 3,
-        });
-        process.stdout.write(
-          `${report.file}: ${report.rules} rule(s) written (${report.created ? 'section created' : report.replaced ? 'section replaced' : 'appended'})\n` +
-            'the section is fenced by immune:generated markers and fully managed - edit outside it, never inside.\n',
-        );
-        if (report.skipped > 0) {
-          process.stderr.write(
-            `skipped ${report.skipped} rule(s) withheld by share gate (machine paths, emails, or secrets)\n`,
-          );
-        }
-        return 0;
-      }
+        return cmdList(store, args.includes('--all'));
+      case 'search':
+        return cmdSearch(store, args);
+      case 'learn':
+        return cmdLearn(store, args);
+      case 'forget':
+        return cmdForget(store, args);
       case 'prune':
         store.pruneStale();
         process.stdout.write('Pruned stale pending failures and injection records.\n');
         return 0;
-      case 'search': {
-        // Same read-only path as the dashboard: searching is not delivery.
-        const query = args.join(' ').trim();
-        if (!query) {
-          process.stderr.write('usage: immune search <query>\n');
-          return 2;
-        }
-        const rows = store.peek(query, 20);
-        if (rows.length === 0) {
-          process.stdout.write('没有匹配 / no match\n');
-          return 0;
-        }
-        for (const ab of rows) {
-          process.stdout.write(
-            `${pad(String(ab.id), 5)}${pad(String(ab.hit_count), 6)}${pad(ab.status, 9)}${clamp(ab.trigger_pattern, 64)}\n` +
-              `${' '.repeat(20)}  ${strings().avoid}: ${clamp(ab.symptom, 90)}\n` +
-              `${' '.repeat(20)}  ${strings().do}: ${clamp(ab.prescription, 90)}\n`,
-          );
-        }
-        return 0;
-      }
-      case 'learn': {
-        // Manual capture, borrowed from pro-workflow's /learn-rule: some rules
-        // should not wait for a failed-then-fixed episode to prove them.
-        // Two forms: <trigger> <prescription> | <trigger> <symptom> <prescription>.
-        // Free text cannot be positionally split reliably, so the DSH command
-        // uses first/last tokens; here the shell already did the splitting.
-        const trigger = args[0] ?? '';
-        const prescription = args.length >= 3 ? args[args.length - 1] ?? '' : args[1] ?? '';
-        const symptom = args.length >= 3 ? args.slice(1, -1).join(' ') : '';
-        if (!trigger.trim() || !prescription.trim()) {
-          process.stderr.write(
-            'usage: immune learn <trigger> [symptom] <prescription>\n' +
-              'example: immune learn "pnpm-lock.yaml 这个仓库" "用 pnpm 不是 npm"\n',
-          );
-          return 2;
-        }
-        const id = store.insert({
-          trigger_pattern: trigger,
-          symptom: symptom || '(manual rule)',
-          prescription,
-          tool_name: null,
+      case 'export':
+        return cmdExport(store, args);
+      case 'export-json':
+        return cmdExportJson(store, args);
+      case 'import-json':
+        return cmdImportJson(store, args);
+      case 'sync-doc':
+        return cmdSyncDoc(store, args);
+      case 'stats':
+        return cmdStats(store);
+      case 'detours':
+        return cmdDetours(store);
+      case 'coverage':
+        return cmdCoverage(store, args);
+      case 'consolidate':
+        return cmdConsolidate(store, args);
+      case 'hygiene':
+        return cmdHygiene(store, args);
+      case 'triage':
+        return cmdTriage(store);
+      case 'receipts':
+        return cmdReceipts(store);
+      case 'models':
+        return cmdModels(store);
+      case 'seed':
+        return cmdSeed(store, args);
+      case 'ingest-skill':
+        return cmdIngestSkill(store, args);
+      case 'ingest-disk':
+        return cmdIngestDisk(store, args);
+      case 'workspaces':
+        return cmdWorkspaces(store);
+      case 'backup': {
+        deferStoreClose = true;
+        const keepAlive = setInterval(() => {}, 60_000);
+        cmdBackupAsync(store, args, () => {
+          clearInterval(keepAlive);
+          store.close();
         });
-        process.stdout.write(
-          id === null ? `${strings().notFound}\n` : `${strings().learned} #${id}.\n`,
-        );
         return 0;
       }
-      case 'export-json': {
-        // Library snapshots are how a library moves between machines or to a
-        // teammate without npm, a server, or a shared filesystem.
-        const target = args[0];
-        const snapshot = exportLibrary(store);
-        const violations = shareSanityCheck(snapshot.antibodies);
-        if (violations.length > 0) {
-          process.stderr.write(`${formatShareViolations(violations)}\n`);
-          return 1;
+      case 'rewrite': {
+        deferStoreClose = true;
+        const keepAlive = setInterval(() => {}, 60_000);
+        const res = cmdRewriteSyncOrAsync(store, args, () => {
+          clearInterval(keepAlive);
+          store.close();
+        });
+        if (!res.asyncStarted) {
+          clearInterval(keepAlive);
+          deferStoreClose = false;
         }
-        const body = JSON.stringify(snapshot, null, 2) + '\n';
-        if (target) {
-          writeFileSync(resolve(target), body, 'utf8');
-          process.stdout.write(`exported ${snapshot.count} antibodies -> ${resolve(target)}\n`);
-        } else {
-          process.stdout.write(body);
-        }
+        return res.code;
+      }
+      case 'backfill': {
+        deferStoreClose = true;
+        const keepAlive = setInterval(() => {}, 60_000);
+        cmdBackfillAsync(store, args, () => {
+          clearInterval(keepAlive);
+          store.close();
+        });
         return 0;
       }
-      case 'import-json': {
-        const source = args[0];
-        if (!source) {
-          process.stderr.write('usage: immune import-json <snapshot.json>\n');
-          return 2;
+      case 'audit': {
+        deferStoreClose = true;
+        const keepAlive = setInterval(() => {}, 60_000);
+        const res = cmdAudit(store, args, () => {
+          clearInterval(keepAlive);
+          store.close();
+        });
+        if (!res.asyncStarted) {
+          clearInterval(keepAlive);
+          deferStoreClose = false;
         }
-        let snapshot: unknown;
-        try {
-          snapshot = JSON.parse(readFileSync(resolve(source), 'utf8'));
-        } catch (error) {
-          process.stderr.write(
-            `cannot read snapshot: ${error instanceof Error ? error.message : String(error)}\n`,
-          );
-          return 2;
-        }
-        if (
-          typeof snapshot === 'object' &&
-          snapshot !== null &&
-          (snapshot as Record<string, unknown>).format !== SNAPSHOT_FORMAT
-        ) {
-          process.stderr.write(`not a ${SNAPSHOT_FORMAT} snapshot (missing format tag)\n`);
-          return 2;
-        }
-        const report = importLibrary(store, snapshot);
-        process.stdout.write(
-          `imported: ${report.added} added, ${report.merged} merged, ${report.invalid} invalid\n`,
-        );
-        return 0;
-      }
-      case 'doctor': {
-        // Own store: the shared one is closed by main's finally, and closing a
-        // store twice throws "database is not open".
-        const doctorStore = new ImmuneStore();
-        const results = runDoctor(doctorStore);
-        let failures = 0;
-        for (const check of results) {
-          if (!check.ok) failures += 1;
-          process.stdout.write(`${check.ok ? 'ok  ' : 'FAIL'} ${check.name}: ${check.detail}\n`);
-        }
-        doctorStore.close();
-        process.stdout.write(
-          `\n${results.length - failures}/${results.length} checks passed${failures ? ` — fix the ${failures} FAIL above` : ''}\n`,
-        );
-        return failures === 0 ? 0 : 1;
-      }
-      case 'forget': {
-        // --last  : undo the antibody the previous turn just learned
-        // --prune : drop never-injected antibodies older than 14 days
-        if (args.includes('--last')) {
-          const id = store.forgetLast();
-          process.stdout.write(
-            id === null ? `${strings().notFound}\n` : `${strings().forgot} #${id}.\n`,
-          );
-          return 0;
-        }
-        if (args.includes('--prune') || args.includes('--purge')) {
-          // --prune retires (reversible, stops injection); --purge deletes.
-          // Deletion is not the default because zero hits only proves the
-          // trigger has not come up yet, not that the rule is worthless.
-          const purge = args.includes('--purge');
-          const window = 14 * 24 * 60 * 60 * 1000;
-          const changed = purge ? store.pruneZombies(window) : store.retireZombies(window);
-          const label = purge ? strings().purged : strings().pruned;
-          process.stdout.write(
-            changed.length === 0
-              ? `${strings().noZombies}\n`
-              : `${label} ${changed.length}: ${changed.map((n) => `#${n}`).join(' ')}\n`,
-          );
-          return 0;
-        }
-
-        const id = Number(args[0]);
-        if (!Number.isFinite(id)) {
-          process.stderr.write(
-            'usage: immune forget <id> | --last | --prune | --purge\n',
-          );
-          return 2;
-        }
-        process.stdout.write(store.remove(id) ? `${strings().forgot} #${id}.\n` : `${strings().notFound} #${id}.\n`);
-        return 0;
+        return res.code;
       }
       default:
         process.stderr.write(
-          'usage: immune <list|stats|coverage|detours|export|search|learn|forget|prune|rewrite|consolidate|' +
-            'backup|connect|seed|ingest-skill|backfill|audit|sync-doc|export-json|import-json|ui|doctor|demo> [...args]\n' +
-            '  seed / ingest-skill / audit / connect: cold start, on-demand skill indexing, and host hooking — see README\n',
+          'usage: immune <list|stats|coverage|detours|hygiene|triage|receipts|models|export|search|learn|forget|prune|' +
+            'rewrite|consolidate|backup|connect|seed|ingest-skill|ingest-disk|workspaces|backfill|audit|sync-doc|' +
+            'export-json|import-json|ci-check|ui|doctor|demo> [...args]\n',
         );
         return 2;
     }
@@ -1053,60 +163,3 @@ function main(argv: string[]): number {
 }
 
 process.exitCode = main(process.argv.slice(2));
-
-/**
- * The 30-second quickstart: run the REAL pipeline (distill a fresh failure ->
- * success episode, recall it from a paraphrase prompt, render the exact block
- * the hooks inject) against an in-memory store. Nothing canned, nothing
- * persisted — the user's library is never touched.
- */
-async function runDemo(): Promise<void> {
-  const { distillEpisode } = await import('../../core/distiller.js');
-  const { formatImmuneContext } = await import('./format.js');
-  const { targetSignature } = await import('../../core/pairing.js');
-
-  const store = new ImmuneStore({ dbPath: ':memory:' });
-  store.insert({
-    trigger_pattern: 'vite.config.ts 环境变量 loadEnv',
-    symptom: '直接用 process.env 读客户端变量得到 undefined',
-    prescription: '在 vite.config.ts 用 loadEnv(mode, process.cwd(), 前缀) 再传给 define',
-  });
-  store.insert({
-    trigger_pattern: 'EPERM 只读目录 mkdir',
-    symptom: '在只读目录创建 .dsh 或文件报 EPERM',
-    prescription: '换可写工作目录，或用 IMMUNE_DB_PATH 显式指定库路径',
-  });
-
-  console.log('\n[1] a tool call fails (this project: npm install under a peer conflict)\n');
-  console.log('  $ npm install');
-  console.log('  npm ERR! ERESOLVE Unable to resolve dependency tree: peer react@19 found react-dom@18');
-  console.log('  [exit code: 1]\n');
-
-  console.log('[2] the retry succeeds — turn end distils the episode through the REAL pipeline\n');
-  const distilled = await distillEpisode(
-    'Bash',
-    'tool=Bash input={"command":"npm install"} result=npm ERR! ERESOLVE unable to resolve dependency tree [exit code: 1]',
-    'tool=Bash input={"command":"npm install --legacy-peer-deps"} result=added 312 packages in 14s [exit code: 0]',
-  );
-  if (!distilled.ok) {
-    console.log(`  the demo episode was skipped: ${distilled.detail ?? 'unknown'}`);
-    return;
-  }
-  const id = store.insert(distilled.antibody);
-  console.log(`  learned antibody #${id}:`);
-  console.log(`    trigger: ${distilled.antibody.trigger_pattern}`);
-  console.log(`    symptom: ${distilled.antibody.symptom.slice(0, 80)}`);
-  console.log(`    do:      ${distilled.antibody.prescription.slice(0, 80)}\n`);
-
-  console.log('[3] a NEW session hits the same wall with different words — recall + injection\n');
-  const hits = store.match('npm 装依赖又冲突了，装不上怎么办', { limit: 3 });
-  const block = formatImmuneContext(hits);
-  console.log(
-    block
-      .split('\n')
-      .map((l) => `  ${l}`)
-      .join('\n'),
-  );
-
-  console.log('\n[try more] immune list · immune doctor · immune ui   (demo data was in-memory only)\n');
-}

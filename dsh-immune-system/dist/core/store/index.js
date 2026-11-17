@@ -13,6 +13,10 @@ import { openDatabase } from './open.js';
 import { GlobalStore, globalDbPathFor, isPromotable } from './global.js';
 import { rerank } from './rerank.js';
 import { bumpMeta, readMeta, setMeta } from './meta.js';
+import { deriveProjectScope, repairLibraryHygiene } from '../hygiene.js';
+import { recordDeliveryReceipt, summarizeReceipts } from '../receipts.js';
+import { summarizeTriage } from '../triage.js';
+import { buildModelImmunityReport } from '../model-intel.js';
 /** meta-table key for the value metric: repeats the plugin measurably prevented. */
 export const SUPPRESSED_REPEATS_KEY = 'suppressed_repeats';
 /** Runtime truth for the optional model path: rules it produced / times it degraded. */
@@ -97,7 +101,8 @@ export class ImmuneStore {
         const sent = opts.excludeInjected && opts.sessionId
             ? new Set(injectedPrescriptions(this.db, opts.sessionId))
             : null;
-        let own = findMatches(this.db, queryText, wide);
+        const scope = opts.projectScope ?? (opts.cwd ? deriveProjectScope(opts.cwd) : '*');
+        let own = findMatches(this.db, queryText, wide, scope);
         if (opts.excludeInjected && opts.sessionId) {
             const seen = new Set(this.injectedIds(opts.sessionId));
             own = own.filter((r) => !seen.has(r.id));
@@ -141,7 +146,7 @@ export class ImmuneStore {
             .map((r, i) => ({ r, i }))
             .sort((x, y) => aff(x.r) - aff(y.r) || x.i - y.i);
         const relevanceByRule = new Map(ordered.map((e, i) => [e.r, 1 / (1 + i)]));
-        const ranked = rerank(merged, { query: queryText, sharedSet, relevanceByRule }).slice(0, limit);
+        const ranked = rerank(merged, { query: queryText, cwd: opts.cwd, sharedSet, relevanceByRule }).slice(0, limit);
         const rankedOwn = ranked.filter((r) => !sharedSet.has(r));
         const rankedShared = ranked.filter((r) => sharedSet.has(r));
         // ---- Repeat suppression (per turn) -------------------------------------
@@ -201,7 +206,17 @@ export class ImmuneStore {
             // Shared-library ids do not live in this database, so only own rules are
             // counted here; the shared library keeps its own totals.
             if (rankedOwn.length > 0) {
-                recordModelHits(this.db, resolveModel(this.db, opts.sessionId), rankedOwn.map((r) => r.id));
+                const model = resolveModel(this.db, opts.sessionId);
+                recordModelHits(this.db, model, rankedOwn.map((r) => r.id));
+                for (const r of rankedOwn) {
+                    recordDeliveryReceipt(this.db, {
+                        ruleId: r.id,
+                        sessionId: opts.sessionId,
+                        model,
+                        projectScope: scope,
+                        outcome: 'delivered',
+                    });
+                }
             }
         }
         return ranked;
@@ -293,10 +308,10 @@ export class ImmuneStore {
      * UI is not the same as delivering a rule to a model, and letting the two
      * share a counter would inflate the numbers that drive promotion and pruning.
      */
-    peek(queryText, limit = 50) {
+    peek(queryText, limit = 50, projectScope = '*') {
         if (!queryText.trim())
             return this.listAll(true).slice(0, limit);
-        return findMatches(this.db, queryText, limit);
+        return findMatches(this.db, queryText, limit, projectScope);
     }
     /** Shared-library rows, for the dashboard's second tab. */
     sharedAntibodies(limit = 100) {
@@ -387,7 +402,17 @@ export class ImmuneStore {
         // id that happened to be in context — otherwise a model looks worse than
         // it is on turns where an unrelated failure occurred.
         if (ctx?.sessionId && penalized.length > 0) {
-            recordModelFails(this.db, resolveModel(this.db, ctx.sessionId), penalized);
+            const model = resolveModel(this.db, ctx.sessionId);
+            recordModelFails(this.db, model, penalized);
+            for (const id of penalized) {
+                recordDeliveryReceipt(this.db, {
+                    ruleId: id,
+                    sessionId: ctx.sessionId,
+                    model,
+                    projectScope: ctx.projectScope ?? '*',
+                    outcome: 'failed',
+                });
+            }
         }
         return retired;
     }
@@ -435,7 +460,8 @@ export class ImmuneStore {
         }
         return {
             active: count("SELECT COUNT(*) AS n FROM antibodies WHERE status = 'active'"),
-            retired: count("SELECT COUNT(*) AS n FROM antibodies WHERE status != 'active'"),
+            retired: count("SELECT COUNT(*) AS n FROM antibodies WHERE status = 'retired'"),
+            quarantined: count("SELECT COUNT(*) AS n FROM antibodies WHERE status = 'quarantined'"),
             pendingFailures: count('SELECT COUNT(*) AS n FROM pending_failures'),
             sessions: count('SELECT COUNT(*) AS n FROM session_turns'),
             jobsPending: count("SELECT COUNT(*) AS n FROM distill_jobs WHERE status = 'pending'"),
@@ -455,8 +481,47 @@ export class ImmuneStore {
     setMetaValue(key, value) {
         setMeta(this.db, key, value);
     }
-    enqueueJob(tool, failure, success, injected, humanHint = '', repairPath = [], origin = '') {
-        return enqueueJob(this.db, tool, failure, success, injected, humanHint, repairPath, origin);
+    enqueueJob(tool, failure, success, injected, humanHint = '', repairPath = [], origin = '', projectScope = '*', cwd = '') {
+        return enqueueJob(this.db, tool, failure, success, injected, humanHint, repairPath, origin, projectScope, cwd);
+    }
+    // ---------------------------------------------------- v2 intelligence & hygiene
+    /** Run admission hygiene audit/repair across stored antibodies. */
+    repairHygiene(opts = {}) {
+        return repairLibraryHygiene(this.db, opts);
+    }
+    /** Read Red-3 Triage telemetry across failure buckets. */
+    triageSummary(limit = 20) {
+        return summarizeTriage(this.db, limit);
+    }
+    /** Verify and summarize SHA-256 chained delivery receipts. */
+    receiptSummary(limit = 500) {
+        return summarizeReceipts(this.db, limit);
+    }
+    /** Build per-model immunity matrix + adaptive escalation targets. */
+    modelImmunity(magpie) {
+        return buildModelImmunityReport(this.db, magpie);
+    }
+    /** Register or update a discovered workspace profile. */
+    upsertWorkspaceProfile(profile) {
+        this.db
+            .prepare(`INSERT INTO workspace_profiles
+           (scope_id, name, root_path, stack, baseline, rules_count, source, last_scanned_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(scope_id) DO UPDATE SET
+           name = excluded.name,
+           root_path = excluded.root_path,
+           stack = excluded.stack,
+           baseline = excluded.baseline,
+           rules_count = excluded.rules_count,
+           source = excluded.source,
+           last_scanned_at = excluded.last_scanned_at`)
+            .run(profile.scope_id, profile.name, profile.root_path, profile.stack, profile.baseline, profile.rules_count, profile.source, profile.last_scanned_at);
+    }
+    /** List all discovered/ingested workspace profiles. */
+    listWorkspaceProfiles() {
+        return this.db
+            .prepare('SELECT * FROM workspace_profiles ORDER BY rules_count DESC, name ASC')
+            .all();
     }
     claimJob() {
         return claimJob(this.db);

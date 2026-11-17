@@ -1,16 +1,11 @@
 /**
- * Second-stage ranking for recall.
+ * Second-stage ranking for recall (v2).
  *
- * FTS5/BM25 and the LIKE fallback answer "is this text related". They cannot
- * answer "is this rule about the thing I am touching right now", which is what
- * matters once a project accumulates rules: a rule about the same file is worth
- * more than a slightly-better-scoring rule about something else, and a rule
- * nobody has needed for months is worth less than a fresh one.
- *
- * The multipliers are deliberately mild and multiplicative, so no single factor
- * can drag an irrelevant rule to the top.
+ * Combines retrieval relevance, hit-count log scaling, path affinity,
+ * rubric quality boost, shared-library discount, and time decay.
  */
 import type { Antibody } from '../types.js';
+import { lexicalTriggerAffinity } from '../retrieval.js';
 
 export interface RerankOptions {
   /** The current prompt or tool input, used to detect path affinity. */
@@ -19,16 +14,11 @@ export interface RerankOptions {
   cwd?: string;
   /** Ids that came from the shared library (they get a discount). */
   sharedIds?: ReadonlySet<number>;
-  /** Shared-library candidates by object identity (safe across colliding DB ids, Decision #7). */
+  /** Shared-library candidates by object identity (safe across colliding DB ids). */
   sharedSet?: ReadonlySet<Antibody>;
-  /**
-   * Retriever relevance as id → score in (0, 1], built from retrieval order.
-   * When present it is the score's base (retrieval decided relevance; the
-   * multipliers only refine it). Without it the hit-count log stays the base,
-   * as before. Tool affinity is folded into this order by the caller.
-   */
+  /** Retriever relevance as id -> score in (0, 1]. */
   relevance?: ReadonlyMap<number, number>;
-  /** Retriever relevance by candidate object identity (safe across colliding DB ids). */
+  /** Retriever relevance by candidate object identity. */
   relevanceByRule?: ReadonlyMap<Antibody, number>;
   /** Injected by the caller for tests. */
   now?: number;
@@ -54,7 +44,6 @@ function hasPathAffinity(trigger: string, tokens: string[]): boolean {
   const haystack = trigger.replace(/\\/g, '/').toLowerCase();
   return tokens.some((token) => {
     if (haystack.includes(token)) return true;
-    // A bare basename still counts: "vite.config.ts" inside a long path.
     const base = token.split('/').pop();
     return Boolean(base && base.length >= 5 && haystack.includes(base));
   });
@@ -68,10 +57,6 @@ export function timeDecay(ageMs: number): number {
 
 /**
  * Re-rank candidates in memory.
- *
- * Base score is log-scaled hit count (so a proven rule beats an unused one of
- * equal relevance without letting a single popular rule dominate), multiplied
- * by path affinity, shared-library discount, and time decay.
  */
 export function rerank(candidates: Antibody[], opts: RerankOptions): Antibody[] {
   const tokens = queryPathTokens(opts.query);
@@ -85,6 +70,13 @@ export function rerank(candidates: Antibody[], opts: RerankOptions): Antibody[] 
         ? relevance * (1 + Math.log1p(Math.max(0, antibody.hit_count)))
         : 1 + Math.log1p(Math.max(0, antibody.hit_count));
     if (hasPathAffinity(antibody.trigger_pattern, tokens)) score *= 1.5;
+    // Reward concrete trigger/symptom lexical+concept overlap over short-field BM25 rank ties.
+    const lex = lexicalTriggerAffinity(opts.query, antibody);
+    if (lex > 0) score *= 1 + Math.min(4.5, lex * 0.65);
+    // Mild quality boost: generalized advice outranks raw command tactics on ties.
+    const rubric = antibody.rubric_score ?? 70;
+    if (rubric >= 85) score *= 1.12;
+    else if (rubric < 50) score *= 0.7;
     const isShared = opts.sharedSet ? opts.sharedSet.has(antibody) : Boolean(sharedIds?.has(antibody.id));
     if (isShared) score *= 0.85;
     const stamp = antibody.updated_at || antibody.created_at || now;

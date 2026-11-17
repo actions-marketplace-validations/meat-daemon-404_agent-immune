@@ -41,7 +41,8 @@ export function formatImmuneContext(antibodies: Antibody[], maxChars = 1200): st
   const t = strings();
   const lines = antibodies.map(
     (ab, i) =>
-      `${i + 1}. [${t.trigger}: ${clampField(sanitizeField(ab.trigger_pattern), 80)}] ` +
+      `${i + 1}. ${(ab.ignored_count ?? 0) >= 2 ? `[CRITICAL · ignored ${ab.ignored_count}×] ` : ''}` +
+      `[${t.trigger}: ${clampField(sanitizeField(ab.trigger_pattern), 80)}] ` +
       `${t.avoid}: ${clampField(sanitizeField(ab.symptom), 80)} -> ` +
       `${t.do}: ${clampField(sanitizeField(ab.prescription), 100)}`,
   );

@@ -14,8 +14,13 @@ Show the antibodies the immune system has distilled for this project.
 
    `node "<plugin-root>/dist/zcode/src/cli.js" list`
 
-   Add `--all` when the user asked to include retired antibodies.
-   （加 `--all` 可包含已退役的抗体。）
+   Add `--all` when the user asked to include retired or quarantined antibodies.
+   For v2 diagnostics and hygiene, also consider:
+   - `node "<plugin-root>/dist/zcode/src/cli.js" hygiene --dry-run` (or apply)
+   - `node "<plugin-root>/dist/zcode/src/cli.js" triage`
+   - `node "<plugin-root>/dist/zcode/src/cli.js" receipts`
+   - `node "<plugin-root>/dist/zcode/src/cli.js" workspaces`
+   （加 `--all` 可包含已退役或隔离规则；v2 还支持 `hygiene`、`triage`、`receipts`、`workspaces` 子命令。）
 
 3. Present the result as a compact table. Translate only the headers and your own
    commentary into the user's language; keep trigger, symptom and prescription

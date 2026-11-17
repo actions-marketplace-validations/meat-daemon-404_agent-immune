@@ -17,49 +17,52 @@ export function openDatabase(dbPath) {
         db.prepare('PRAGMA journal_mode = WAL').get();
     }
     db.prepare('PRAGMA busy_timeout = 5000').get();
-    for (const statement of SCHEMA_STATEMENTS)
+    for (const statement of SCHEMA_STATEMENTS) {
+        // Index on a column that only exists after `migrate` runs on legacy DBs must
+        // not abort opening; `migrate` ensures those columns and indexes exist.
+        if (statement.includes('idx_antibodies_scope'))
+            continue;
         db.prepare(statement).run();
+    }
     migrate(db);
+    try {
+        db.prepare('CREATE INDEX IF NOT EXISTS idx_antibodies_scope ON antibodies(status, project_scope, hit_count DESC)').run();
+    }
+    catch {
+        // Non-fatal if opened read-only or restricted.
+    }
     return db;
 }
 /**
  * Additive migrations for databases created by an earlier version.
  *
- * `CREATE TABLE IF NOT EXISTS` never alters an existing table, so a column added
- * to the schema would be missing on every pre-existing database and every query
- * touching it would fail. Each column is therefore checked and added
- * individually; nothing is ever dropped, so an older host keeps working.
- *
- * Table and column names here are compile-time constants, not user input.
+ * `CREATE TABLE IF NOT EXISTS` never alters an existing table, so columns added
+ * across versions are checked and appended individually; nothing is dropped.
  */
 const COLUMNS = [
     { table: 'pending_failures', column: 'human_hint', ddl: "TEXT NOT NULL DEFAULT ''" },
     { table: 'pending_failures', column: 'target_signature', ddl: "TEXT NOT NULL DEFAULT ''" },
     { table: 'distill_jobs', column: 'human_hint', ddl: "TEXT NOT NULL DEFAULT ''" },
     { table: 'session_injections', column: 'prescriptions', ddl: "TEXT NOT NULL DEFAULT '[]'" },
-    // Action-diff provenance (1.0.21): the write actions that repaired the
-    // problem, kept on the rule so exports and UI can show HOW it was learned.
     { table: 'distill_jobs', column: 'repair_path', ddl: "TEXT NOT NULL DEFAULT '[]'" },
     { table: 'antibodies', column: 'repair_path', ddl: "TEXT NOT NULL DEFAULT '[]'" },
-    // Where the prescription came from ('', 'rule', 'llm', 'rewritten'): an
-    // operator needs to see that a rule's wording is model-written rather than
-    // captured evidence.
     { table: 'antibodies', column: 'prescription_source', ddl: "TEXT NOT NULL DEFAULT ''" },
-    // ROADMAP 1.4b: what taught the lesson ('' = self-repair,
-    // 'user_correction' = a human hint closed the episode). Provenance for the
-    // dashboard and audits, never a behavior switch.
     { table: 'antibodies', column: 'origin', ddl: "TEXT NOT NULL DEFAULT ''" },
     { table: 'distill_jobs', column: 'origin', ddl: "TEXT NOT NULL DEFAULT ''" },
-    // ROADMAP 2.2: mutation lineage — the rule a refined child was mutated from,
-    // and when the last evidence-based refinement landed.
     { table: 'antibodies', column: 'parent_id', ddl: 'INTEGER' },
     { table: 'antibodies', column: 'mutated_at', ddl: 'INTEGER NOT NULL DEFAULT 0' },
-    // ROADMAP 3.1: which workspace taught the rule, whether it is on probation
-    // after that workspace changed, and why a rule left the active set when the
-    // reason is not anti-rot.
     { table: 'antibodies', column: 'env_fingerprint', ddl: "TEXT NOT NULL DEFAULT ''" },
     { table: 'antibodies', column: 'probation_at', ddl: 'INTEGER NOT NULL DEFAULT 0' },
     { table: 'antibodies', column: 'retire_reason', ddl: "TEXT NOT NULL DEFAULT ''" },
+    // V2 schema columns
+    { table: 'antibodies', column: 'project_scope', ddl: "TEXT NOT NULL DEFAULT '*'" },
+    { table: 'antibodies', column: 'quality_grade', ddl: "TEXT NOT NULL DEFAULT 'advice'" },
+    { table: 'antibodies', column: 'rubric_score', ddl: 'INTEGER NOT NULL DEFAULT 70' },
+    { table: 'antibodies', column: 'root_cause', ddl: "TEXT NOT NULL DEFAULT ''" },
+    { table: 'antibodies', column: 'triage_bucket', ddl: "TEXT NOT NULL DEFAULT ''" },
+    { table: 'antibodies', column: 'ignored_count', ddl: 'INTEGER NOT NULL DEFAULT 0' },
+    { table: 'distill_jobs', column: 'project_scope', ddl: "TEXT NOT NULL DEFAULT '*'" },
+    { table: 'distill_jobs', column: 'cwd', ddl: "TEXT NOT NULL DEFAULT ''" },
 ];
 function migrate(db) {
     for (const { table, column, ddl } of COLUMNS) {

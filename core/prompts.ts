@@ -21,7 +21,7 @@ failure was caused only by:
 - a missing binary that the environment provisions elsewhere
 
 Otherwise output exactly:
-{"trigger_pattern": "...", "symptom": "...", "prescription": "..."}
+{"trigger_pattern": "...", "symptom": "...", "prescription": "...", "root_cause": "missing_prerequisite|env_or_path|api_or_schema_drift|stale_read|config_mismatch|command_syntax|other", "scope": "universal|project"}
 
 Rules:
 - trigger_pattern: the concrete things that should make an agent recall this rule.
@@ -29,25 +29,25 @@ Rules:
   Space separated, at most 8 items, no sentences.
 - symptom: one sentence, at most 35 characters, the wrong instinct that caused the failure.
 - prescription: one sentence, at most 60 characters, the verified correct move.
+- scope: "universal" when the lesson transfers across repositories without local paths;
+  "project" when tied to a specific repo script or config file.
 - The success trace may end with a "repair actions:" line — those are the edits
   that actually fixed the problem. The prescription should state the FIX (for
   example "edit tsconfig.json before building"), not restate the retried command.
 - Error codes (ERR_*, EACCES, HTTP 404) are strong trigger tokens; include the
   code verbatim when it discriminates this failure from others.
 - Write the rule so a DIFFERENT model or agent can follow it. Strip
-  vendor-specific phrasing — one model's error banner, its internal tool names,
-  its own restatement of the problem — and keep the action. If the fix only
-  works because of that vendor, say so in the prescription instead of hiding it.
+  vendor-specific phrasing and NEVER include machine-local absolute paths,
+  IP addresses, secrets, tokens, or hostnames in any field.
 - Write symptom and prescription in the language the agent was working in.
-- Be specific. "be careful" is not a prescription.
-- Never include secrets, tokens, or hostnames in any field.`;
+- Be specific. "be careful" is not a prescription.`;
 
 export const BATCH_DISTILL_PROMPT = `You extract reusable rules from several failed-then-fixed attempts at once.
 
 You are given a JSON array of episodes: [{ id, failedTrace, fixedTrace, humanHint? }].
 
 Output strictly a JSON ARRAY with one object per input id, no prose, no markdown fence:
-[{"id": 1, "trigger_pattern": "...", "symptom": "...", "prescription": "..."},
+[{"id": 1, "trigger_pattern": "...", "symptom": "...", "prescription": "...", "root_cause": "missing_prerequisite|env_or_path|api_or_schema_drift|stale_read|config_mismatch|command_syntax|other", "scope": "universal|project"},
  {"id": 2, "skip": true}]
 
 Skip an episode ({"id": N, "skip": true}) when it has no cross-session value:
@@ -80,6 +80,8 @@ export interface BatchEpisode {
   humanHint?: string;
   /** Observed repair chain (ROADMAP 1.3): rides in the payload, not the trace. */
   repairs?: string[];
+  projectScope?: string;
+  workspaceRoot?: string;
 }
 
 /** Build the batch payload: a JSON array, as the prompt asks for. */
@@ -133,6 +135,17 @@ export function parseBatchOutput(
   return out;
 }
 
+const VALID_ROOT_CAUSES = new Set([
+  'missing_prerequisite',
+  'env_or_path',
+  'api_or_schema_drift',
+  'stale_read',
+  'config_mismatch',
+  'command_syntax',
+  'flake',
+  'other',
+]);
+
 /** Shared field extraction for one distilled object. */
 function resultFromObject(obj: Record<string, unknown>, toolName: string): DistillResult {
   if (obj.skip === true) return { ok: false, reason: 'skip' };
@@ -141,6 +154,9 @@ function resultFromObject(obj: Record<string, unknown>, toolName: string): Disti
   if (!trigger || !prescription) {
     return { ok: false, reason: 'invalid', detail: 'missing trigger_pattern or prescription' };
   }
+  const rawCause = typeof obj.root_cause === 'string' ? obj.root_cause.trim() : '';
+  const root_cause = VALID_ROOT_CAUSES.has(rawCause) ? (rawCause as import('./types.js').RootCauseType) : undefined;
+  const scope = obj.scope === 'universal' ? '*' : undefined;
   return {
     ok: true,
     antibody: {
@@ -148,6 +164,9 @@ function resultFromObject(obj: Record<string, unknown>, toolName: string): Disti
       symptom: field(obj.symptom, 240) ?? '(no symptom recorded)',
       prescription,
       tool_name: toolName,
+      prescription_source: 'llm',
+      ...(root_cause ? { root_cause } : {}),
+      ...(scope ? { project_scope: scope } : {}),
     },
   };
 }
@@ -227,6 +246,9 @@ export function parseDistillOutput(raw: string, toolName?: string): DistillResul
   }
   // Symptom is helpful but not essential; keep the rule when it is absent.
   const symptom = field(obj.symptom, 240) ?? '(no symptom recorded)';
+  const rawCause = typeof obj.root_cause === 'string' ? obj.root_cause.trim() : '';
+  const root_cause = VALID_ROOT_CAUSES.has(rawCause) ? (rawCause as import('./types.js').RootCauseType) : undefined;
+  const scope = obj.scope === 'universal' ? '*' : undefined;
 
   return {
     ok: true,
@@ -235,6 +257,42 @@ export function parseDistillOutput(raw: string, toolName?: string): DistillResul
       symptom,
       prescription,
       tool_name: toolName ?? null,
+      prescription_source: 'llm',
+      ...(root_cause ? { root_cause } : {}),
+      ...(scope ? { project_scope: scope } : {}),
     },
   };
+}
+
+export const CRITIQUE_DISTILL_PROMPT = `You are a quality critic repairing a weak pitfall rule drafted by another model.
+
+The draft rule scored poorly on our quality rubric because it leaked a machine-local path, copied raw command arguments, or lacked an imperative fix.
+
+Output strictly JSON matching:
+{"trigger_pattern": "...", "symptom": "...", "prescription": "...", "root_cause": "missing_prerequisite|env_or_path|api_or_schema_drift|stale_read|config_mismatch|command_syntax|other", "scope": "universal|project"}
+
+Requirements:
+- Replace any machine paths (C:\\..., /Users/..., /home/...) with abstract concepts or <repo>/...
+- Keep prescription under 60 chars as ONE actionable instruction any agent can follow.
+- Include at least 3 concrete discriminating trigger tokens (error codes, tools, API names).`;
+
+export function buildCritiqueInput(
+  draft: { trigger_pattern: string; symptom: string; prescription: string },
+  issues: readonly string[],
+  failureTrace: string,
+  successTrace: string,
+): string {
+  return [
+    '<draft_rule>',
+    JSON.stringify(draft),
+    '</draft_rule>',
+    '<rubric_issues>',
+    issues.join('; ') || 'low portability or actionability',
+    '</rubric_issues>',
+    '<evidence>',
+    redactOutbound(failureTrace).slice(0, 600),
+    '---',
+    redactOutbound(successTrace).slice(0, 600),
+    '</evidence>',
+  ].join('\n');
 }

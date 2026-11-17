@@ -1,16 +1,8 @@
 /**
- * DSH plugin entry — real Cordis plugin shape (`name` + `inject` + `apply(ctx)`).
+ * DSH plugin entry — thin Cordis adapter over `core/runtime.ts`.
  *
- * Shares `core/` with the ZCode plugin, so behaviour and storage format are
- * identical. Only the host binding differs, and that lives in `dsh-adapter.ts`.
- *
- * The three host facts this file depends on, all read out of the DSH checkout:
- *  - results arrive on `tools/post-execute` (waterfall) — there is no separate
- *    failure event, and `isError` only covers infrastructure failures;
- *  - model-facing text goes in through `agent.inject()` / the `agent/pre-step`
- *    decision — `session.appendSystemReminder` does not exist in DSH;
- *  - commands register as `{ name, description, handler }` and the handler
- *    returns a `CommandResult` object, not a bare string.
+ * Shares `ImmuneRuntime` with ZCode/Claude/Codex/Antigravity so pairing,
+ * Red-3 triage, workspace scoping, and turn-end distillation cannot drift.
  */
 import { createHash } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
@@ -20,44 +12,17 @@ import { ImmuneStore } from '../../core/store/index.js';
 import { stuckHypothesisText } from '../../core/store/stuck.js';
 import { renderSkillMarkdown } from '../../core/export.js';
 import { formatShareViolations, shareSanityCheck } from '../../core/share-guard.js';
-import { distillEpisode, isSubstantiveHint } from '../../core/distiller.js';
-import { applyDistillResult } from '../../core/commit.js';
-import { currentFingerprint } from '../../core/env-fingerprint.js';
+import { isSubstantiveHint } from '../../core/distiller.js';
 import { strings } from '../../core/i18n.js';
-import { isSelfEpisode } from '../../core/selfnoise.js';
-import { isRelated } from '../../core/relevance.js';
-import { looksEchoPrescription } from '../../core/rewrite.js';
-import { maybeSleepConsolidate } from '../../core/sleep-consolidate.js';
-import { normaliseTargetPath, targetSignature } from '../../core/pairing.js';
 import { findGuardHit, guardMode } from '../../core/guards.js';
-import { isRepairTool } from '../../core/repair-tools.js';
 import { redact } from '../../core/redact.js';
+import { ImmuneRuntime, clampBudgetMs, resolveDrainBudgetMs } from '../../core/runtime.js';
 import { registerImmuneUiRoute } from './ui-route.js';
-import { maybeSyncDocAfterDrain } from '../../core/sync-doc.js';
 import { DSH_EVENTS, PLUGIN_NAME, createPluginMessage, makeLogger, normaliseToolEvent, textOf, } from './dsh-adapter.js';
 export const name = PLUGIN_NAME;
-/**
- * `ctx.commands` is a service, so it must be injected — accessing an
- * un-injected service throws `cannot get property "..." without inject`
- * (`vendor\cordis\src\reflect.ts:144`). The plugin registers no tools, so
- * `'tools'` is deliberately absent.
- */
 export const inject = ['commands'];
 export { PLUGIN_NAME, DSH_EVENTS, normaliseToolEvent } from './dsh-adapter.js';
 const t = strings();
-/**
- * Where the antibody store lives.
- *
- * `IMMUNE_DB_PATH` wins (tests and the ZCode side set it). Otherwise the store
- * is keyed by the current project under the DSH home, so antibodies learned in
- * one workspace never leak into another and nothing is written into the project
- * tree itself:
- *
- *     <DSH_HOME>/storages/dsh-immune-system/<sha1(cwd)[0..16]>.sqlite
- *
- * `core/store/path.ts` cannot express this — it is shared with the ZCode host
- * and knows nothing about a DSH home — so the DSH-specific default lives here.
- */
 function resolveStorePath() {
     const explicit = process.env.IMMUNE_DB_PATH?.trim();
     if (explicit)
@@ -68,10 +33,6 @@ function resolveStorePath() {
     mkdirSync(dir, { recursive: true });
     return join(dir, `${projectKey}.sqlite`);
 }
-/**
- * Self-noise markers for the DSH host: the plugin's own storage directory.
- * Any failure trace touching it is the plugin's maintenance, not a pitfall.
- */
 function selfMarkers() {
     const explicit = process.env.IMMUNE_DB_PATH?.trim();
     if (explicit)
@@ -79,18 +40,7 @@ function selfMarkers() {
     const home = process.env.DSH_HOME?.trim() || join(homedir(), '.dsh');
     return [join(home, 'storages', 'dsh-immune-system')];
 }
-/**
- * Latest human prompt seen per session.
- *
- * A cold `resume` / `clear` / `compact` start hands `agent/pre-step` a batch
- * that carries no human message (the inbox is rebuilt only from post-seed
- * `agent/inbox/spliced` events), so recall-by-prompt would silently do nothing
- * on the first request after a resume. Recording prompts from the durable
- * `user/message` events closes that gap. Bounded so a long-lived process does
- * not grow without limit.
- */
 const lastPrompts = new Map();
-/** Last turn a recall block was spliced for, so a turn injects at most once. */
 const lastInjectedTurn = new Map();
 const MAX_TRACKED_SESSIONS = 256;
 function rememberPrompt(sessionId, text) {
@@ -106,35 +56,19 @@ function rememberPrompt(sessionId, text) {
         lastInjectedTurn.delete(oldest);
     }
 }
-/**
- * Render antibodies as the compact advisory block.
- *
- * The `<immune_memory>` wrapper is the contract the model sees; brackets inside
- * antibody text are stripped so a distilled line can never close the tag early.
- */
+function sanitize(value) {
+    return value.replace(/[<>]/g, ' ').replace(/\s+/g, ' ').trim();
+}
 function renderMemory(blocks, preamble, maxChars) {
     if (blocks.length === 0)
         return '';
     const body = blocks
-        .map((b, i) => `${i + 1}. [${t.trigger}: ${sanitize(b.trigger_pattern)}] ${t.avoid}: ${sanitize(b.symptom)} -> ${t.do}: ${sanitize(b.prescription)}`)
+        .map((b, i) => `${i + 1}. ${(b.ignored_count ?? 0) >= 2 ? `[CRITICAL · ignored ${b.ignored_count}×] ` : ''}` +
+        `[${t.trigger}: ${sanitize(b.trigger_pattern)}] ${t.avoid}: ${sanitize(b.symptom)} -> ${t.do}: ${sanitize(b.prescription)}`)
         .join('\n');
     const clipped = body.length > maxChars ? `${body.slice(0, maxChars)}…` : body;
     return ['<immune_memory>', preamble, clipped, '</immune_memory>'].join('\n');
 }
-/** Strip tag characters so injected text cannot escape its wrapper. */
-function sanitize(value) {
-    return value.replace(/[<>]/g, ' ').replace(/\s+/g, ' ').trim();
-}
-/**
- * Build the episode trace in the format `core/` distils from.
- *
- * `core/trace.ts` and `core/distiller.ts` read these markers positionally:
- * `extractError` looks for `error=` / `result=`, and `extractInvocation`
- * scans for `"command":"…"` inside the JSON input. Handing them a bare error
- * string yields "no reusable trigger found" and silently distils nothing, so
- * the shape below is load-bearing — it mirrors `summarizeToolCall` on the
- * ZCode side (`zcode\src\format.ts:53`).
- */
 function traceFor(event, outcome) {
     let input;
     try {
@@ -145,35 +79,10 @@ function traceFor(event, outcome) {
     }
     return `tool=${event.toolName} input=${input} ${outcome}`;
 }
-/**
- * Turn-end distillation budget, in milliseconds. Same env var and default as the
- * ZCode adapter (`zcode/src/drain.ts:23`), clamped so a typo cannot hang a turn.
- * `/immune --budget <ms>` sets a process-wide override for the running session;
- * it is deliberately in-memory only (a restart falls back to the env var), so a
- * stray slash command can never persist a bad number into the project.
- */
 let budgetOverrideMs = null;
-function clampBudgetMs(value) {
-    return Math.min(60_000, Math.max(1_000, Math.trunc(value)));
-}
 function drainBudgetMs() {
-    if (budgetOverrideMs !== null)
-        return budgetOverrideMs;
-    const raw = Number(process.env.IMMUNE_DISTILL_BUDGET_MS ?? '');
-    return clampBudgetMs(Number.isFinite(raw) && raw > 0 ? raw : 12_000);
+    return budgetOverrideMs ?? resolveDrainBudgetMs();
 }
-/**
- * Whether the host actually composed our web-client bundle row.
- *
- * `client-modules` only serves `/plugins/<id>/client.js` for a package whose
- * manifest declares `dsh.client.platform === "web"` and `exports["./client"]`,
- * and it caches a negative verdict for the life of the process. That is why a
- * settings tab can stay missing after an upgrade until the app is restarted;
- * surfacing the live answer in `/immune` and at startup turns that into a
- * one-line check instead of a guess. `ctx.get('clientModules')` is a read-only
- * service lookup (no inject edge), per
- * `packages\context\agent-instructions\src\index.ts:116`.
- */
 export function readWebTabState(registry) {
     const clientPath = registry
         ?.clientPath;
@@ -197,20 +106,12 @@ function describeWebTab(ctx) {
         return 'unknown';
     }
 }
-/**
- * Log the web-tab verdict once the host has composed its module graph.
- *
- * Activation order is not guaranteed: at `apply()` time `clientModules` may not
- * exist yet, and even when it does the graph is flushed later. So subscribe to
- * the registry's `onGraphChanged` (pull model: re-read `clientPath`) and also
- * check once immediately, logging the first answer only.
- */
 function reportWebTabWhenComposed(ctx, log) {
-    const inject = ctx.inject;
-    if (typeof inject !== 'function')
+    const injectFn = ctx.inject;
+    if (typeof injectFn !== 'function')
         return;
     try {
-        inject.call(ctx, ['clientModules'], (child) => {
+        injectFn.call(ctx, ['clientModules'], (child) => {
             const registry = child?.clientModules;
             let logged = false;
             const report = () => {
@@ -226,56 +127,16 @@ function reportWebTabWhenComposed(ctx, log) {
                     onGraphChanged.call(registry, report);
                 }
                 catch {
-                    /* a host that exposes the hook but rejects it must not break us */
+                    // ignore
                 }
             }
             report();
         });
     }
     catch {
-        /* no cordis-style injection: the plugin still works without a web UI */
+        // ignore
     }
 }
-/** Distil queued episodes. Called at turn end, never inside a tool result path. */
-async function drain(store, budgetMs = drainBudgetMs()) {
-    const deadline = Date.now() + budgetMs;
-    store.requeueStuckJobs();
-    for (;;) {
-        const remaining = deadline - Date.now();
-        if (remaining <= 0)
-            break;
-        const job = store.claimJob();
-        if (!job)
-            break;
-        if (isSelfEpisode(`${job.failure_trace} ${job.success_trace}`, selfMarkers())) {
-            store.finishJob(job.id, 'skipped', 'self-noise episode (drain-time gate)');
-            continue;
-        }
-        try {
-            const result = await distillEpisode(job.tool_name, job.failure_trace, job.success_trace, {
-                signal: AbortSignal.timeout(Math.max(1000, remaining)),
-                humanHint: job.human_hint ?? '',
-                repairs: job.repair_path ?? [],
-            });
-            // The ONE commit path shared with the ZCode drain (core/commit.ts):
-            // origin, repair chain, environment fingerprint and the post-injection
-            // mutation now behave identically on this host.
-            applyDistillResult(store, job, result, { fingerprint: currentFingerprint().key });
-        }
-        catch (error) {
-            store.finishJob(job.id, 'failed', error instanceof Error ? error.message : String(error));
-        }
-    }
-}
-/**
- * Where to splice the recall block: right after the last message the driver
- * claimed for this step, so the human prompt still precedes the advisory and
- * any runtime context the driver appended still follows it.
- *
- * Mirrors `agent-instructions` (`packages\context\agent-instructions\src\index.ts:322-348`).
- * Falls back to the end when the claimed batch is not present in the decision
- * (a cold `resume`/`compact` start can hand back a different batch).
- */
 function insertAt(decisionMessages, claimed) {
     const lastClaimedIndex = decisionMessages.findLastIndex((message) => claimed.includes(message));
     return lastClaimedIndex < 0 ? decisionMessages.length : lastClaimedIndex + 1;
@@ -285,22 +146,16 @@ export function apply(ctx) {
         startPlugin(ctx);
     }
     catch (error) {
-        // A broken plugin must never break the session: degrade to a warning and
-        // leave the agent running without immunity for this session.
         makeLogger(ctx).warn(`[immune] disabled for this session: ${error instanceof Error ? error.message : String(error)}`);
     }
 }
 function startPlugin(ctx) {
     const log = makeLogger(ctx);
     const store = new ImmuneStore({ dbPath: resolveStorePath() });
+    const runtime = new ImmuneRuntime(store);
     log.info(`[immune] storage: ${store.dbPath}`);
-    // Native web UI: the settings tab in the DSH web app talks to this route.
-    // Optional on purpose — CLI and desktop profiles expose no `webServer`, and
-    // requiring one would stop the plugin activating there at all.
     registerImmuneUiRoute(ctx, store, () => drainBudgetMs());
     reportWebTabWhenComposed(ctx, log);
-    // Remember every human prompt as it lands, so a resumed session can still be
-    // matched even when its first pre-step batch carries no human message.
     ctx.on('session/event', (session, event) => {
         if (event.type !== 'user/message')
             return;
@@ -309,233 +164,127 @@ function startPlugin(ctx) {
             return;
         const text = textOf(message.content ?? []);
         rememberPrompt(session.header.id, text);
-        // A fresh human message is the explanation for whatever failed last turn;
-        // attaching it makes the distilled prescription human-authored.
         if (isSubstantiveHint(text))
             store.attachHumanHint(session.header.id, text);
     });
-    // Session start: retire stale antibodies once, then prime with the project's
-    // most-used ones. Delivered via `inject()` — the channel the
-    // `agent/session-start` docs name explicitly, and its content is visible to
-    // the very first request.
     ctx.on(DSH_EVENTS.sessionStart, ({ agent, source }) => {
-        // resume / clear / compact start a new context: rules suppressed before
-        // them must be eligible again.
-        if (source === 'resume' || source === 'clear' || source === 'compact') {
-            store.resetTurnState(agent.id);
-        }
-        store.pruneStale();
-        // ROADMAP 3.1: environment metabolism — a lockfile/runtime change puts
-        // rules learned in the OLD environment on probation.
-        try {
-            store.runEnvMetabolism(process.cwd());
-        }
-        catch {
-            // Metabolism is bookkeeping; a failed pass must not block the session.
-        }
-        const active = store.listAll(false);
-        // Priming has no prompt/tool query to match against, so drop echo-grade
-        // command dumps here (`looksEchoPrescription`, Decision #39) while recording
-        // the delivered ids for anti-rot attribution and turn-time deduping.
-        const top = active
-            .filter((a) => !looksEchoPrescription(a.prescription))
-            .slice(0, 3);
-        if (top.length > 0) {
-            store.recordInjection(agent.id, top.map((a) => a.id), top.map((a) => a.prescription));
-        }
+        const top = runtime.sessionStart({ sessionId: agent.id, source, workspace: process.cwd() });
         const block = renderMemory(top, t.promptPreamble, 1400);
         if (block)
             agent.inject(createPluginMessage(block));
-        log.info(`[immune] session-start (${source}): ${active.length} active antibody/queries`);
+        log.info(`[immune] session-start (${source}): ${store.listAll(false).length} active antibody/queries`);
     });
-    // Pre-step: recall antibodies that match what the human is about to ask.
-    // `inject()` can miss the turn already being assembled, so the block is also
-    // spliced into the decision returned by the waterfall's default `next()`.
     ctx.on(DSH_EVENTS.preStep, async ({ agent, messages, turn, step }, next) => {
         const decision = await next();
-        if (decision.kind === 'reject')
+        if (decision.kind === 'reject' || step !== 1 || lastInjectedTurn.get(agent.id) === turn) {
             return decision;
-        // Recall is a per-turn decision. Re-injecting on every step of a tool loop
-        // would repeat the same block, and — because `match()` bumps hit counts —
-        // would make "popularity" a function of how many steps a turn happened to
-        // take. Both are avoided by acting only on the first step of each turn.
-        if (step !== 1)
-            return decision;
-        if (lastInjectedTurn.get(agent.id) === turn)
-            return decision;
-        // Prefer the prompt the driver actually claimed this step; fall back to the
-        // last prompt seen on the session stream (cold resume/compact carry none).
+        }
         const prompt = lastHumanPrompt(decision.messages) || lastPrompts.get(agent.id) || '';
         if (!prompt)
             return decision;
-        const hits = store.match(prompt, {
-            limit: 3,
+        const hits = runtime.userPrompt({
             sessionId: agent.id,
-            // Consecutive turns about the same file must not re-inject an identical
-            // block, nor inflate hit_count by doing so.
+            prompt,
+            workspace: process.cwd(),
             suppressRepeats: true,
         });
         const block = renderMemory(hits, t.promptPreamble, 1400);
-        // Probe-thrash advisory (turn-start delivery: PreToolDecision has no
-        // context channel). The streak survives from last turn when the turn ended
-        // on probes; any non-probe call has reset it.
         const streak = store.topProbeStreak(agent.id, 3);
         const thrash = streak
             ? `探针提示 / probe note: 上一回合对 ${streak.signature} 连续探测了 ${streak.count} 次 — 一条精确命令（grep -n 关键词、单次 Read）通常一步到位。`
             : null;
-        // ROADMAP 1.5-DSH: the stuck hypothesis rides the same turn-start channel.
-        // The row exists only because the failure path found NO covering rule
-        // (post-failure gate), so delivering here cannot be noise on covered
-        // ground; marking hypothesized keeps it once-per-streak and lets the ZCode
-        // PreToolUse surface skip it.
         const stuck = store.topStuck(agent.id, 2);
         const stuckNote = stuck ? stuckHypothesisText(stuck.signature) : null;
         if (stuck)
             store.markHypothesized(agent.id, stuck.signature);
         const advisories = [thrash, stuckNote].filter(Boolean);
         const advisoryBlock = advisories.length > 0 ? advisories.join('\n') : null;
-        const withThrash = advisoryBlock && block
+        const combined = advisoryBlock && block
             ? `${block}\n${advisoryBlock}`
             : advisoryBlock
                 ? `<immune_memory>\n${advisoryBlock}\n</immune_memory>`
                 : block;
-        if (!withThrash)
+        if (!combined)
             return decision;
         lastInjectedTurn.set(agent.id, turn);
-        const desired = createPluginMessage(withThrash);
-        return { kind: 'enter', messages: decision.messages.toSpliced(insertAt(decision.messages, messages), 0, desired) };
+        const desired = createPluginMessage(combined);
+        return {
+            kind: 'enter',
+            messages: decision.messages.toSpliced(insertAt(decision.messages, messages), 0, desired),
+        };
     });
-    // Guards run before dispatch and can refuse the call outright. Only the
-    // `deny` mode is meaningful here: `PreToolDecision` has no context channel,
-    // so `warn` cannot be delivered from this hook and is ZCode-only.
     ctx.on(DSH_EVENTS.preToolExecute, async (exec, next) => {
         if (guardMode() === 'deny') {
-            const argumentsText = (() => {
-                try {
-                    return redact(JSON.stringify(exec?.arguments ?? {})).slice(0, 2000);
-                }
-                catch {
-                    return '';
-                }
-            })();
-            const hit = findGuardHit(argumentsText);
+            let argsText = '';
+            try {
+                argsText = redact(JSON.stringify(exec?.arguments ?? {})).slice(0, 2000);
+            }
+            catch {
+                argsText = '';
+            }
+            const hit = findGuardHit(argsText);
             if (hit) {
                 return { kind: 'deny', reason: `[${hit.rule.id}] ${hit.rule.what} → ${hit.rule.instead}` };
             }
         }
         return next();
     });
-    // Tool results: sense the failure -> success inflection.
     ctx.on(DSH_EVENTS.postToolExecute, async (exec, result, next) => {
-        // Delegate first so a later listener can still block or replace, then
-        // judge the tool's OWN outcome (`result` is the frozen pre-decision
-        // snapshot, not another plugin's rewrite — an antibody must describe a
-        // real tool failure, never a policy block).
         const downstream = await next();
         const event = normaliseToolEvent(exec, result);
         if (!event)
             return downstream;
-        // Action diff (EMG-style): when OTHER tools have open episodes, a write
-        // to a file is very often the actual repair. A tool with its own open
-        // episode does not record itself as its own repair.
-        if (isRepairTool(event.toolName) &&
-            store.hasPendingFailure(event.sessionId) &&
-            !store.hasPendingFailure(event.sessionId, event.toolName)) {
-            const raw = (event.toolInput ?? {});
-            const filePath = raw.file_path ??
-                raw.path ??
-                raw.notebook_path ??
-                raw.TargetFile ??
-                raw.AbsolutePath ??
-                raw.Path ??
-                '';
-            const base = typeof filePath === 'string' && filePath.length > 0
-                ? filePath.split(/[\\/]/).pop() ?? filePath
-                : event.toolName;
-            const relative = typeof filePath === 'string' && filePath.length > 0
-                ? normaliseTargetPath(filePath, process.cwd())
-                : '';
-            store.recordRepairAction(event.sessionId, `${event.toolName} ${relative || base}`);
-        }
-        // Probe-thrash bookkeeping & convergent detours (ROADMAP 2.3b).
-        const probeSignature = targetSignature(event.toolName, event.toolInput);
-        if (!probeSignature.probeOnly && event.ok) {
-            const detourStreak = store.topProbeStreak(event.sessionId, store.detourMinProbes);
-            if (detourStreak)
-                store.recordDetour(event.sessionId, detourStreak.signature, detourStreak.count);
-        }
-        store.recordProbeOutcome(event.sessionId, probeSignature.probeOnly ? probeSignature.signature : null);
-        if (!event.ok) {
-            // A sandbox file-access denial is a permission negotiation, not a
-            // project pitfall: the host already hands the model an escalation hint,
-            // and distilling it would only restate the same command. It also must
-            // not penalise the injected antibodies — they were not what got refused.
-            if (event.sandboxDenied)
-                return downstream;
-            const failedTarget = targetSignature(event.toolName, event.toolInput);
-            const snapshot = store.recordFailure(event.sessionId, event.toolName, traceFor(event, `error=${event.errorText}`), failedTarget.signature);
-            // ROADMAP 1.5 stuck detection: count uncovered non-probe failures using
-            // read-only `peek` (Decision #9).
-            if (!failedTarget.probeOnly) {
-                const covered = store
-                    .peek(snapshot.trace, 3)
-                    .some((row) => isRelated(row.trigger_pattern, snapshot.trace, event.toolName));
-                if (!covered)
-                    store.recordStuckFailure(event.sessionId, failedTarget.signature);
-            }
-            // Anti-rot retirement is the handling: a failure-only episode has no
-            // repair evidence, and re-distilling one produced literal "previous
-            // rule (retired after N failures)" prescriptions (production data).
-            store.penalize(snapshot.injected_ids, {
-                failureText: snapshot.trace,
-                toolName: event.toolName,
-                sessionId: event.sessionId,
-            });
-            return downstream;
-        }
-        const successTarget = targetSignature(event.toolName, event.toolInput);
-        const failure = store.claimFailure(event.sessionId, event.toolName, successTarget);
-        const hypothesized = store.wasHypothesized(event.sessionId, successTarget.signature);
-        store.clearStuck(event.sessionId, successTarget.signature);
-        const baseTrace = traceFor(event, `result=${event.resultText}`);
-        if (failure && !isSelfEpisode(`${failure.trace} ${baseTrace}`, selfMarkers())) {
-            // The action diff travels with the success trace: keyword extraction
-            // picks the repaired files out of it, and the LLM prompt gets the
-            // repair shape as context.
-            const successTrace = failure.repair_path.length > 0
-                ? `${baseTrace}\nrepair actions: ${failure.repair_path.join(' | ')}`
-                : baseTrace;
-            const origin = failure.human_hint.trim()
-                ? 'user_correction'
-                : hypothesized
-                    ? 'self_healing_experiment'
-                    : '';
-            store.enqueueJob(event.toolName, failure.trace, successTrace, failure.injected_ids, failure.human_hint, failure.repair_path, origin);
-        }
+        const outcome = event.ok ? `result=${event.resultText}` : `error=${event.errorText}`;
+        runtime.postToolUse({
+            sessionId: event.sessionId,
+            toolName: event.toolName,
+            toolInput: event.toolInput,
+            failed: !event.ok,
+            sandboxDenied: event.sandboxDenied,
+            trace: traceFor(event, outcome),
+            workspace: process.cwd(),
+            selfMarkers: selfMarkers(),
+        });
         return downstream;
     });
-    // Distillation runs at turn end, not inside the tool pipeline: `drain` may do
-    // an HTTP call to the configured LLM (up to its budget), and a post-execute
-    // listener is awaited *inside* the tool result path, so draining there would
-    // stall every successful-after-failure tool call. `turn-stopping` is serial
-    // and awaited before the boundary commits — the right place for turn-end work.
     ctx.on(DSH_EVENTS.turnStopping, async () => {
-        if (store.pendingJobCount() > 0)
-            await drain(store);
-        // Opt-in (IMMUNE_SYNC_DOC): the same boundary keeps the agent docs fresh.
-        maybeSyncDocAfterDrain(store);
-        // ROADMAP 2.4b: quiet consolidation scan under its 12h cooldown.
-        maybeSleepConsolidate(store);
+        await runtime.drain({
+            budgetMs: drainBudgetMs(),
+            selfMarkers: selfMarkers(),
+            runPostDrainHooks: true,
+        });
     });
     ctx.effect(() => () => {
         store.close();
     }, `${PLUGIN_NAME}: close antibody store`);
+    registerCommands(ctx, store);
+}
+function registerCommands(ctx, store) {
     ctx.commands.register({
         name: 'immune',
         description: 'List the pitfall antibodies this project has learned',
-        input: { hint: '--all to include retired antibodies · --budget [ms] to view or set the drain budget' },
+        input: { hint: '--all · --budget [ms] · --hygiene · --triage' },
         handler: ({ rawInput }) => {
             const args = rawInput.trim().split(/\s+/).filter(Boolean);
+            if (args.includes('--hygiene')) {
+                const report = store.repairHygiene({ dryRun: !args.includes('--apply') });
+                return {
+                    kind: 'success',
+                    text: `hygiene (${report.dryRun ? 'dry-run' : 'applied'}): scanned ${report.scanned} · ` +
+                        `active ${report.activeBefore} -> ${report.activeAfter} · ` +
+                        `quarantined ${report.quarantined} · scoped ${report.scoped} · restored ${report.restored}`,
+                };
+            }
+            if (args.includes('--triage')) {
+                const tri = store.triageSummary();
+                return {
+                    kind: 'success',
+                    text: `red-3 triage: ${tri.totalEvents} event(s) · quarantined ${tri.quarantinedCount} · probation ${tri.probationCount}\n` +
+                        Object.entries(tri.byBucket)
+                            .map(([k, v]) => `  ${k}: ${v}`)
+                            .join('\n'),
+                };
+            }
             if (args.includes('--budget')) {
                 const raw = args[args.indexOf('--budget') + 1];
                 if (raw === 'auto' || raw === 'reset' || raw === 'env') {
@@ -557,11 +306,10 @@ function startPlugin(ctx) {
                 };
             }
             const rows = store.listAll(args.includes('--all'));
-            // The third UI surface stays one design with the tab and the dashboard:
-            // the value counter and the storage footprint travel with the footer.
             const s = store.stats();
             const size = s.dbBytes == null ? '?' : `${Math.max(1, Math.round(s.dbBytes / 1024))} KiB`;
-            const footer = `\n\n— distill budget ${drainBudgetMs()} ms · queued ${store.pendingJobCount()} · blocked ${s.suppressedRepeats} · ${size} · web tab ${describeWebTab(ctx)} · db ${store.dbPath}`;
+            const footer = `\n\n— distill budget ${drainBudgetMs()} ms · queued ${store.pendingJobCount()} · blocked ${s.suppressedRepeats}` +
+                ` · quarantined ${s.quarantined} · ${size} · web tab ${describeWebTab(ctx)} · db ${store.dbPath}`;
             if (rows.length === 0)
                 return { kind: 'success', text: t.noAntibodies + footer };
             const text = rows
@@ -569,7 +317,7 @@ function startPlugin(ctx) {
                 const repair = Array.isArray(a.repair_path) && a.repair_path.length > 0
                     ? `\n  ${t.repairedBy}${a.repair_path.join(' | ')}`
                     : '';
-                return `#${a.id} [hits ${a.hit_count}/fails ${a.fail_count}] ${a.status}\n  ${t.trigger}: ${a.trigger_pattern}\n  ${t.avoid}: ${a.symptom}\n  ${t.do}: ${a.prescription}${repair}`;
+                return `#${a.id} [hits ${a.hit_count}/fails ${a.fail_count}] ${a.status} (${a.quality_grade ?? 'advice'} · ${a.rubric_score ?? 70}/100)\n  ${t.trigger}: ${a.trigger_pattern}\n  ${t.avoid}: ${a.symptom}\n  ${t.do}: ${a.prescription}${repair}`;
             })
                 .join('\n\n');
             return { kind: 'success', text: text + footer };
@@ -583,10 +331,7 @@ function startPlugin(ctx) {
             const args = rawInput.trim().split(/\s+/).filter(Boolean);
             if (args.includes('--last')) {
                 const id = store.forgetLast();
-                return {
-                    kind: 'success',
-                    text: id === null ? t.notFound : `${t.forgot} #${id}`,
-                };
+                return { kind: 'success', text: id === null ? t.notFound : `${t.forgot} #${id}` };
             }
             if (args.includes('--prune') || args.includes('--purge')) {
                 const purge = args.includes('--purge');
@@ -612,13 +357,10 @@ function startPlugin(ctx) {
     });
     ctx.commands.register({
         name: 'immune-learn',
-        description: 'Teach a rule directly: <trigger> | [symptom] | <prescription>  (| separated; without |, trigger = first token and prescription = the rest)',
+        description: 'Teach a rule directly: <trigger> | [symptom] | <prescription>',
         input: { hint: '<trigger> | [symptom] | <prescription>' },
         handler: ({ rawInput }) => {
             const text = rawInput.trim();
-            // Free text cannot be split by whitespace: "用 pnpm 不是 npm" would put
-            // "npm" in the prescription slot. Pipe-separated when given; the
-            // separator-free form keeps trigger = first token, prescription = the rest.
             const hasPipes = text.includes('|');
             const segments = hasPipes
                 ? text.split('|').map((part) => part.trim())
@@ -643,6 +385,7 @@ function startPlugin(ctx) {
                 symptom: symptom || '(manual rule)',
                 prescription,
                 tool_name: null,
+                prescription_source: 'human',
             });
             return { kind: 'success', text: id === null ? t.notFound : `${t.learned} #${id}` };
         },
@@ -663,7 +406,6 @@ function startPlugin(ctx) {
         },
     });
 }
-/** The most recent human prompt in a claimed batch, if any. */
 function lastHumanPrompt(messages) {
     for (let i = messages.length - 1; i >= 0; i -= 1) {
         const message = messages[i];

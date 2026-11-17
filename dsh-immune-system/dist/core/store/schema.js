@@ -1,33 +1,36 @@
 /**
- * Schema for the immune database, as individual statements.
+ * Schema for the immune database (v2), as individual statements.
  *
- * Statements are kept separate (rather than one multi-statement blob) so each
- * runs through `prepare().run()`; that keeps DDL portable and lets a failure
- * name the exact statement that broke.
+ * Statements run one at a time through `prepare().run()` so DDL stays portable
+ * and a broken statement names itself cleanly.
  *
- * FTS5 uses the `trigram` tokenizer: antibody text is mixed Chinese and
- * English, and trigram supports CJK substring matching where `unicode61` would
- * treat a whole Chinese sentence as a single token.
+ * FTS5 uses the `trigram` tokenizer for mixed Chinese + English substring recall.
  */
 export const SCHEMA_STATEMENTS = [
     `CREATE TABLE IF NOT EXISTS antibodies (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    trigger_pattern TEXT    NOT NULL,
-    symptom         TEXT    NOT NULL,
-    prescription    TEXT    NOT NULL,
-    hit_count       INTEGER NOT NULL DEFAULT 0,
-    fail_count      INTEGER NOT NULL DEFAULT 0,
-    status          TEXT    NOT NULL DEFAULT 'active',
-    tool_name       TEXT,
-    created_at      INTEGER NOT NULL,
-    updated_at      INTEGER NOT NULL,
-    prescription_source TEXT NOT NULL DEFAULT '',
-    origin          TEXT    NOT NULL DEFAULT '',
-    parent_id       INTEGER,
-    mutated_at      INTEGER NOT NULL DEFAULT 0,
-    env_fingerprint TEXT    NOT NULL DEFAULT '',
-    probation_at    INTEGER NOT NULL DEFAULT 0,
-    retire_reason   TEXT    NOT NULL DEFAULT ''
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    trigger_pattern     TEXT    NOT NULL,
+    symptom             TEXT    NOT NULL,
+    prescription        TEXT    NOT NULL,
+    hit_count           INTEGER NOT NULL DEFAULT 0,
+    fail_count          INTEGER NOT NULL DEFAULT 0,
+    status              TEXT    NOT NULL DEFAULT 'active',
+    tool_name           TEXT,
+    created_at          INTEGER NOT NULL,
+    updated_at          INTEGER NOT NULL,
+    prescription_source TEXT    NOT NULL DEFAULT '',
+    origin              TEXT    NOT NULL DEFAULT '',
+    parent_id           INTEGER,
+    mutated_at          INTEGER NOT NULL DEFAULT 0,
+    env_fingerprint     TEXT    NOT NULL DEFAULT '',
+    probation_at        INTEGER NOT NULL DEFAULT 0,
+    retire_reason       TEXT    NOT NULL DEFAULT '',
+    project_scope       TEXT    NOT NULL DEFAULT '*',
+    quality_grade       TEXT    NOT NULL DEFAULT 'advice',
+    rubric_score        INTEGER NOT NULL DEFAULT 70,
+    root_cause          TEXT    NOT NULL DEFAULT '',
+    triage_bucket       TEXT    NOT NULL DEFAULT '',
+    ignored_count       INTEGER NOT NULL DEFAULT 0
   )`,
     `CREATE VIRTUAL TABLE IF NOT EXISTS antibodies_fts USING fts5(
     trigger_pattern,
@@ -52,18 +55,15 @@ export const SCHEMA_STATEMENTS = [
     VALUES (new.id, new.trigger_pattern, new.symptom, new.prescription);
   END`,
     `CREATE TABLE IF NOT EXISTS pending_failures (
-    session_id   TEXT    NOT NULL,
-    tool_name    TEXT    NOT NULL,
-    trace        TEXT    NOT NULL,
-    injected_ids TEXT    NOT NULL DEFAULT '[]',
-    human_hint   TEXT    NOT NULL DEFAULT '',
-    target_signature TEXT NOT NULL DEFAULT '',
-    created_at   INTEGER NOT NULL,
+    session_id       TEXT    NOT NULL,
+    tool_name        TEXT    NOT NULL,
+    trace            TEXT    NOT NULL,
+    injected_ids     TEXT    NOT NULL DEFAULT '[]',
+    human_hint       TEXT    NOT NULL DEFAULT '',
+    target_signature TEXT    NOT NULL DEFAULT '',
+    created_at       INTEGER NOT NULL,
     PRIMARY KEY (session_id, tool_name)
   )`,
-    // ROADMAP 1.5: consecutive same-target failure streaks and whether the
-    // diagnostic hypothesis was already delivered for one. Rows age out with the
-    // pending TTL (pruneStale), so the state cannot outlive its episode.
     `CREATE TABLE IF NOT EXISTS stuck_state (
     session_id      TEXT    NOT NULL,
     signature       TEXT    NOT NULL,
@@ -73,10 +73,6 @@ export const SCHEMA_STATEMENTS = [
     updated_at      INTEGER NOT NULL,
     PRIMARY KEY (session_id, signature)
   )`,
-    // ROADMAP 2.3b: convergent-detour telemetry — a session that probed the
-    // same target 4+ times read-only before the successful command landed.
-    // Review candidates only: the LLM rewrite path (`immune rewrite`) is the
-    // only place a shortcut RULE may be minted (AGENTS.md #28).
     `CREATE TABLE IF NOT EXISTS detours (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id  TEXT    NOT NULL,
@@ -84,8 +80,6 @@ export const SCHEMA_STATEMENTS = [
     probes      INTEGER NOT NULL,
     created_at  INTEGER NOT NULL
   )`,
-    // Repeat suppression: what was injected last turn in this session, and how
-    // many turns have passed without it changing.
     `CREATE TABLE IF NOT EXISTS session_turns (
     session_id TEXT    PRIMARY KEY,
     signature  TEXT    NOT NULL DEFAULT '',
@@ -99,6 +93,7 @@ export const SCHEMA_STATEMENTS = [
     created_at    INTEGER NOT NULL
   )`,
     `CREATE INDEX IF NOT EXISTS idx_antibodies_status ON antibodies(status, hit_count DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_antibodies_scope ON antibodies(status, project_scope, hit_count DESC)`,
     `CREATE TABLE IF NOT EXISTS distill_jobs (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     tool_name     TEXT    NOT NULL,
@@ -109,28 +104,22 @@ export const SCHEMA_STATEMENTS = [
     origin        TEXT    NOT NULL DEFAULT '',
     status        TEXT    NOT NULL DEFAULT 'pending',
     note          TEXT    NOT NULL DEFAULT '',
+    repair_path   TEXT    NOT NULL DEFAULT '[]',
+    project_scope TEXT    NOT NULL DEFAULT '*',
+    cwd           TEXT    NOT NULL DEFAULT '',
     created_at    INTEGER NOT NULL,
     updated_at    INTEGER NOT NULL
   )`,
     `CREATE INDEX IF NOT EXISTS idx_jobs_status ON distill_jobs(status, created_at)`,
-    // Generic key-value store for cross-process counters and bookkeeping (the
-    // value metric lives here). One table, parameterized accessors only.
     `CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
   )`,
-    // Action-diff buffer (borrowed from the EMG idea): non-probe write actions
-    // recorded between a failure and the retry that closes it, so the distiller
-    // sees WHAT repaired the problem, not just that the retry succeeded. One row
-    // per session, JSON array, pruned with the pending failure.
     `CREATE TABLE IF NOT EXISTS repair_actions (
     session_id TEXT PRIMARY KEY,
     actions    TEXT    NOT NULL DEFAULT '[]',
     created_at INTEGER NOT NULL
   )`,
-    // Probe-thrash streaks: consecutive same-target read-only probes. The
-    // PreToolUse hook warns once when the count reaches two (the incoming call
-    // is the third), and any non-probe call resets the streak for the session.
     `CREATE TABLE IF NOT EXISTS probe_streaks (
     session_id TEXT    NOT NULL,
     signature  TEXT    NOT NULL,
@@ -138,10 +127,6 @@ export const SCHEMA_STATEMENTS = [
     updated_at INTEGER NOT NULL,
     PRIMARY KEY (session_id, signature)
   )`,
-    // Which model was driving when a rule was delivered, and whether that
-    // delivery held. One row per (rule, model) keeps the table bounded by the
-    // library size: the question it answers is "does this lesson survive a model
-    // switch", which needs the pair, not a per-event log.
     `CREATE TABLE IF NOT EXISTS model_hits (
     rule_id    INTEGER NOT NULL,
     model      TEXT    NOT NULL,
@@ -150,22 +135,51 @@ export const SCHEMA_STATEMENTS = [
     updated_at INTEGER NOT NULL,
     PRIMARY KEY (rule_id, model)
   )`,
-    // session_id -> model cache. The host records the model on its own usage
-    // rows, not in the hook payload, so the first delivery of a session pays one
-    // read-only lookup against the host database and every later one reads here.
     `CREATE TABLE IF NOT EXISTS session_models (
     session_id  TEXT PRIMARY KEY,
     model       TEXT NOT NULL,
     resolved_at INTEGER NOT NULL
   )`,
-    // Which rules came from a builtin seed pack (`immune seed <pack>`), so
-    // `--remove` can take exactly them back out. A row is removed only when the
-    // rule's prescription still matches the pack text; rules the user has since
-    // edited or merged carry their own evidence and are kept.
     `CREATE TABLE IF NOT EXISTS seed_packs (
-    rule_id   INTEGER PRIMARY KEY,
-    pack      TEXT    NOT NULL,
-    prescription TEXT NOT NULL,
-    seeded_at INTEGER NOT NULL
+    rule_id      INTEGER PRIMARY KEY,
+    pack         TEXT    NOT NULL,
+    prescription TEXT    NOT NULL,
+    seeded_at    INTEGER NOT NULL
+  )`,
+    // V2: Verifiable delivery receipts (Beacon-inspired credit & outcome chain).
+    `CREATE TABLE IF NOT EXISTS delivery_receipts (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    rule_id       INTEGER NOT NULL,
+    session_id    TEXT    NOT NULL,
+    model         TEXT    NOT NULL,
+    project_scope TEXT    NOT NULL DEFAULT '*',
+    outcome       TEXT    NOT NULL,
+    tokens_est    INTEGER NOT NULL DEFAULT 0,
+    digest        TEXT    NOT NULL,
+    created_at    INTEGER NOT NULL
+  )`,
+    `CREATE INDEX IF NOT EXISTS idx_receipts_rule ON delivery_receipts(rule_id, created_at DESC)`,
+    // V2: Red-3 Triage audit log (daily-patrol-inspired failure bucket classification).
+    `CREATE TABLE IF NOT EXISTS triage_events (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    rule_id      INTEGER,
+    session_id   TEXT    NOT NULL DEFAULT '',
+    tool_name    TEXT    NOT NULL DEFAULT '',
+    bucket       TEXT    NOT NULL,
+    reason       TEXT    NOT NULL,
+    action_taken TEXT    NOT NULL DEFAULT '',
+    created_at   INTEGER NOT NULL
+  )`,
+    `CREATE INDEX IF NOT EXISTS idx_triage_bucket ON triage_events(bucket, created_at DESC)`,
+    // V2: Whole-disk project registry (tracks discovered workspaces and baselines).
+    `CREATE TABLE IF NOT EXISTS workspace_profiles (
+    scope_id        TEXT    PRIMARY KEY,
+    name            TEXT    NOT NULL,
+    root_path       TEXT    NOT NULL,
+    stack           TEXT    NOT NULL DEFAULT '',
+    baseline        TEXT    NOT NULL DEFAULT 'newly',
+    rules_count     INTEGER NOT NULL DEFAULT 0,
+    source          TEXT    NOT NULL DEFAULT '',
+    last_scanned_at INTEGER NOT NULL
   )`,
 ];

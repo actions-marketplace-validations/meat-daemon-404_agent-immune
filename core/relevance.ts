@@ -36,14 +36,31 @@ function cjkGrams(token: string, size = 3): string[] {
 /**
  * Meaningful lowercase tokens of a text.
  *
- * Includes CJK trigrams so "环境变量" can match inside "读不到环境变量".
+ * Extracts from BOTH the head and any `error=`/`result=` tail (so long `Edit`
+ * diffs never push the actual error code past the 32-token cap), splits
+ * hyphenated trigger slugs (`old_string-not-found` -> `old_string`, `found`),
+ * and includes CJK trigrams while filtering function stopwords.
  */
 export function signals(text: string): Set<string> {
   const out = new Set<string>();
-  for (const token of tokenize(text, 32)) {
-    const lower = token.toLowerCase();
-    if (lower.length >= 3 && !STOPWORDS.has(lower)) out.add(lower);
-    if (CJK.test(token)) for (const gram of cjkGrams(token)) out.add(gram.toLowerCase());
+  const addFrom = (slice: string, maxTokens: number) => {
+    for (const token of tokenize(slice, maxTokens)) {
+      const lower = token.toLowerCase();
+      if (lower.length >= 3 && !STOPWORDS.has(lower)) out.add(lower);
+      if (lower.includes('-')) {
+        for (const sub of lower.split('-')) {
+          if (sub.length >= 3 && !STOPWORDS.has(sub)) out.add(sub);
+        }
+      }
+      if (CJK.test(token)) for (const gram of cjkGrams(token)) out.add(gram.toLowerCase());
+    }
+  };
+  addFrom(text, 24);
+  const tailMatch = /(?:error=|result=|\[exit code:|\bexit code\b)/i.exec(text);
+  if (tailMatch && tailMatch.index > 0) {
+    addFrom(text.slice(tailMatch.index, tailMatch.index + 600), 24);
+  } else if (text.length > 400) {
+    addFrom(text.slice(-400), 18);
   }
   return out;
 }

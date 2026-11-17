@@ -51,6 +51,18 @@ const QUESTIONS = [
   ['modern-web', 'subgrid :has()', '卡片列表网格对齐还得写死高度或监听子状态吗'],
   ['modern-web', 'inp main thread', '页面滚动输入卡顿、INP 交互延迟很高怎么优化'],
   ['modern-web', 'structuredClone', '深拷贝不想用 JSON.parse 且请求要加 AbortSignal 超时'],
+  // dsh-ecosystem
+  ['dsh-ecosystem', 'dsh client-modules web tab', '插件写了 client.js 但设置页面看不到或请求 404'],
+  ['dsh-ecosystem', 'dsh cordis inject commands', 'Cordis 插件访问 ctx.commands 报 cannot get property without inject'],
+  ['dsh-ecosystem', 'dsh settings tab shadow root', '设置弹窗里插件表格行高塌陷、样式被宿主 CSS 冲掉'],
+  ['dsh-ecosystem', 'dsh tools/post-execute bash', 'bash 返回非零退出码但结果里 isError 为 false 漏检失败'],
+  ['dsh-ecosystem', 'dsh npm 打包 doubled prefix', 'npm 包内嵌子目录前缀后验证探针找不到 dist 路径'],
+  // patrol-triage
+  ['patrol-triage', '每日巡查 triage flake', '单次测试抖动超时就误修改正常代码怎么办'],
+  ['patrol-triage', 'sqlite WAL cp backup', '直接 cp 复制 SQLite 主库后打开备份里面一条记录都没有'],
+  ['patrol-triage', 'npm publish prepare', '工作区还有别人在改的半成品，直接 npm publish 把坏文件发上去了'],
+  ['patrol-triage', 'LLM stub 评分', '离线桩总返回固定高分掩盖评分逻辑坏掉怎么校准'],
+  ['patrol-triage', '跨项目 污染 project_scope', '包含特定机器绝对路径的规则串联污染别的仓库记忆'],
 ];
 
 /** Unrelated prompts — gram-clean enough that no seed rule should surface. */

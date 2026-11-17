@@ -2,22 +2,19 @@ import type { DatabaseSync } from 'node:sqlite';
 import { redact } from '../redact.js';
 import { looksEchoPrescription } from '../rewrite.js';
 import type { Antibody, AntibodyStatus, NewAntibody } from '../types.js';
-import { buildFtsQuery, cjkBigrams } from './tokenize.js';
+import { buildFtsQuery, cjkBigrams, tokenize } from './tokenize.js';
 import { isRelated } from '../relevance.js';
 import { prescriptionSimilarity } from '../similarity.js';
-import { tokenize } from './tokenize.js';
+import { expandConceptQuery } from '../retrieval.js';
+import { classifyRuleQuality } from '../hygiene.js';
+import { inferRootCause } from '../rubric.js';
+import { recordTriageEvent, triagePostInjectionFailure } from '../triage.js';
 
 /** An antibody is retired after this many injected-but-still-failed episodes. */
 export const RETIRE_AFTER_FAILURES = 3;
 
 /**
  * …and only if that many failures is a real share of its deliveries.
- *
- * The count alone retired the best rules in production: #44 was injected 516
- * times and blamed 3 times (0.6%) and still lost its place, which is why 276
- * recent failures matched "known but not injected" rules. Three failures out of
- * five hundred is a rule working, not a rule rotting. A quarter of deliveries
- * is the bar; the junk rules that motivated anti-rot sat at 50%.
  */
 export const RETIRE_FAILURE_RATE = 0.25;
 
@@ -44,42 +41,38 @@ function escapeLike(token: string): string {
   return token.replace(/[\\%_]/g, '\\$&');
 }
 
-/**
- * Candidate rules that might be the same lesson in different words: the exact
- * trigger, plus any active rule whose trigger shares a token with the incoming
- * one. The old exact-equality net missed every paraphrase ("npm 装依赖" vs
- * "npm peer dependency ERESOLVE"), splitting one lesson into two rows.
- */
 function findMergeCandidates(
   db: DatabaseSync,
   trigger: string,
-): Array<{ id: number; trigger_pattern: string; prescription: string; symptom: string }> {
+  projectScope: string,
+): Array<{ id: number; trigger_pattern: string; prescription: string; symptom: string; project_scope: string }> {
   const tokens = tokenize(trigger, 8);
   const clauses = ['trigger_pattern = ?'];
   const params: Array<string> = [trigger];
   for (const token of tokens) {
-    clauses.push('trigger_pattern LIKE ? ESCAPE \'\\\'');
+    clauses.push("trigger_pattern LIKE ? ESCAPE '\\'");
     params.push(`%${escapeLike(token)}%`);
   }
   return db
     .prepare(
-      `SELECT id, trigger_pattern, prescription, symptom FROM antibodies
-        WHERE status = 'active' AND (${clauses.join(' OR ')})
+      `SELECT id, trigger_pattern, prescription, symptom, project_scope FROM antibodies
+        WHERE status = 'active'
+          AND project_scope = ?
+          AND (${clauses.join(' OR ')})
         LIMIT 25`,
     )
-    .all(...params) as Array<{
+    .all(projectScope, ...params) as Array<{
     id: number;
     trigger_pattern: string;
     prescription: string;
     symptom: string;
+    project_scope: string;
   }>;
 }
 
 /**
  * Union the incoming trigger into the stored one, keeping every recall path
- * the rule has earned. Returns null unless the merge adds tokens AND the two
- * triggers already share at least one token (so unrelated text cannot fuse),
- * and the result still fits the 200-character cap.
+ * the rule has earned.
  */
 export function mergeTriggers(existing: string, incoming: string): string | null {
   const oldTokens = existing.split(/\s+/).filter(Boolean);
@@ -102,17 +95,6 @@ export function mergeTriggers(existing: string, incoming: string): string | null
   return merged;
 }
 
-/**
- * Insert a new antibody, merging near-duplicates.
- *
- * Exact prescription equality is the cheap first check. Beyond that, a rule
- * whose prescription is ≥70% similar (character 3-gram Jaccard) to an existing
- * active rule with an overlapping trigger is the same lesson in different
- * words: inserting it would give the library two rows that say the same thing
- * and halve the observed hit count of each. On every merge the incoming
- * trigger's tokens are unioned into the stored trigger, so each paraphrase
- * widens the rule's recall surface instead of being thrown away.
- */
 /** Parse the stored JSON action-diff into an array; tolerate legacy rows. */
 function parseRepairPath(value: unknown): string[] {
   if (Array.isArray(value)) return value.filter((v): v is string => typeof v === 'string');
@@ -139,14 +121,6 @@ export function getAntibodyById(db: DatabaseSync, id: number): Antibody | null {
 
 /**
  * ROADMAP 2.2 — mutate an injected-but-still-failed rule into a refined child.
- *
- * The trigger is refined with the NEW episode's evidence tokens (mergeTriggers
- * keeps the old recall keys and appends the observed ones); the prescription is
- * NOT rewritten — that stays model-only (AGENTS.md #28). The parent is retired
- * (it was injected and still failed — the anti-rot verdict), recoverable via
- * `immune list --all`. Repair evidence is REQUIRED: a failure-only episode
- * cannot mutate either (AGENTS.md #24 — the flow that minted junk from the
- * literal retirement text).
  */
 export function mutateRule(
   db: DatabaseSync,
@@ -165,8 +139,9 @@ export function mutateRule(
   const info = db
     .prepare(
       `INSERT INTO antibodies
-         (trigger_pattern, symptom, prescription, tool_name, repair_path, origin, parent_id, mutated_at, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (trigger_pattern, symptom, prescription, tool_name, repair_path, origin, parent_id, mutated_at,
+          project_scope, quality_grade, rubric_score, root_cause, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       refined,
@@ -177,6 +152,10 @@ export function mutateRule(
       parent.origin ?? '',
       parentId,
       now,
+      parent.project_scope ?? '*',
+      parent.quality_grade ?? 'advice',
+      parent.rubric_score ?? 70,
+      parent.root_cause ?? '',
       now,
       now,
     );
@@ -199,48 +178,79 @@ export function insertAntibody(
   ab: NewAntibody,
   options: InsertOptions = {},
 ): number | null {
-  // Defensive caps and capture-time redaction: manual, imported, or LLM-authored
-  // rules must never store unredacted credentials either.
   const trigger = redact(ab.trigger_pattern).trim().slice(0, 200);
   const symptom = redact(ab.symptom).trim().slice(0, 160);
   const prescription = redact(ab.prescription).trim().slice(0, 200);
   if (!trigger || !prescription) return null;
 
+  const incomingScope = ab.project_scope?.trim() || '*';
+  const verdict = classifyRuleQuality({
+    trigger_pattern: trigger,
+    symptom,
+    prescription,
+    tool_name: ab.tool_name ?? null,
+    repair_path: ab.repair_path,
+    prescription_source: ab.prescription_source ?? (options.fromLlm ? 'llm' : options.humanHint ? 'human' : ''),
+    origin: ab.origin,
+  });
+  const qualityGrade = ab.quality_grade ?? verdict.grade;
+  const rubricScore = ab.rubric_score ?? verdict.score;
+  const rootCause = ab.root_cause || inferRootCause(symptom, prescription, ab.repair_path);
+  // Universal advice upgrades scope to '*'; project tactics stay locked to incomingScope.
+  const effectiveScope = verdict.universalEligible && incomingScope === '*' ? '*' : incomingScope;
+  // Direct store.insert() calls preserve active status unless the caller (e.g.
+  // distiller / hygiene repair) explicitly passes status = 'quarantined', so
+  // rewriteEchoes / hostRewriteCandidates / share-gate tests stay observable.
+  const initialStatus: AntibodyStatus = ab.status ?? 'active';
+  const retireReason = initialStatus === 'quarantined' ? (verdict.quarantineReason ?? 'hygiene_quarantined') : '';
+
   const now = Date.now();
 
-  // 1. Exact prescription match.
+  // 1. Exact prescription match within compatible scope.
   const exact = db
-    .prepare('SELECT id, trigger_pattern FROM antibodies WHERE prescription = ? LIMIT 1')
-    .get(prescription) as { id: number; trigger_pattern: string } | undefined;
+    .prepare(
+      `SELECT id, trigger_pattern, project_scope FROM antibodies
+        WHERE prescription = ? AND (project_scope = '*' OR project_scope = ?)
+        LIMIT 1`,
+    )
+    .get(prescription, effectiveScope) as
+    | { id: number; trigger_pattern: string; project_scope: string }
+    | undefined;
   if (exact) {
     const merged = mergeTriggers(exact.trigger_pattern, trigger);
+    const nextScope = exact.project_scope === '*' || effectiveScope === '*' ? '*' : exact.project_scope;
     if (merged) {
       db.prepare(
-        'UPDATE antibodies SET trigger_pattern = ?, hit_count = hit_count + 1, updated_at = ? WHERE id = ?',
-      ).run(merged, now, exact.id);
-      return exact.id;
+        'UPDATE antibodies SET trigger_pattern = ?, project_scope = ?, hit_count = hit_count + 1, updated_at = ? WHERE id = ?',
+      ).run(merged, nextScope, now, exact.id);
     } else {
       db.prepare(
-        'UPDATE antibodies SET hit_count = hit_count + 1, updated_at = ? WHERE id = ?',
-      ).run(now, exact.id);
-      return exact.id;
+        'UPDATE antibodies SET project_scope = ?, hit_count = hit_count + 1, updated_at = ? WHERE id = ?',
+      ).run(nextScope, now, exact.id);
     }
-  } else {
-    // 2. Near-duplicate: overlapping trigger, similar prescription.
-    const candidates = findMergeCandidates(db, trigger);
+    return exact.id;
+  }
 
+  // 2. Near-duplicate: overlapping trigger, similar prescription.
+  if (initialStatus === 'active') {
+    const candidates = findMergeCandidates(db, trigger, effectiveScope);
     for (const candidate of candidates) {
       if (prescriptionSimilarity(candidate.prescription, prescription) < MERGE_THRESHOLD) continue;
-
       if (options.humanHint || options.fromLlm) {
-        // A human correction or a model rewrite outranks the stored wording.
         const mergedTrigger = mergeTriggers(candidate.trigger_pattern, trigger);
         db.prepare(
-          'UPDATE antibodies SET prescription = ?, symptom = ?, trigger_pattern = ?, hit_count = hit_count + 1, updated_at = ? WHERE id = ?',
+          `UPDATE antibodies
+              SET prescription = ?, symptom = ?, trigger_pattern = ?,
+                  quality_grade = ?, rubric_score = ?, root_cause = ?,
+                  hit_count = hit_count + 1, updated_at = ?
+            WHERE id = ?`,
         ).run(
           prescription,
           symptom || candidate.symptom,
           mergedTrigger ?? candidate.trigger_pattern,
+          qualityGrade,
+          rubricScore,
+          rootCause,
           now,
           candidate.id,
         );
@@ -256,24 +266,31 @@ export function insertAntibody(
 
   const info = db
     .prepare(
-      `INSERT INTO antibodies (trigger_pattern, symptom, prescription, tool_name, repair_path, origin, env_fingerprint, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO antibodies
+         (trigger_pattern, symptom, prescription, status, tool_name, repair_path,
+          prescription_source, origin, env_fingerprint, project_scope, quality_grade,
+          rubric_score, root_cause, retire_reason, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       trigger,
       symptom,
       prescription,
+      initialStatus,
       ab.tool_name ?? null,
       toRepairJson(ab.repair_path),
+      ab.prescription_source ?? (options.fromLlm ? 'llm' : options.humanHint ? 'human' : ''),
       ab.origin ?? '',
       ab.env_fingerprint ?? '',
+      effectiveScope,
+      qualityGrade,
+      rubricScore,
+      rootCause,
+      retireReason,
       now,
       now,
     );
   const newId = Number(info.lastInsertRowid);
-  // ROADMAP 3.1: the new environment just re-learned this lesson on its own —
-  // a same-lesson probation rule is superseded_by_env_upgrade. Exact lesson
-  // key (tool + symptom), the consolidation standard, nothing fuzzier.
   if (ab.env_fingerprint) {
     db.prepare(
       `UPDATE antibodies
@@ -288,21 +305,21 @@ export function insertAntibody(
 }
 
 /**
- * Rank active antibodies against free text.
- *
- * Two retrievers, merged:
- *   1. FTS5 trigram MATCH for terms of 3+ characters (ranked by bm25);
- *   2. a bound-parameter LIKE pass for 2-character CJK words, which trigram
- *      cannot index at all — without it "跨域" / "端口" / "权限" never match.
- *
- * Like-query values are bound, never interpolated, and only the number of
- * placeholders is generated (that count is derived from a bounded token list).
+ * Rank active antibodies against free text, scoped by workspace and expanded
+ * via the bilingual developer concept graph.
  */
-export function findMatches(db: DatabaseSync, text: string, limit: number): Antibody[] {
+export function findMatches(
+  db: DatabaseSync,
+  text: string,
+  limit: number,
+  projectScope = '*',
+): Antibody[] {
+  const expanded = expandConceptQuery(text);
   const rows: Antibody[] = [];
   const seen = new Set<number>();
+  const scopeFilter = "(a.project_scope = '*' OR a.project_scope = ? OR ? = '*')";
 
-  const ftsQuery = buildFtsQuery(text);
+  const ftsQuery = buildFtsQuery(expanded);
   if (ftsQuery) {
     try {
       const raw = db
@@ -311,10 +328,11 @@ export function findMatches(db: DatabaseSync, text: string, limit: number): Anti
              JOIN antibodies_fts f ON a.id = f.rowid
             WHERE antibodies_fts MATCH ?
               AND a.status = 'active'
+              AND ${scopeFilter}
             ORDER BY bm25(antibodies_fts)
             LIMIT ?`,
         )
-        .all(ftsQuery, limit) as unknown as Array<Record<string, unknown>>;
+        .all(ftsQuery, projectScope, projectScope, limit) as unknown as Array<Record<string, unknown>>;
       const hits = raw.map(rowToAntibody);
       for (const row of hits) {
         rows.push(row);
@@ -327,7 +345,7 @@ export function findMatches(db: DatabaseSync, text: string, limit: number): Anti
 
   if (rows.length >= limit) return rows.slice(0, limit);
 
-  const bigrams = cjkBigrams(text);
+  const bigrams = cjkBigrams(expanded);
   if (bigrams.length === 0) return rows;
 
   try {
@@ -341,23 +359,16 @@ export function findMatches(db: DatabaseSync, text: string, limit: number): Anti
 
     const rawCandidates = db
       .prepare(
-        `SELECT * FROM antibodies
-          WHERE status = 'active' AND (${where})
-          ORDER BY hit_count DESC, created_at DESC
+        `SELECT * FROM antibodies a
+          WHERE a.status = 'active'
+            AND ${scopeFilter}
+            AND (${where})
+          ORDER BY a.hit_count DESC, a.created_at DESC
           LIMIT 24`,
       )
-      .all(...params) as unknown as Array<Record<string, unknown>>;
+      .all(projectScope, projectScope, ...params) as unknown as Array<Record<string, unknown>>;
     const candidates = rawCandidates.map(rowToAntibody);
 
-    // Rank the LIKE hits by how many distinct words they contain, so an
-    // antibody matching two concepts outranks one that merely shares a word.
-    //
-    // NOTE: a "minimum 2 windows" gate was tried here and removed. It cannot
-    // distinguish a legitimate recall ("怎么解决跨域" shares only 跨域 with the
-    // rule) from a spurious one ("改一下这个文件" shares only 文件): both are one
-    // window out of ~5, and length or ratio thresholds differ by one character.
-    // Costing ~100 advisory characters on an occasional weak match is cheaper
-    // than silently dropping a real one.
     const scored = candidates
       .filter((row) => !seen.has(row.id))
       .map((row) => {
@@ -393,13 +404,11 @@ export function listAntibodies(db: DatabaseSync, includeRetired = true): Antibod
 }
 
 export function removeAntibody(db: DatabaseSync, id: number): boolean {
-  // Attribution is keyed by rule id. Leaving it behind makes the per-model
-  // totals count deliveries of a rule that no longer exists, and the numbers
-  // only ever drift upward. Delete both in one transaction.
   let removed = false;
   db.exec('BEGIN');
   try {
     db.prepare('DELETE FROM model_hits WHERE rule_id = ?').run(id);
+    db.prepare('DELETE FROM delivery_receipts WHERE rule_id = ?').run(id);
     removed = Number(db.prepare('DELETE FROM antibodies WHERE id = ?').run(id).changes) > 0;
     db.exec('COMMIT');
   } catch (error) {
@@ -416,25 +425,17 @@ export function setAntibodyStatus(db: DatabaseSync, id: number, status: Antibody
   return Number(info.changes) > 0;
 }
 
-/**
- * Context used to decide whether a failure is plausibly this antibody's fault.
- * Without it every injected antibody is blamed for every later failure.
- */
 export interface PenaltyContext {
   failureText: string;
   toolName: string;
-  /** Needed for model attribution: which model was driving this delivery. */
   sessionId?: string;
+  projectScope?: string;
 }
 
 /**
- * Anti-rot: an injected antibody that did not prevent the failure loses credit.
- * At RETIRE_AFTER_FAILURES it is retired so it stops being injected.
- *
- * With `ctx`, only antibodies whose trigger actually relates to the failure are
- * penalised — an unrelated failing command must not retire a good rule.
- * Returns the retired antibodies plus the ids that were actually penalised:
- * attribution has to credit exactly those, not every id that was in context.
+ * Red-3 Triaged Anti-Rot: classifies post-injection failure before penalizing
+ * or retiring a rule, preventing flake/scope-leak/ignored invariants from killing
+ * healthy rules.
  */
 export function penalizeAntibodies(
   db: DatabaseSync,
@@ -445,21 +446,78 @@ export function penalizeAntibodies(
   const retired: Antibody[] = [];
   const penalized: number[] = [];
   const now = Date.now();
-  const bump = db.prepare(
-    'UPDATE antibodies SET fail_count = fail_count + 1, updated_at = ? WHERE id = ?',
+  const bumpFail = db.prepare(
+    'UPDATE antibodies SET fail_count = fail_count + 1, triage_bucket = ?, updated_at = ? WHERE id = ?',
+  );
+  const bumpIgnored = db.prepare(
+    'UPDATE antibodies SET ignored_count = ignored_count + 1, triage_bucket = ?, updated_at = ? WHERE id = ?',
   );
 
   for (const id of ids) {
-    const before = db.prepare('SELECT * FROM antibodies WHERE id = ?').get(id) as
-      | Antibody
+    const rawBefore = db.prepare('SELECT * FROM antibodies WHERE id = ?').get(id) as
+      | Record<string, unknown>
       | undefined;
-    if (!before || before.status !== 'active') continue;
+    if (!rawBefore || rawBefore.status !== 'active') continue;
+    const before = rowToAntibody(rawBefore);
     if (ctx && !isRelated(before.trigger_pattern, ctx.failureText, ctx.toolName)) continue;
 
-    bump.run(now, id);
+    if (ctx) {
+      const verdict = triagePostInjectionFailure(
+        before,
+        ctx.failureText,
+        ctx.toolName,
+        ctx.projectScope ?? '*',
+      );
+      if (verdict.bucket === 'flake_or_transient') {
+        recordTriageEvent(db, {
+          ruleId: id,
+          sessionId: ctx.sessionId,
+          toolName: ctx.toolName,
+          bucket: verdict.bucket,
+          reason: verdict.reason,
+          actionTaken: 'skipped_penalty',
+        });
+        continue;
+      }
+      if (verdict.shouldQuarantine) {
+        db.prepare(
+          "UPDATE antibodies SET status = 'quarantined', triage_bucket = ?, retire_reason = ?, updated_at = ? WHERE id = ?",
+        ).run(verdict.bucket, verdict.reason.slice(0, 120), now, id);
+        recordTriageEvent(db, {
+          ruleId: id,
+          sessionId: ctx.sessionId,
+          toolName: ctx.toolName,
+          bucket: verdict.bucket,
+          reason: verdict.reason,
+          actionTaken: 'quarantined_scope_leak',
+        });
+        continue;
+      }
+      if (verdict.bucket === 'ignored_by_agent') {
+        bumpIgnored.run(verdict.bucket, now, id);
+        recordTriageEvent(db, {
+          ruleId: id,
+          sessionId: ctx.sessionId,
+          toolName: ctx.toolName,
+          bucket: verdict.bucket,
+          reason: verdict.reason,
+          actionTaken: verdict.shouldPenalize ? 'recorded_ignore_and_fail' : 'protected_generic_rule',
+        });
+        if (!verdict.shouldPenalize) continue;
+      } else {
+        recordTriageEvent(db, {
+          ruleId: id,
+          sessionId: ctx.sessionId,
+          toolName: ctx.toolName,
+          bucket: verdict.bucket,
+          reason: verdict.reason,
+          actionTaken: 'penalized',
+        });
+      }
+    }
+
+    bumpFail.run(ctx ? 'stale_or_bad_advice' : '', now, id);
     penalized.push(id);
-    // The rate guard uses the counters as they will be after this penalty: a
-    // rule is not retired for being unlucky three times in a thousand.
     if (!shouldRetire(before.hit_count, before.fail_count + 1)) continue;
     setAntibodyStatus(db, id, 'retired');
     retired.push({ ...before, status: 'retired', fail_count: before.fail_count + 1 });
@@ -476,41 +534,44 @@ export function exportableAntibodies(db: DatabaseSync, minHits: number): Antibod
         ORDER BY hit_count DESC, created_at DESC`,
     )
     .all(minHits) as unknown as Array<Record<string, unknown>>;
-  // The share quality bar (#39's line, extended to the two ship surfaces): a
-  // rule whose prescription is a raw command dump does not travel — not into
-  // the managed AGENTS.md block, not into a team SKILL.md. `immune rewrite`
-  // is how an echo graduates onto these surfaces; the evidence suffix (#40)
-  // counts as advice and keeps its eligibility.
   return raw
     .map(rowToAntibody)
     .filter((ab) => !looksEchoPrescription(ab.prescription));
 }
 
-/**
- * Replace one rule's prescription in place, keeping trigger, symptom and the
- * counters. Only `immune rewrite` calls this: the wording becomes advice while
- * the evidence that made the rule worth keeping stays intact.
- */
 export function setPrescription(
   db: DatabaseSync,
   id: number,
   prescription: string,
   source: 'rule' | 'llm' | 'human' | 'host_llm',
 ): boolean {
+  const clean = redact(prescription).trim().slice(0, 200);
+  const existing = getAntibodyById(db, id);
+  const nextGrade = existing
+    ? classifyRuleQuality({ ...existing, prescription: clean, prescription_source: source })
+    : null;
   const info = db
     .prepare(
-      `UPDATE antibodies SET prescription = ?, prescription_source = ?, updated_at = ?
+      `UPDATE antibodies
+          SET prescription = ?,
+              prescription_source = ?,
+              quality_grade = ?,
+              rubric_score = ?,
+              status = CASE WHEN status = 'quarantined' THEN 'active' ELSE status END,
+              updated_at = ?
         WHERE id = ?`,
     )
-    .run(redact(prescription).trim().slice(0, 200), source, Date.now(), id);
+    .run(
+      clean,
+      source,
+      nextGrade?.grade ?? 'advice',
+      nextGrade?.score ?? 85,
+      Date.now(),
+      id,
+    );
   return Number(info.changes) > 0;
 }
 
-/**
- * Consolidate duplicate rows into one proven rule in a single transaction.
- * The trigger union and all evidence survive; duplicates are retired so the
- * operation can be reviewed or restored from the dashboard later.
- */
 export function consolidateAntibodies(
   db: DatabaseSync,
   keepId: number,
@@ -535,8 +596,6 @@ export function consolidateAntibodies(
         `UPDATE antibodies SET status = 'retired', updated_at = ?
           WHERE id IN (${placeholders}) AND status = 'active'`,
       ).run(Date.now(), ...input.retireIds);
-      // Attribution belongs to the surviving rule; otherwise a model switch
-      // would make a consolidated lesson appear to have no history.
       const move = db.prepare(
         `INSERT INTO model_hits (rule_id, model, hits, fails, updated_at)
           SELECT ?, model, SUM(hits), SUM(fails), MAX(updated_at) FROM model_hits
@@ -546,8 +605,6 @@ export function consolidateAntibodies(
             updated_at = MAX(updated_at, excluded.updated_at)`,
       );
       move.run(keepId, ...input.retireIds);
-      // The rows were copied into the keeper above. Leaving them behind makes
-      // one delivery count twice in every per-model total.
       db.prepare(`DELETE FROM model_hits WHERE rule_id IN (${placeholders})`).run(
         ...input.retireIds,
       );
@@ -559,21 +616,13 @@ export function consolidateAntibodies(
   }
 }
 
-/** Id of the newest still-active antibody, or null when there is none. */
-export function newestActiveId(db: DatabaseSync): number | null {  const row = db
+export function newestActiveId(db: DatabaseSync): number | null {
+  const row = db
     .prepare("SELECT id FROM antibodies WHERE status = 'active' ORDER BY id DESC LIMIT 1")
     .get() as { id: number } | undefined;
   return row?.id ?? null;
 }
 
-/**
- * Retire "zombie" antibodies instead of deleting them.
- *
- * Preferred over deletion: zero hits does not prove a rule is worthless, only
- * that its trigger has not come up yet. Retirement stops it being injected —
- * the actual goal — while keeping the text recoverable if it turns out to
- * matter. Physical removal is available separately, deliberately.
- */
 export function retireZombieAntibodies(db: DatabaseSync, olderThanMs: number): number[] {
   const cutoff = Date.now() - olderThanMs;
   const rows = db
@@ -590,7 +639,6 @@ export function retireZombieAntibodies(db: DatabaseSync, olderThanMs: number): n
   return retired;
 }
 
-/** Physically delete zombie antibodies. Only for an explicit "purge" request. */
 export function pruneZombieAntibodies(db: DatabaseSync, olderThanMs: number): number[] {
   const cutoff = Date.now() - olderThanMs;
   const rows = db

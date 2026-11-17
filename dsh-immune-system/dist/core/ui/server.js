@@ -18,10 +18,11 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { ImmuneStore } from '../store/index.js';
 import { renderPage } from './page.js';
 import { resolveLocale } from '../i18n.js';
-import { applyAction, dashboardStats, evolutionStats, readState, resolveBudgetMs } from './query.js';
+import { applyAction, dashboardStats, evolutionStats, readState, readWorkspaces, resolveBudgetMs, runHygieneAction, } from './query.js';
 import { exportLibrary, importLibrary } from '../sync.js';
 import { renderSkillMarkdown } from '../export.js';
 import { shareSanityCheck } from '../share-guard.js';
+import { scanMagpieTelemetry } from '../audit/magpie.js';
 export async function startUiServer(options = {}) {
     const store = new ImmuneStore(options.dbPath ? { dbPath: options.dbPath } : {});
     const token = randomBytes(24).toString('hex');
@@ -117,6 +118,38 @@ export async function startUiServer(options = {}) {
             sendJson(res, 200, readState(store, 'shared', query));
             return;
         }
+        if (path === '/api/quarantined' && req.method === 'GET') {
+            const query = url.searchParams.get('q') ?? '';
+            sendJson(res, 200, readState(store, 'quarantined', query));
+            return;
+        }
+        if (path === '/api/workspaces' && req.method === 'GET') {
+            sendJson(res, 200, { workspaces: readWorkspaces(store) });
+            return;
+        }
+        if (path === '/api/triage' && req.method === 'GET') {
+            sendJson(res, 200, { triage: store.triageSummary(20), receipts: store.receiptSummary(500) });
+            return;
+        }
+        if (path === '/api/models' && req.method === 'GET') {
+            sendJson(res, 200, store.modelImmunity(scanMagpieTelemetry()));
+            return;
+        }
+        if (path === '/api/hygiene' && req.method === 'POST') {
+            readBody(req, res, (body) => {
+                let dryRun = false;
+                try {
+                    const parsed = body.trim() ? JSON.parse(body) : {};
+                    dryRun = parsed.dryRun === true;
+                }
+                catch {
+                    sendJson(res, 400, { error: 'invalid json' });
+                    return;
+                }
+                sendJson(res, 200, { ok: true, report: runHygieneAction(store, dryRun) });
+            });
+            return;
+        }
         if (path === '/api/action' && req.method === 'POST') {
             readBody(req, res, (body) => {
                 let parsed;
@@ -147,6 +180,7 @@ export async function startUiServer(options = {}) {
                 store.close();
                 resolve();
             });
+            server.closeAllConnections?.();
         }),
     };
 }

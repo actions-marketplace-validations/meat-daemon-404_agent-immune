@@ -1,3 +1,4 @@
+import { scanMagpieSummary } from '../audit/magpie.js';
 export const MAX_QUERY = 200;
 export const ACTIONS = new Set(['retire', 'restore', 'delete']);
 /**
@@ -13,9 +14,15 @@ export function resolveBudgetMs(env = process.env) {
 export function dashboardStats(store) {
     const all = store.listAll(true);
     const s = store.stats();
+    const activeOrRetired = all.filter((a) => a.status !== 'quarantined');
+    const scored = activeOrRetired.filter((a) => typeof a.rubric_score === 'number');
+    const avgRubric = scored.length > 0
+        ? Math.round(scored.reduce((sum, a) => sum + (a.rubric_score ?? 0), 0) / scored.length)
+        : 0;
     return {
         active: all.filter((a) => a.status === 'active').length,
         retired: all.filter((a) => a.status === 'retired').length,
+        quarantined: all.filter((a) => a.status === 'quarantined').length,
         hits: all.reduce((sum, a) => sum + a.hit_count, 0),
         fails: all.reduce((sum, a) => sum + a.fail_count, 0),
         byModel: store.modelBreakdown(),
@@ -29,21 +36,39 @@ export function dashboardStats(store) {
         llmDistilled: s.llmDistilled,
         llmFallbacks: s.llmFallbacks,
         dbBytes: s.dbBytes,
+        avgRubric,
+        echoNoise: all.filter((a) => a.quality_grade === 'quarantined').length,
+        workspaces: store.listWorkspaceProfiles().length,
+        triage: store.triageSummary(12),
+        receipts: store.receiptSummary(500),
+        gateway: scanMagpieSummary(),
     };
 }
 /** Read state for one view. Never bumps hit counts: browsing is not delivery. */
 export function readState(store, view, query = '', budgetMs = resolveBudgetMs()) {
     const q = query.slice(0, MAX_QUERY).trim().toLowerCase();
+    const matchFilter = (a) => !q ||
+        a.trigger_pattern.toLowerCase().includes(q) ||
+        a.symptom.toLowerCase().includes(q) ||
+        a.prescription.toLowerCase().includes(q) ||
+        (a.project_scope ?? '').toLowerCase().includes(q) ||
+        (a.tool_name ?? '').toLowerCase().includes(q);
     const antibodies = view === 'shared'
-        ? store
-            .sharedAntibodies(MAX_QUERY)
-            .filter((a) => !q ||
-            a.trigger_pattern.toLowerCase().includes(q) ||
-            a.symptom.toLowerCase().includes(q) ||
-            a.prescription.toLowerCase().includes(q) ||
-            (a.tool_name ?? '').toLowerCase().includes(q))
-        : store.peek(query.slice(0, MAX_QUERY), MAX_QUERY);
+        ? store.sharedAntibodies(MAX_QUERY).filter(matchFilter)
+        : view === 'quarantined'
+            ? store
+                .listAll(true)
+                .filter((a) => a.status === 'quarantined')
+                .filter(matchFilter)
+                .slice(0, MAX_QUERY)
+            : store.peek(query.slice(0, MAX_QUERY), MAX_QUERY);
     return { stats: dashboardStats(store), antibodies, budgetMs };
+}
+export function readWorkspaces(store) {
+    return store.listWorkspaceProfiles();
+}
+export function runHygieneAction(store, dryRun = false) {
+    return store.repairHygiene({ dryRun });
 }
 const WEEK = 7 * 24 * 60 * 60 * 1000;
 const EVOLUTION_WEEKS = 8;

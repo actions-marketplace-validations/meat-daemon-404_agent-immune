@@ -90,14 +90,20 @@ test('MCP handshake and tool listing follow the wire protocol', async (t) => {
       'immune_detours',
       'immune_export',
       'immune_forget',
+      'immune_hygiene',
+      'immune_ingest_disk',
       'immune_learn',
       'immune_list',
+      'immune_models',
+      'immune_receipts',
       'immune_restore',
       'immune_retire',
       'immune_rewrite_apply',
       'immune_rewrite_candidates',
       'immune_seed_packs',
       'immune_stats',
+      'immune_triage',
+      'immune_workspaces',
     ]);
     for (const tool of tools.result.tools) {
       assert.equal(typeof tool.description, 'string', `${tool.name} needs a description`);
@@ -281,5 +287,36 @@ test('a stray line and a notification do not kill the server', async (t) => {
     // The next real request must still be answered.
     const pong = await server.call('ping', {});
     assert.deepEqual(pong.result, {});
+  });
+});
+
+test('v2 MCP tools expose hygiene, triage, receipts, workspaces, and disk ingest safely', async (t) => {
+  await withServer(t, async (server) => {
+    const textOf = (response) => response.result.content[0].text;
+    const hygiene = JSON.parse(
+      textOf(await server.call('tools/call', { name: 'immune_hygiene', arguments: { dryRun: true } })),
+    );
+    assert.equal(hygiene.dryRun, true);
+    assert.equal(typeof hygiene.quarantined, 'number');
+
+    const triage = JSON.parse(
+      textOf(await server.call('tools/call', { name: 'immune_triage', arguments: { limit: 5 } })),
+    );
+    assert.equal(typeof triage.totalEvents, 'number');
+
+    const receipts = JSON.parse(
+      textOf(await server.call('tools/call', { name: 'immune_receipts', arguments: { limit: 10 } })),
+    );
+    assert.equal(typeof receipts.chainValid, 'boolean');
+
+    const workspaces = JSON.parse(
+      textOf(await server.call('tools/call', { name: 'immune_workspaces', arguments: {} })),
+    );
+    assert.ok(Array.isArray(workspaces));
+
+    const badDisk = textOf(
+      await server.call('tools/call', { name: 'immune_ingest_disk', arguments: { roots: [] } }),
+    );
+    assert.match(badDisk, /error:/);
   });
 });

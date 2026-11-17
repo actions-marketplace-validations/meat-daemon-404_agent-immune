@@ -9,13 +9,23 @@
  * Distillation never throws: a failure here must not cost the user a turn.
  */
 import type { DistillResult } from './types.js';
-import { DISTILL_PROMPT, buildDistillInput, parseDistillOutput } from './prompts.js';
+import {
+  BATCH_DISTILL_PROMPT,
+  CRITIQUE_DISTILL_PROMPT,
+  DISTILL_PROMPT,
+  buildBatchInput,
+  buildCritiqueInput,
+  buildDistillInput,
+  parseBatchOutput,
+  parseDistillOutput,
+} from './prompts.js';
 import { chat, readLlmConfig, type LlmConfig } from './llm.js';
 import { extractError, extractInvocation } from './trace.js';
 import { normalizeKeyword, meaningfulTokens } from './keywords.js';
 import { matchGenericLesson } from './lessons.js';
 import type { BatchEpisode } from './prompts.js';
-import { BATCH_DISTILL_PROMPT, buildBatchInput, parseBatchOutput } from './prompts.js';
+import { abstractMachinePaths, canonicalizeSymptom, classifyRuleQuality } from './hygiene.js';
+import { inferRootCause } from './rubric.js';
 
 /** Failures with no reuse value: the retry usually just works. */
 const TRANSIENT =
@@ -116,47 +126,34 @@ export function ruleDistill(
   successTrace: string,
   humanHint = '',
   repairs: string[] = [],
+  opts: { projectScope?: string; workspaceRoot?: string } = {},
 ): DistillResult {
   if (TRANSIENT.test(failureTrace)) {
     return { ok: false, reason: 'skip', detail: 'transient failure' };
   }
 
-  // Defensive pin for AGENTS.md #24: retirement is not repair evidence. The
-  // adapters no longer enqueue a retired rule as a "success" trace, but that
-  // flow lived in two places and survived once already — if any caller
-  // reintroduces it, refuse here instead of minting a nested junk rule.
+  // Defensive pin for AGENTS.md #24: retirement is not repair evidence.
   if (/^previous rule \(retired\b/i.test(successTrace.trim())) {
     return { ok: false, reason: 'skip', detail: 'retirement is not a repair' };
   }
-
-  // NOTE: an identical retry (same invocation failing then succeeding) is a
-  // LEARNABLE episode, not noise — the host's own acceptance flow
-  // (scripts/verify-steps23.mjs) encodes exactly that shape, and a retried
-  // command often hides a real lesson ("the file was created meanwhile").
-  // A previous identical-retry gate here broke the acceptance flow and was
-  // removed; transient *network-shaped* failures are still skipped above.
 
   const keywords = extractKeywords(`${failureTrace} ${successTrace}`);
   if (keywords.length === 0) {
     return { ok: false, reason: 'skip', detail: 'no reusable trigger found' };
   }
 
-  // A trigger is a recall key, not a document: hard-cap it so one episode with
-  // long absolute paths cannot dominate the injected block.
-  const trigger = `${toolName} ${keywords.join(' ')}`.trim().slice(0, 160);
+  // A trigger is a recall key, not a document: abstract machine paths and cap length.
+  const trigger = abstractMachinePaths(`${toolName} ${keywords.join(' ')}`, opts.workspaceRoot)
+    .trim()
+    .slice(0, 160);
 
-  // Symptom is the error itself; prescription is the invocation that worked.
-  // Keeping these two clean is what makes the injected block readable. Never
-  // fall back to the `tool=<name> input=...` preamble when a trace had no
-  // extractable error text.
   const error = extractError(failureTrace);
   const fallbackSymptom = failureTrace.trimStart().startsWith('tool=')
     ? ''
-    : firstLine(failureTrace, 80);
-  const rawSymptom = error || fallbackSymptom || 'the first attempt failed';
+    : firstLine(failureTrace, 120);
+  const rawSymptom = canonicalizeSymptom(error || fallbackSymptom || 'the first attempt failed', opts.workspaceRoot);
 
-  // A generic pitfall (edit conflicts, stale reads) is stored with a generic
-  // trigger so every instance merges into one rule instead of one-per-file.
+  // Generic invariant pitfalls merge globally into a single universal rule.
   const lesson = matchGenericLesson(rawSymptom);
   if (lesson) {
     return {
@@ -166,32 +163,51 @@ export function ruleDistill(
         symptom: lesson.symptom,
         prescription: lesson.prescription,
         tool_name: toolName,
+        project_scope: '*',
+        quality_grade: 'advice',
+        root_cause: inferRootCause(lesson.symptom, lesson.prescription, repairs),
       },
     };
   }
 
   const symptom = rawSymptom;
-
   const invocation = extractInvocation(successTrace);
-  // A human explanation outranks anything inferred from the diff: they state
-  // the rule ("this repo uses pnpm"), the traces only show what happened.
-  const hint = isSubstantiveHint(humanHint) ? humanHint.trim() : '';
+  const hint = isSubstantiveHint(humanHint) ? abstractMachinePaths(humanHint.trim(), opts.workspaceRoot) : '';
+  const cleanInvocation = invocation ? abstractMachinePaths(invocation, opts.workspaceRoot) : '';
   const prescription = hint
     ? hint.slice(0, 200)
-    : invocation
-      ? `${toolName}: ${invocation}`
-      : firstLine(successTrace, 120) || 'use the retried invocation that succeeded';
-  // Roadmap 1.3: the repair chain is OBSERVED evidence (recorded tool calls),
-  // so the deterministic prescription may restate it verbatim — that is
-  // provenance on the closing command, not invented advice (AGENTS.md #28:
-  // the deterministic path may not WRITE advice). Without repair evidence the
-  // prescription stays the bare echoed command, exactly as before.
+    : cleanInvocation
+      ? `${toolName}: ${cleanInvocation}`
+      : firstLine(abstractMachinePaths(successTrace, opts.workspaceRoot), 120) ||
+        'use the retried invocation that succeeded';
   const evidence = repairEvidenceOf(successTrace, repairs);
-  const withEvidence = evidence ? `${prescription} (after: ${evidence})` : prescription;
+  const withEvidence = evidence
+    ? `${prescription} (after: ${abstractMachinePaths(evidence, opts.workspaceRoot)})`
+    : prescription;
+  const rootCause = inferRootCause(symptom, withEvidence, repairs);
+  const verdict = classifyRuleQuality({
+    trigger_pattern: trigger,
+    symptom,
+    prescription: withEvidence,
+    tool_name: toolName,
+    repair_path: repairs,
+    prescription_source: hint ? 'human' : 'rule',
+  });
 
   return {
     ok: true,
-    antibody: { trigger_pattern: trigger, symptom, prescription: withEvidence, tool_name: toolName },
+    antibody: {
+      trigger_pattern: trigger,
+      symptom,
+      prescription: withEvidence,
+      tool_name: toolName,
+      prescription_source: hint ? 'human' : 'rule',
+      project_scope: verdict.universalEligible ? '*' : (opts.projectScope ?? '*'),
+      quality_grade: verdict.grade,
+      rubric_score: verdict.score,
+      root_cause: rootCause,
+      ...(verdict.grade === 'quarantined' ? { status: 'quarantined' } : {}),
+    },
   };
 }
 
@@ -205,11 +221,22 @@ export async function distillEpisode(
   toolName: string,
   failureTrace: string,
   successTrace: string,
-  opts: { llm?: LlmConfig | null; signal?: AbortSignal; humanHint?: string; repairs?: string[] } = {},
+  opts: {
+    llm?: LlmConfig | null;
+    signal?: AbortSignal;
+    humanHint?: string;
+    repairs?: string[];
+    projectScope?: string;
+    workspaceRoot?: string;
+    reflect?: boolean;
+  } = {},
 ): Promise<DistillResult> {
   const hint = opts.humanHint ?? '';
   const fallback = (reason?: string): DistillResult => {
-    const ruled = ruleDistill(toolName, failureTrace, successTrace, hint, opts.repairs);
+    const ruled = ruleDistill(toolName, failureTrace, successTrace, hint, opts.repairs, {
+      projectScope: opts.projectScope,
+      workspaceRoot: opts.workspaceRoot,
+    });
     if (!ruled.ok) return ruled;
     return { ...ruled, source: 'rule', ...(reason ? { degradedReason: reason } : {}) };
   };
@@ -230,15 +257,70 @@ export async function distillEpisode(
     // The model path is normalised with the same curated table, so both paths
     // converge on one generic rule per generic pitfall.
     const lesson = matchGenericLesson(parsed.antibody.symptom);
-    if (!lesson) return { ...parsed, source: 'llm' };
+    if (lesson) {
+      return {
+        ok: true,
+        source: 'llm',
+        antibody: {
+          trigger_pattern: lesson.trigger,
+          symptom: lesson.symptom,
+          prescription: lesson.prescription,
+          tool_name: toolName,
+          project_scope: '*',
+          quality_grade: 'advice',
+          rubric_score: 95,
+          root_cause: inferRootCause(lesson.symptom, lesson.prescription, opts.repairs),
+        },
+      };
+    }
+
+    let candidate = {
+      ...parsed.antibody,
+      trigger_pattern: abstractMachinePaths(parsed.antibody.trigger_pattern, opts.workspaceRoot),
+      symptom: canonicalizeSymptom(parsed.antibody.symptom, opts.workspaceRoot),
+      prescription: abstractMachinePaths(parsed.antibody.prescription, opts.workspaceRoot),
+    };
+    let verdict = classifyRuleQuality(candidate);
+
+    // Agentic self-reflection pass: when a first-draft LLM rule is quarantined or scores below 68
+    // on the rubric, feed its specific issues back into CRITIQUE_DISTILL_PROMPT once.
+    if (opts.reflect !== false && (verdict.grade === 'quarantined' || verdict.score < 68) && !opts.signal?.aborted) {
+      try {
+        const refinedRaw = await chat(
+          llm,
+          CRITIQUE_DISTILL_PROMPT,
+          buildCritiqueInput(candidate, verdict.issues, failureTrace, successTrace),
+          opts.signal,
+        );
+        const refined = parseDistillOutput(refinedRaw, toolName);
+        if (refined.ok) {
+          const next = {
+            ...refined.antibody,
+            trigger_pattern: abstractMachinePaths(refined.antibody.trigger_pattern, opts.workspaceRoot),
+            symptom: canonicalizeSymptom(refined.antibody.symptom, opts.workspaceRoot),
+            prescription: abstractMachinePaths(refined.antibody.prescription, opts.workspaceRoot),
+          };
+          const nextVerdict = classifyRuleQuality(next);
+          if (nextVerdict.score > verdict.score) {
+            candidate = next;
+            verdict = nextVerdict;
+          }
+        }
+      } catch {
+        // Critique is best-effort; retain original LLM candidate on timeout/error.
+      }
+    }
+
     return {
       ok: true,
       source: 'llm',
       antibody: {
-        trigger_pattern: lesson.trigger,
-        symptom: lesson.symptom,
-        prescription: lesson.prescription,
-        tool_name: toolName,
+        ...candidate,
+        quality_grade: verdict.grade,
+        rubric_score: verdict.score,
+        root_cause: candidate.root_cause || inferRootCause(candidate.symptom, candidate.prescription, opts.repairs),
+        project_scope: verdict.universalEligible ? '*' : (candidate.project_scope ?? opts.projectScope ?? '*'),
+        ...(verdict.grade === 'quarantined' ? { status: 'quarantined' as const } : {}),
       },
     };
   } catch (error) {
@@ -294,6 +376,9 @@ export async function distillBatch(
           llm: opts.llm,
           signal: opts.signal,
           humanHint: episode.humanHint ?? '',
+          repairs: episode.repairs ?? [],
+          projectScope: episode.projectScope,
+          workspaceRoot: episode.workspaceRoot,
         }),
       );
     }
@@ -340,6 +425,7 @@ export async function distillBatch(
         episode.fixedTrace,
         episode.humanHint,
         episode.repairs ?? [],
+        { projectScope: episode.projectScope, workspaceRoot: episode.workspaceRoot },
       );
       results.set(
         episode.id,

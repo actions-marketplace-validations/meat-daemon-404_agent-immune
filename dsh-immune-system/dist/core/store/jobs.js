@@ -1,10 +1,10 @@
-export function enqueueJob(db, toolName, failureTrace, successTrace, injectedIds, humanHint = '', repairPath = [], origin = '') {
+export function enqueueJob(db, toolName, failureTrace, successTrace, injectedIds, humanHint = '', repairPath = [], origin = '', projectScope = '*', cwd = '') {
     const now = Date.now();
     const info = db
         .prepare(`INSERT INTO distill_jobs
-         (tool_name, failure_trace, success_trace, injected_ids, human_hint, repair_path, origin, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`)
-        .run(toolName, failureTrace, successTrace, JSON.stringify(injectedIds), humanHint, JSON.stringify(repairPath.slice(-3)), origin, now, now);
+         (tool_name, failure_trace, success_trace, injected_ids, human_hint, repair_path, origin, project_scope, cwd, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`)
+        .run(toolName, failureTrace, successTrace, JSON.stringify(injectedIds), humanHint, JSON.stringify(repairPath.slice(-3)), origin, projectScope, cwd, now, now);
     return Number(info.lastInsertRowid);
 }
 /**

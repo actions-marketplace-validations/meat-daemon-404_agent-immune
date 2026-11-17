@@ -16,15 +16,28 @@ const db = new DatabaseSync(source, { readOnly: true });
 
 const rows = db
   .prepare(
-    `SELECT u.tool_call_id, u.tool_name, u.status, u.exit_code, u.error_message, p.data
-       FROM tool_usage u
-       LEFT JOIN part p ON p.session_id = u.session_id
-        AND json_extract(p.data, '$.type') = 'tool'
-        AND json_extract(p.data, '$.callID') = u.tool_call_id
-      WHERE u.status IN ('completed','error')
-      ORDER BY u.started_at ASC`,
+    `SELECT session_id, tool_call_id, tool_name, status, exit_code, error_message
+       FROM tool_usage
+      WHERE status IN ('completed','error')
+      ORDER BY started_at ASC`,
   )
   .all();
+
+// Pre-filter on leading 200 bytes so SQLite skips overflow pages for non-tool parts (~50x faster).
+const partsByKey = new Map();
+for (const p of db
+  .prepare(
+    `SELECT session_id,
+            json_extract(data, '$.callID') AS call_id,
+            substr(json_extract(data, '$.state.output'), 1, 2048) AS output_text
+       FROM part
+      WHERE substr(data, 1, 200) LIKE '%"type":"tool"%'`,
+  )
+  .all()) {
+  if (p.call_id && typeof p.output_text === 'string') {
+    partsByKey.set(`${p.session_id}:${p.call_id}`, p.output_text);
+  }
+}
 
 let agree = 0;
 let falsePositives = 0; // host: success, judge: failure
@@ -32,15 +45,7 @@ let falseNegatives = 0; // host: error, judge: success
 const disagreements = [];
 
 for (const row of rows) {
-  let part = null;
-  if (row.data) {
-    try {
-      part = JSON.parse(row.data);
-    } catch {
-      part = null;
-    }
-  }
-  const output = part && part.state && typeof part.state.output === 'string' ? part.state.output : '';
+  const output = partsByKey.get(`${row.session_id}:${row.tool_call_id}`) ?? '';
   const content = [{ type: 'text', text: output }];
   const value = {};
   if (row.exit_code !== null && row.exit_code !== undefined) value.exitCode = row.exit_code;

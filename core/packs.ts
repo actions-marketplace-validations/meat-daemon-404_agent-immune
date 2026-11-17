@@ -257,4 +257,78 @@ export const BUILTIN_PACKS: SeedPack[] = [
       },
     ],
   },
+  {
+    id: 'dsh-ecosystem',
+    label: 'DSH / Cordis Plugin Ecosystem',
+    description: 'Lessons distilled from D:\ deepseek-harness plugins (client-modules, Cordis inject, shadow-root UI, GenUI).',
+    rules: [
+      {
+        tool_name: null,
+        trigger_pattern: 'dsh client-modules web tab 404 settings.plugins.tab client.js',
+        symptom: 'DSH 插件写了 client.js 却在设置页不显示或返回 404（负判定被进程缓存）',
+        prescription: '在 package.json 同时声明 dsh.client.platform === "web" 与字符串 exports["./client"]，并通过 ctx.get("clientModules") 自检',
+      },
+      {
+        tool_name: null,
+        trigger_pattern: 'dsh cordis inject commands webServer cannot get property without inject',
+        symptom: 'Cordis 插件直接读取 ctx.commands 或 ctx.webServer 抛出 cannot get property without inject',
+        prescription: '把强依赖声明在 export const inject = [...]，可选服务（如 webServer）用 ctx.inject([...], cb) 挂载',
+      },
+      {
+        tool_name: null,
+        trigger_pattern: 'dsh settings tab shadow root css table 表格 行高 塌陷 样式污染 宿主',
+        symptom: 'DSH 宿主全局样式表覆盖插件设置页 table/div 导致行高塌陷与控件隐藏',
+        prescription: '把设置页组件渲染进 attachShadow({ mode: "open" }) 隔离样式，并用单份作用域 style 显式固定 display 与行高',
+      },
+      {
+        tool_name: null,
+        trigger_pattern: 'dsh tools/post-execute bash isError exitCode 非零退出',
+        symptom: '仅检查 result.isError 会漏掉返回非零退出码的 bash 失败调用',
+        prescription: '按 isError → sandboxDenied → value.exitCode → [exit code: N] 尾标顺序判定，有结构化 payload 时不扫描正文文本',
+      },
+      {
+        tool_name: null,
+        trigger_pattern: 'dsh npm 打包 doubled prefix dsh-immune-system dist 路径',
+        symptom: '包根与发布子目录嵌套时探针检查 unprefixed 路径误报缺失',
+        prescription: '确保 main、exports、dsh.bundle.patch 与验收探针统一使用同一包内前缀并运行 dist 完整性校验',
+      },
+    ],
+  },
+  {
+    id: 'patrol-triage',
+    label: 'Red-3 Triage & Patrol Discipline',
+    description: 'Verification and root-cause triage protocols distilled from daily-patrol, MatrixOS, and InterviewAI v2.',
+    rules: [
+      {
+        tool_name: 'Bash',
+        trigger_pattern: '每日巡查 triage flake 红数波动 误修好代码',
+        symptom: '把单次测试波动或环境超时误判成代码回归，盲目修改正常逻辑或淘汰好规则',
+        prescription: '遵循红三分诊：先证真伪（重跑取并集），再分桶归属（flake/环境/他方债/我方回归），确认回归后再最小修补',
+      },
+      {
+        tool_name: 'Bash',
+        trigger_pattern: 'sqlite WAL cp backup 空库 事务日志',
+        symptom: '用 cp 直接复制 WAL 模式 SQLite 文件导致备份打开为空库',
+        prescription: '使用 node:sqlite backup API（或 immune backup）穿过 WAL 写出一致快照，禁止裸 cp 主库文件',
+      },
+      {
+        tool_name: 'Bash',
+        trigger_pattern: 'npm publish prepare 脏工作树 多会话 残留',
+        symptom: '从脏工作树直接 npm pack / publish 把未提交的半成品编译进发布包',
+        prescription: '用 git archive HEAD 导出到干净临时目录再打包验证，并跑相对导入完整性门禁',
+      },
+      {
+        tool_name: null,
+        trigger_pattern: 'LLM stub 评分 校准 假通过 calibration rubric',
+        symptom: '离线测试桩返回固定常量导致高分假通过，掩盖真实模型解析或路由缺陷',
+        prescription: '用可观测结构化特征驱动确定性基线，并为不同质量输入建立差异化校准断言',
+      },
+      {
+        tool_name: null,
+        trigger_pattern: '跨项目 污染 project_scope 绝对路径 命令转储',
+        symptom: '把含特定项目绝对路径的命令行转储放进全局记忆库，污染其他无关仓库',
+        prescription: '入库前抽象绝对路径并按 project_scope 隔离，禁止未泛化的命令转储进入全局召回',
+      },
+    ],
+  },
 ];

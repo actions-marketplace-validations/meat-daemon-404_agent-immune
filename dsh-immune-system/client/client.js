@@ -99,6 +99,15 @@ window.__ModuleLoader__.load({
       '.imm .pill::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}',
       '.imm .pill.active{color:var(--i-ok);background:rgba(55,201,138,.13)}',
       '.imm .pill.retired{color:var(--i-muted);background:rgba(139,148,163,.13)}',
+      '.imm .pill.quarantined{color:var(--i-bad);background:rgba(229,101,101,.13)}',
+      '.imm .tags{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}',
+      '.imm .tag{display:inline-block;padding:1px 6px;border-radius:5px;font-size:10px;border:1px solid var(--i-line);color:var(--i-muted);font-family:ui-monospace,Consolas,monospace}',
+      '.imm .tag.hi{border-color:var(--i-ok);color:var(--i-ok)}.imm .tag.low{border-color:var(--i-warn);color:var(--i-warn)}',
+      '.imm .strip{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:11.5px;color:var(--i-muted)}',
+      '.imm .strip .chip{border:1px solid var(--i-line);background:var(--i-panel);color:var(--i-text);border-radius:999px;padding:2px 8px}',
+      '.imm .strip .chip.ok{border-color:var(--i-ok);color:var(--i-ok)}.imm .strip .chip.bad{border-color:var(--i-bad);color:var(--i-bad)}',
+      '.imm .kpi.bad::after{background:var(--i-bad)}',
+      '.imm tr.quarantined td{opacity:.72}',
       '.imm .acts{display:flex;gap:6px;flex-wrap:nowrap}',
       '.imm td.ops{white-space:nowrap}',
       '.imm button.act{border:1px solid var(--i-line);background:transparent;color:var(--i-muted);border-radius:7px;',
@@ -164,7 +173,7 @@ window.__ModuleLoader__.load({
     }
 
     function ImmunePanel() {
-      var state = React.useState({ loading: true, error: '', stats: null, evolution: null, rows: [], budgetMs: null });
+      var state = React.useState({ loading: true, error: '', stats: null, evolution: null, rows: [], workspaces: [], budgetMs: null });
       var view = React.useState('project');
       var query = React.useState('');
       var order = React.useState('recent');
@@ -180,32 +189,52 @@ window.__ModuleLoader__.load({
 
       var load = React.useCallback(
         function (nextTab, nextQuery) {
+          setData(function (prev) {
+            return Object.assign({}, prev, { loading: true, error: '' });
+          });
+          if (nextTab === 'workspaces') {
+            request('/workspaces')
+              .then(function (body) {
+                setData(function (prev) {
+                  return Object.assign({}, prev, { loading: false, error: '', workspaces: body.workspaces || [] });
+                });
+              })
+              .catch(function (error) {
+                setData(function (prev) {
+                  return Object.assign({}, prev, { loading: false, error: String(error.message || error) });
+                });
+              });
+            return;
+          }
           var path =
             '/?view=' +
             encodeURIComponent(nextTab) +
             (nextQuery ? '&q=' + encodeURIComponent(nextQuery) : '');
-          setData(function (prev) {
-            return Object.assign({}, prev, { loading: true, error: '' });
-          });
           request(path)
             .then(function (body) {
-              setData({
-                loading: false,
-                error: '',
-                stats: body.stats,
-                evolution: body.evolution || null,
-                rows: body.antibodies,
-                budgetMs: body.budgetMs,
+              setData(function (prev) {
+                return {
+                  loading: false,
+                  error: '',
+                  stats: body.stats,
+                  evolution: body.evolution || null,
+                  rows: body.antibodies,
+                  workspaces: prev.workspaces || [],
+                  budgetMs: body.budgetMs,
+                };
               });
             })
             .catch(function (error) {
-              setData({
-                loading: false,
-                error: String(error.message || error),
-                stats: null,
-                evolution: null,
-                rows: [],
-                budgetMs: null,
+              setData(function (prev) {
+                return {
+                  loading: false,
+                  error: String(error.message || error),
+                  stats: null,
+                  evolution: null,
+                  rows: [],
+                  workspaces: prev.workspaces || [],
+                  budgetMs: null,
+                };
               });
             });
         },
@@ -272,6 +301,23 @@ window.__ModuleLoader__.load({
         reader.readAsText(file);
       }
 
+      function doHygiene() {
+        setSyncMsg('治污中 / running hygiene…');
+        request('/hygiene', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ dryRun: false }),
+        })
+          .then(function (body) {
+            var rep = body.report || {};
+            setSyncMsg('治污 / hygiene: 隔离 ' + (rep.quarantined || 0) + ' · 恢复 ' + (rep.restored || 0) + ' · 域 ' + (rep.scoped || 0));
+            load(tab, q);
+          })
+          .catch(function (error) {
+            setSyncMsg('治污失败 / hygiene failed: ' + String(error.message || error));
+          });
+      }
+
       var stats = data.stats;
 
       var kpis = h(
@@ -281,12 +327,63 @@ window.__ModuleLoader__.load({
           ? [
               kpi(stats.active, '生效 / active', 'ok'),
               kpi(stats.retired, '已退役 / retired', 'warn'),
+              stats.quarantined > 0 ? kpi(stats.quarantined, '已隔离 / quarantined', 'bad') : null,
+              stats.avgRubric > 0 ? kpi(stats.avgRubric + '/100', '质量分 / rubric', stats.avgRubric >= 60 ? 'ok' : 'warn') : null,
               kpi(stats.hits, '注入 / injections', 'accent'),
               kpi(stats.shared, '共享 / shared', ''),
               kpi(formatBudget(data.budgetMs), '蒸馏预算 / budget', ''),
-            ]
+            ].filter(Boolean)
           : [h('div', { key: 'l', className: 'note' }, data.loading ? '加载中… / loading…' : '')],
       );
+
+      var insights = null;
+      var knownModels = stats && Array.isArray(stats.byModel)
+        ? stats.byModel.filter(function (r) { return r.model !== 'unknown'; })
+        : [];
+      var hasGateway = stats && stats.gateway && stats.gateway.present;
+      if (stats && ((stats.triage && stats.triage.totalEvents > 0) || (stats.receipts && stats.receipts.total > 0) || knownModels.length > 0 || hasGateway)) {
+        var chips = [];
+        if (stats.triage && stats.triage.totalEvents > 0) {
+          chips.push(h('span', { key: 'tl' }, '红三分诊 / triage:'));
+          Object.keys(stats.triage.byBucket || {}).forEach(function (k) {
+            var count = stats.triage.byBucket[k];
+            if (count > 0) chips.push(h('span', { key: 'tb-' + k, className: 'chip' }, k + ' ' + count));
+          });
+        }
+        if (stats.receipts && stats.receipts.total > 0) {
+          chips.push(
+            h(
+              'span',
+              { key: 'rc', className: 'chip ' + (stats.receipts.chainValid ? 'ok' : 'bad') },
+              '回执 / receipts ' + stats.receipts.total + (stats.receipts.chainValid ? ' · SHA256 ok' : ' · BROKEN'),
+            ),
+          );
+        }
+        if (knownModels.length > 0) {
+          chips.push(h('span', { key: 'ml' }, '模型 / models:'));
+          knownModels.slice(0, 5).forEach(function (r) {
+            var survival = r.hits > 0 ? Math.round((Math.max(0, r.hits - r.fails) * 100) / r.hits) : 100;
+            chips.push(
+              h(
+                'span',
+                { key: 'm-' + r.model, className: 'chip ' + (r.fails > 0 ? 'bad' : 'ok') },
+                r.model + ' ' + r.hits + ' (' + survival + '%)',
+              ),
+            );
+          });
+        }
+        if (hasGateway) {
+          var gw = stats.gateway;
+          chips.push(
+            h(
+              'span',
+              { key: 'gw', className: 'chip ok' },
+              'Magpie ' + gw.routingRequests + ' req · cache ' + gw.cacheHitRatePct + '% · retry+' + gw.retryRecovered,
+            ),
+          );
+        }
+        insights = h('div', { className: 'strip' }, chips);
+      }
 
       // Evolution strip (ROADMAP 3.3): both UIs render it from one query layer.
       // Pure CSS bars — the offline rule holds here too (no external assets).
@@ -334,6 +431,7 @@ window.__ModuleLoader__.load({
       var sorted = data.rows.slice().sort(function (a, b) {
         if (sort === 'hits') return b.hit_count - a.hit_count || a.id - b.id;
         if (sort === 'fails') return b.fail_count - a.fail_count || a.id - b.id;
+        if (sort === 'rubric') return (b.rubric_score || 0) - (a.rubric_score || 0) || b.hit_count - a.hit_count;
         return String(b.updated_at).localeCompare(String(a.updated_at)) || b.id - a.id;
       });
 
@@ -346,6 +444,35 @@ window.__ModuleLoader__.load({
           h('div', { className: 't' }, '加载失败 / load failed'),
           h('div', { className: 'hd err' }, data.error),
         );
+      } else if (tab === 'workspaces') {
+        var wsList = data.workspaces || [];
+        body = wsList.length === 0
+          ? h(
+              'div',
+              { className: 'empty' },
+              h('div', { className: 'glyph' }),
+              h('div', { className: 't' }, '尚未登记工作区 / no workspaces yet'),
+              h('div', { className: 'hd' }, '运行 immune ingest-disk 或会话后将记录项目画像。'),
+            )
+          : h(
+              'table',
+              null,
+              h('thead', null, h('tr', null, ['项目域 / scope', '根目录 / root', '技术栈 / stacks', '规则 / rules'].map(function (lbl) { return h('th', { key: lbl }, lbl); }))),
+              h(
+                'tbody',
+                null,
+                wsList.map(function (w) {
+                  return h(
+                    'tr',
+                    { key: w.project_scope },
+                    h('td', { className: 'trigger' }, w.project_scope),
+                    h('td', { className: 'txt' }, w.repo_root),
+                    h('td', { className: 'txt' }, (w.stacks || []).join(', ') || '—'),
+                    h('td', { className: 'counts' }, h('b', null, String(w.rules_count || 0))),
+                  );
+                }),
+              ),
+            );
       } else if (data.loading && data.rows.length === 0) {
         body = h(
           'div',
@@ -400,9 +527,24 @@ window.__ModuleLoader__.load({
             sorted.map(function (a) {
               return h(
                 'tr',
-                { key: a.id, className: a.status === 'retired' ? 'retired' : '' },
+                { key: a.id, className: a.status === 'retired' ? 'retired' : a.status === 'quarantined' ? 'quarantined' : '' },
                 h('td', { className: 'id', 'data-label': '#' }, String(a.id)),
-                h('td', { className: 'trigger', 'data-label': '触发' }, a.trigger_pattern),
+                h(
+                  'td',
+                  { className: 'trigger', 'data-label': '触发' },
+                  a.trigger_pattern,
+                  (a.project_scope && a.project_scope !== '*') || (typeof a.rubric_score === 'number' && a.rubric_score > 0) || (a.root_cause && a.root_cause !== 'unknown')
+                    ? h(
+                        'div',
+                        { className: 'tags' },
+                        a.project_scope && a.project_scope !== '*' ? h('span', { className: 'tag' }, 'scope:' + a.project_scope) : null,
+                        typeof a.rubric_score === 'number' && a.rubric_score > 0
+                          ? h('span', { className: 'tag ' + (a.rubric_score >= 60 ? 'hi' : 'low') }, 'rubric:' + a.rubric_score)
+                          : null,
+                        a.root_cause && a.root_cause !== 'unknown' ? h('span', { className: 'tag' }, a.root_cause) : null,
+                      )
+                    : null,
+                ),
                 h('td', { className: 'txt', 'data-label': '忌' }, a.symptom),
                 h(
                   'td',
@@ -422,12 +564,16 @@ window.__ModuleLoader__.load({
                 h(
                   'td',
                   { 'data-label': '状态' },
-                  h('span', { className: 'pill ' + a.status }, a.status === 'active' ? '生效 / active' : '已退役 / retired'),
+                  h(
+                    'span',
+                    { className: 'pill ' + a.status },
+                    a.status === 'active' ? '生效 / active' : a.status === 'quarantined' ? '已隔离 / quarantined' : '已退役 / retired',
+                  ),
                 ),
                 h(
                   'td',
                   { className: 'ops', 'data-label': '' },
-                  tab === 'project'
+                  tab !== 'shared'
                     ? h(
                         'div',
                         { className: 'acts' },
@@ -462,6 +608,7 @@ window.__ModuleLoader__.load({
         h('style', { id: STYLE_ID }, CSS),
         kpis,
         evo,
+        insights,
         h(
           'div',
           { className: 'row' },
@@ -518,6 +665,30 @@ window.__ModuleLoader__.load({
               '共享 / shared',
               h('b', null, stats ? String(stats.shared) : ''),
             ),
+            h(
+              'button',
+              {
+                className: tab === 'quarantined' ? 'on' : '',
+                type: 'button',
+                role: 'tab',
+                'aria-selected': tab === 'quarantined' ? 'true' : 'false',
+                onClick: function () { setTab('quarantined'); },
+              },
+              '隔离 / quarantined',
+              h('b', null, stats ? String(stats.quarantined || 0) : ''),
+            ),
+            h(
+              'button',
+              {
+                className: tab === 'workspaces' ? 'on' : '',
+                type: 'button',
+                role: 'tab',
+                'aria-selected': tab === 'workspaces' ? 'true' : 'false',
+                onClick: function () { setTab('workspaces'); },
+              },
+              '工作区 / workspaces',
+              h('b', null, stats ? String(stats.workspaces || 0) : ''),
+            ),
           ),
           h(
             'select',
@@ -527,9 +698,11 @@ window.__ModuleLoader__.load({
               onChange: function (e) { setSort(e.target.value); },
             },
             h('option', { value: 'recent' }, '最近更新 / recent'),
+            h('option', { value: 'rubric' }, '质量分 / rubric'),
             h('option', { value: 'hits' }, '命中最多 / most hits'),
             h('option', { value: 'fails' }, '失效最多 / most fails'),
           ),
+          h('button', { className: 'act', type: 'button', onClick: doHygiene }, '治污 / hygiene'),
         ),
         h(
           'div',

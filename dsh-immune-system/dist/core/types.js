@@ -1,7 +1,7 @@
 /**
- * Shared types for the immune system.
+ * Shared types for the immune system (v2).
  *
- * These are host-agnostic: `core/` never imports a ZCode or DSH API, so both
- * adapters can reuse them unchanged.
+ * Host-agnostic domain contracts: `core/` never imports ZCode, DSH, Claude Code,
+ * Codex, or Antigravity host packages, so every adapter shares one engine.
  */
 export {};

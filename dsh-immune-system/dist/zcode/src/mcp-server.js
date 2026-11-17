@@ -27,6 +27,8 @@ import { auditHistory, renderAuditReport } from '../../core/audit.js';
 import { BUILTIN_PACKS } from '../../core/packs.js';
 import { REWRITE_PROMPT } from '../../core/rewrite.js';
 import { HOST_REWRITE_BATCH, applyHostRewrites, hostRewriteCandidates } from '../../core/host-rewrite.js';
+import { ingestDiskCorpus } from '../../core/disk-ingest.js';
+import { scanMagpieTelemetry } from '../../core/audit/magpie.js';
 import { packageVersion } from '../../core/version.js';
 const SERVER_INFO = { name: 'dsh-immune-system', version: packageVersion() };
 const TOOLS = [
@@ -110,7 +112,7 @@ const TOOLS = [
     },
     {
         name: 'immune_seed_packs',
-        description: 'List the builtin seed packs (git-safety, node-ts, python-uv, docker, modern-web) and any on-demand ingested `skill:*` packs with per-pack seeded counts. Install with `immune seed <id>` or `immune ingest-skill <path>` in a terminal; this tool never writes.',
+        description: 'List the builtin seed packs (git-safety, node-ts, python-uv, docker, modern-web, dsh-ecosystem, patrol-triage) and any on-demand ingested `skill:*` packs with per-pack seeded counts. Install with `immune seed <id>` or `immune ingest-skill <path>` in a terminal; this tool never writes.',
         inputSchema: { type: 'object', properties: {} },
     },
     {
@@ -146,6 +148,53 @@ const TOOLS = [
             },
             required: ['rewrites'],
         },
+    },
+    {
+        name: 'immune_hygiene',
+        description: 'Run or preview library hygiene repair: quarantines echo-grade garbage, abstracts machine-specific paths into portable templates, and stamps project_scope isolation boundaries. Defaults to dryRun=true.',
+        inputSchema: {
+            type: 'object',
+            properties: { dryRun: { type: 'boolean', description: 'Preview without modifying DB. Default true.' } },
+        },
+    },
+    {
+        name: 'immune_triage',
+        description: 'Inspect Red-3 Triage failure buckets (flake_or_transient, wrong_scope_leak, ignored_by_agent, stale_or_bad_advice, coverage_blindspot) recorded after rule deliveries. READ-ONLY.',
+        inputSchema: {
+            type: 'object',
+            properties: { limit: { type: 'number', description: 'Recent triage events to include. Default 20.' } },
+        },
+    },
+    {
+        name: 'immune_receipts',
+        description: 'Verify and summarize the tamper-evident SHA-256 delivery/outcome receipt chain across sessions and models. READ-ONLY.',
+        inputSchema: {
+            type: 'object',
+            properties: { limit: { type: 'number', description: 'Max recent receipts to audit. Default 500.' } },
+        },
+    },
+    {
+        name: 'immune_workspaces',
+        description: 'List discovered local workspace profiles (project_scope, repo_root, detected tech stacks, rule counts). READ-ONLY.',
+        inputSchema: { type: 'object', properties: {} },
+    },
+    {
+        name: 'immune_ingest_disk',
+        description: 'Discover repositories, skills, and engineering docs under explicit root directories (e.g. ["D:\\\\"]) and ingest high-rubric scoped/universal pitfalls. Defaults to dryRun=true.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                roots: { type: 'array', items: { type: 'string' }, description: 'Directories to scan.' },
+                dryRun: { type: 'boolean', description: 'Preview without mutating DB. Default true.' },
+                maxProjects: { type: 'number', description: 'Cap discovered projects. Default 60.' },
+            },
+            required: ['roots'],
+        },
+    },
+    {
+        name: 'immune_models',
+        description: 'Analyze per-model antibody survival rates, repeated-ignore adaptive escalation rules, and local Magpie gateway routing telemetry. READ-ONLY.',
+        inputSchema: { type: 'object', properties: {} },
     },
 ];
 /** Dispatch one tools/call. Kept pure-ish so tests can call it without stdio. */
@@ -316,6 +365,51 @@ export function callTool(store, name, args) {
             return `applied ${outcome.appliedCount}/${rewrites.length}` +
                 (outcome.cooldownUntil ? ` · next delegated pass after ${new Date(outcome.cooldownUntil).toISOString()}` : '') +
                 `\n${lines.join('\n')}`;
+        }
+        case 'immune_hygiene': {
+            const dryRun = args.dryRun !== false;
+            const rep = store.repairHygiene({ dryRun });
+            return JSON.stringify(rep, null, 2);
+        }
+        case 'immune_triage': {
+            const limit = typeof args.limit === 'number' && args.limit > 0 ? Math.min(200, Math.trunc(args.limit)) : 20;
+            return JSON.stringify(store.triageSummary(limit), null, 2);
+        }
+        case 'immune_receipts': {
+            const limit = typeof args.limit === 'number' && args.limit > 0 ? Math.min(2000, Math.trunc(args.limit)) : 500;
+            return JSON.stringify(store.receiptSummary(limit), null, 2);
+        }
+        case 'immune_workspaces': {
+            return JSON.stringify(store.listWorkspaceProfiles(), null, 2);
+        }
+        case 'immune_ingest_disk': {
+            const roots = Array.isArray(args.roots)
+                ? args.roots.filter((r) => typeof r === 'string' && r.trim().length > 0)
+                : [];
+            if (roots.length === 0)
+                return 'error: roots must be a non-empty array of directory paths.';
+            const dryRun = args.dryRun !== false;
+            const maxProjects = typeof args.maxProjects === 'number' && args.maxProjects > 0 ? Math.min(200, Math.trunc(args.maxProjects)) : 60;
+            const report = ingestDiskCorpus(store, { roots, dryRun, maxProjects });
+            return JSON.stringify(report, null, 2);
+        }
+        case 'immune_models': {
+            const magpie = scanMagpieTelemetry();
+            const intel = store.modelImmunity(magpie);
+            return JSON.stringify({
+                ...intel,
+                magpieGateway: magpie.present
+                    ? {
+                        routingRequests: magpie.routingRequests,
+                        usageRequests: magpie.usageRequests,
+                        cacheHitRatePct: magpie.cacheHitRatePct,
+                        retryRecovered: magpie.retryRecovered,
+                        distinctModels: magpie.distinctModels,
+                        byModel: magpie.byModel.slice(0, 8),
+                        topFailures: magpie.topFailures,
+                    }
+                    : null,
+            }, null, 2);
         }
         default:
             return `error: unknown tool ${name}`;

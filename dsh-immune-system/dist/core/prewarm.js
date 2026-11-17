@@ -17,6 +17,7 @@ const MARKERS = [
     { stack: 'node-ts', files: ['package.json'] },
     { stack: 'python-uv', files: ['pyproject.toml', 'requirements.txt', 'uv.lock'] },
     { stack: 'docker', files: ['Dockerfile', 'docker-compose.yml', 'docker-compose.yaml', 'compose.yaml'] },
+    { stack: 'dsh-ecosystem', files: ['cordis.patch.yml'] },
 ];
 const WEB_MARKER_FILES = [
     'vite.config.ts',

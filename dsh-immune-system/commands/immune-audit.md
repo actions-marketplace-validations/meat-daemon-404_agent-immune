@@ -3,9 +3,9 @@ description: 扫描本机已有会话历史，生成踩坑体检报告并蒸馏�
 ---
 
 Audit the session history already on this machine — the ZCode session db, Codex
-rollouts, and Claude Code transcripts — and turn the failed-then-fixed episodes
-inside it into the user's first antibodies.
-（扫描本机已有的会话历史——ZCode 会话库、Codex rollout、Claude Code 转录——把其中的失败→修复轨迹变成用户最早的一批抗体。）
+rollouts, Antigravity brain trajectories, and Claude Code transcripts — and turn
+the failed-then-fixed episodes inside it into the user's first antibodies.
+（扫描本机已有的会话历史——ZCode 会话库、Codex rollout、Antigravity 轨迹、Claude Code 转录——把其中的失败→修复轨迹变成用户最早的一批抗体。）
 
 1. Resolve the plugin root from the first line of `.dsh/immune-root.txt`. If it is
    missing, say the plugin has not run in this project yet and stop.

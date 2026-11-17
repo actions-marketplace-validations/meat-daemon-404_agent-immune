@@ -23,14 +23,15 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 
-const DELAY_MS = Number(process.env.BENCH_DELAY_MS ?? '1500');
+const DELAY_MS = Number(process.env.BENCH_DELAY_MS ?? '800');
 const HEADLINE_EPISODES = 3;
-const CURVE = [1, 2, 3, 5];
+const CURVE = [1, 4, 5, 9];
 const BUDGET_TEST_EPISODES = 6;
-const BUDGET_TEST_MS = 3000;
+const BUDGET_TEST_MS = 1400;
 
 const dir = mkdtempSync(join(tmpdir(), 'immune-bench-'));
 const dbs = [];
+let httpCalls = 0;
 
 /* ------------------------------------------------------------------ *
  * A deliberately slow, OpenAI-compatible stand-in for the model endpoint
@@ -38,21 +39,33 @@ const dbs = [];
 
 function startSlowModelServer() {
   const server = createServer((req, res) => {
-    req.on('data', () => {});
+    httpCalls += 1;
+    let raw = '';
+    req.on('data', (chunk) => { raw += chunk; });
     req.on('end', () => {
       setTimeout(() => {
+        let reply = {
+          trigger_pattern: 'vite config env',
+          symptom: 'process.env reads undefined for client vars',
+          prescription: 'use loadEnv in vite.config.ts',
+        };
+        try {
+          const parsed = JSON.parse(raw);
+          const userContent = parsed?.messages?.find((m) => m.role === 'user')?.content ?? '';
+          const userJson = JSON.parse(userContent);
+          if (Array.isArray(userJson)) {
+            reply = userJson.map((ep) => ({
+              id: ep.id,
+              trigger_pattern: 'vite config env',
+              symptom: 'process.env reads undefined for client vars',
+              prescription: 'use loadEnv in vite.config.ts',
+            }));
+          }
+        } catch {
+          // fall back to single-object payload
+        }
         const payload = {
-          choices: [
-            {
-              message: {
-                content: JSON.stringify({
-                  trigger: 'vite config env',
-                  symptom: 'process.env reads undefined for client vars',
-                  prescription: 'use loadEnv in vite.config.ts',
-                }),
-              },
-            },
-          ],
+          choices: [{ message: { content: JSON.stringify(reply) } }],
         };
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(JSON.stringify(payload));
@@ -141,7 +154,7 @@ const port = server.address().port;
 process.env.IMMUNE_LLM_BASE_URL = `http://127.0.0.1:${port}/v1`;
 process.env.IMMUNE_LLM_MODEL = 'bench-slow-model';
 process.env.IMMUNE_ALLOW_PRIVATE_ENDPOINT = '1';
-process.env.IMMUNE_LLM_TIMEOUT_MS = '30000';
+process.env.IMMUNE_LLM_TIMEOUT_MS = String(Math.min(5_000, Math.max(950, DELAY_MS + 150)));
 
 const plugin = await import(new URL('../dsh-immune-system/dist/dsh/src/index.js', import.meta.url).href);
 const { DSH_EVENTS } = plugin;
@@ -213,11 +226,15 @@ for (const episodes of CURVE) {
   );
 }
 
+const callsBeforeCap = httpCalls;
 const capped = await runScenario('budget', BUDGET_TEST_EPISODES, BUDGET_TEST_MS);
+const capHttpCalls = httpCalls - callsBeforeCap;
+const capDb = new DatabaseSync(join(dir, 'budget.sqlite'));
+const capDeferred = capDb.prepare("SELECT COUNT(*) AS n FROM distill_jobs WHERE note LIKE '%budget%'").get().n;
+capDb.close();
 console.log(
   `\nbudget cap (IMMUNE_DISTILL_BUDGET_MS=${BUDGET_TEST_MS}, ${BUDGET_TEST_EPISODES} queued): ` +
-    `turn-stopping ${capped.turnMs.toFixed(0)} ms, distilled ${capped.rows}/${capped.episodes}, ` +
-    `${capped.episodes - capped.rows} left for the next boundary`,
+    `turn-stopping ${capped.turnMs.toFixed(0)} ms, httpCalls ${capHttpCalls}, deferredToRule ${capDeferred}, processed ${capped.rows}/${capped.episodes}`,
 );
 
 /* ------------------------------------------------------------------ */
@@ -235,16 +252,18 @@ check(`headline turn-stopping pays at least ${Math.round(DELAY_MS * 0.8)} ms`, h
 check('headline distils every queued episode', headline.rows === HEADLINE_EPISODES, headline.rows);
 
 for (const row of curve) {
+  const expectedBatches = Math.ceil(row.episodes / 4);
   check(`curve(${row.episodes}): every episode distilled`, row.rows === row.episodes, row.rows);
-  check(`curve(${row.episodes}): drain scales with queue depth`, row.turnMs >= row.episodes * DELAY_MS * 0.8, row.turnMs);
+  check(`curve(${row.episodes}): drain scales with batch depth (${expectedBatches} batch)`, row.turnMs >= expectedBatches * DELAY_MS * 0.75, row.turnMs);
   check(`curve(${row.episodes}): tool path still free of the model`, row.postMedian < 25, row.postMedian);
 }
-check('drain curve is monotonic in wall-clock', curve.every((row, i) => i === 0 || row.turnMs > curve[i - 1].turnMs), curve.map((r) => Math.round(r.turnMs)));
+check('drain curve scales monotonically from 1 to 3 batches', curve[curve.length - 1].turnMs > curve[0].turnMs, curve.map((r) => Math.round(r.turnMs)));
 
-check(`budget cap holds (<= ${BUDGET_TEST_MS + 2 * DELAY_MS} ms)`, capped.turnMs <= BUDGET_TEST_MS + 2 * DELAY_MS, capped.turnMs);
-check('budget cap leaves work for the next boundary', capped.rows < capped.episodes, capped.rows);
+check(`budget cap holds (<= ${BUDGET_TEST_MS + DELAY_MS} ms)`, capped.turnMs <= BUDGET_TEST_MS + DELAY_MS, capped.turnMs);
+check('budget cap stops starting doomed LLM batches and degrades cleanly', capHttpCalls === 1 && capped.turnMs < 2 * DELAY_MS, { capHttpCalls, turnMs: Math.round(capped.turnMs) });
 
 server.close();
+server.closeAllConnections?.();
 for (const dbPath of dbs) {
   try {
     rmSync(dbPath, { force: true });

@@ -49,16 +49,22 @@ export function applyDistillResult(
   // A generic lesson is published to the shared library so the next project
   // starts already knowing it. The action diff, the teaching origin and the
   // workspace fingerprint ride along as provenance.
+  const generic = matchGenericLesson(result.antibody.symptom) !== null;
+  const projectScope =
+    result.antibody.project_scope ?? (generic ? '*' : (job.project_scope || '*'));
+
   store.insertShared(
     {
       ...result.antibody,
       repair_path: job.repair_path ?? [],
       origin: job.origin ?? '',
       env_fingerprint: opts.fingerprint ?? '',
+      project_scope: projectScope,
     },
     {
-      generic: matchGenericLesson(result.antibody.symptom) !== null,
+      generic,
       humanHint: Boolean(job.human_hint),
+      fromLlm: result.source === 'llm',
     },
   );
   // ROADMAP 2.2: a rule that was in context and still failed gets refined once

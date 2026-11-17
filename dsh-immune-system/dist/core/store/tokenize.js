@@ -9,7 +9,7 @@
  */
 const CJK = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/;
 /** Split text into candidate tokens, keeping paths and CJK runs intact. */
-export function tokenize(text, max = 12) {
+export function tokenize(text, max = 16) {
     const cleaned = text.replace(/[^\p{L}\p{N}_.\-/@]+/gu, ' ').trim();
     if (!cleaned)
         return [];
@@ -29,8 +29,8 @@ export function tokenize(text, max = 12) {
     }
     return out;
 }
-/** Overlapping 3-character windows of a CJK token. */
-function cjkGrams(token, size = 3, max = 8) {
+/** Overlapping 3-character windows of a CJK token, covering head AND tail of long runs. */
+function cjkGrams(token, size = 3, max = 14) {
     const chars = [...token];
     if (chars.length <= size)
         return [token];
@@ -42,17 +42,10 @@ function cjkGrams(token, size = 3, max = 8) {
 }
 /**
  * Two-character CJK windows from free text, for the LIKE fallback.
- *
- * The trigram tokenizer cannot index a 2-character term at all, so `MATCH`
- * silently returns nothing for it — yet many technical concepts in Chinese are
- * exactly two characters (跨域, 端口, 权限, 死锁, 超时, 缓存…).
- *
- * Windows are taken INSIDE every CJK run, not just from runs that happen to be
- * exactly two characters: in a natural sentence the word sits inside a longer
- * run ("怎么解决跨域" is one token), so a whole-token filter would miss it.
- * Only pure CJK is collected, which is why a LIKE wildcard can never sneak in.
+ * Windows are taken inside every CJK run so natural Chinese sentences still
+ * expose 2-character domain terms (跨域, 端口, 权限, 死锁, 备份…) without tail truncation.
  */
-export function cjkBigrams(text, max = 6) {
+export function cjkBigrams(text, max = 14) {
     const out = [];
     for (const token of tokenize(text)) {
         const chars = [...token];

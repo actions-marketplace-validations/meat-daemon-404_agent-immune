@@ -13,8 +13,12 @@
 import { redactOutbound, redactUrl } from './redact.js';
 /** Read configuration from the environment; null when no model is configured. */
 export function readLlmConfig(env = process.env) {
-    const endpoint = env.IMMUNE_LLM_BASE_URL?.trim();
-    const model = env.IMMUNE_LLM_MODEL?.trim();
+    const magpieModel = env.IMMUNE_MAGPIE_MODEL?.trim();
+    const ollamaModel = env.IMMUNE_OLLAMA_MODEL?.trim();
+    const endpoint = env.IMMUNE_LLM_BASE_URL?.trim() ||
+        (magpieModel ? (env.IMMUNE_MAGPIE_URL?.trim() || 'http://127.0.0.1:3425/v1') : '') ||
+        (ollamaModel ? 'http://127.0.0.1:11434/v1' : '');
+    const model = env.IMMUNE_LLM_MODEL?.trim() || magpieModel || ollamaModel || '';
     if (!endpoint || !model)
         return null;
     const timeout = Number(env.IMMUNE_LLM_TIMEOUT_MS ?? '');
@@ -24,10 +28,11 @@ export function readLlmConfig(env = process.env) {
     const temperature = Number(env.IMMUNE_LLM_TEMPERATURE ?? '');
     return {
         endpoint,
-        apiKey: env.IMMUNE_LLM_API_KEY?.trim() ?? '',
+        apiKey: env.IMMUNE_LLM_API_KEY?.trim() ?? env.IMMUNE_MAGPIE_API_KEY?.trim() ?? '',
         model,
-        allowPrivate: env.IMMUNE_ALLOW_PRIVATE_ENDPOINT === '1',
-        timeoutMs: Number.isFinite(timeout) && timeout > 0 ? timeout : 20_000,
+        allowPrivate: env.IMMUNE_ALLOW_PRIVATE_ENDPOINT === '1' ||
+            Boolean((magpieModel || ollamaModel) && !env.IMMUNE_LLM_BASE_URL?.trim()),
+        timeoutMs: Number.isFinite(timeout) && timeout > 0 ? timeout : 8_000,
         ...(Number.isFinite(maxTokens) && maxTokens > 0 ? { maxTokens } : {}),
         ...(Number.isFinite(temperature) && temperature >= 0 ? { temperature } : {}),
     };

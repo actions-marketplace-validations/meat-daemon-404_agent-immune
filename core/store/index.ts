@@ -8,12 +8,23 @@
 import { backup, type DatabaseSync } from 'node:sqlite';
 import { statSync } from 'node:fs';
 import { resolve } from 'node:path';
-import type { Antibody, AntibodyStatus, FailureSnapshot, NewAntibody } from '../types.js';
+import type {
+  Antibody,
+  AntibodyStatus,
+  FailureSnapshot,
+  NewAntibody,
+  WorkspaceProfile,
+} from '../types.js';
 import { resolveDbPath } from './path.js';
 import { openDatabase } from './open.js';
 import { GlobalStore, globalDbPathFor, isPromotable } from './global.js';
 import { rerank } from './rerank.js';
 import { bumpMeta, readMeta, setMeta } from './meta.js';
+import { deriveProjectScope, repairLibraryHygiene, type HygieneReport } from '../hygiene.js';
+import { recordDeliveryReceipt, summarizeReceipts, type ReceiptSummary } from '../receipts.js';
+import { summarizeTriage, type TriageSummary } from '../triage.js';
+import { buildModelImmunityReport } from '../model-intel.js';
+import type { MagpieTelemetryReport } from '../audit/magpie.js';
 
 /** meta-table key for the value metric: repeats the plugin measurably prevented. */
 export const SUPPRESSED_REPEATS_KEY = 'suppressed_repeats';
@@ -131,6 +142,10 @@ export interface MatchOptions {
    * same-tool affinity to the ranking.
    */
   toolName?: string;
+  /** Workspace directory for path affinity + project_scope isolation. */
+  cwd?: string;
+  /** Explicit project_scope override ('*' matches universal + all when unbounded). */
+  projectScope?: string;
 }
 
 export class ImmuneStore {
@@ -205,7 +220,9 @@ export class ImmuneStore {
         ? new Set(injectedPrescriptions(this.db, opts.sessionId))
         : null;
 
-    let own = findMatches(this.db, queryText, wide);
+    const scope = opts.projectScope ?? (opts.cwd ? deriveProjectScope(opts.cwd) : '*');
+
+    let own = findMatches(this.db, queryText, wide, scope);
     if (opts.excludeInjected && opts.sessionId) {
       const seen = new Set(this.injectedIds(opts.sessionId));
       own = own.filter((r) => !seen.has(r.id));
@@ -248,7 +265,7 @@ export class ImmuneStore {
       .map((r, i) => ({ r, i }))
       .sort((x, y) => aff(x.r) - aff(y.r) || x.i - y.i);
     const relevanceByRule = new Map(ordered.map((e, i) => [e.r, 1 / (1 + i)]));
-    const ranked = rerank(merged, { query: queryText, sharedSet, relevanceByRule }).slice(0, limit);
+    const ranked = rerank(merged, { query: queryText, cwd: opts.cwd, sharedSet, relevanceByRule }).slice(0, limit);
     const rankedOwn = ranked.filter((r) => !sharedSet.has(r));
     const rankedShared = ranked.filter((r) => sharedSet.has(r));
 
@@ -317,7 +334,17 @@ export class ImmuneStore {
       // Shared-library ids do not live in this database, so only own rules are
       // counted here; the shared library keeps its own totals.
       if (rankedOwn.length > 0) {
-        recordModelHits(this.db, resolveModel(this.db, opts.sessionId), rankedOwn.map((r) => r.id));
+        const model = resolveModel(this.db, opts.sessionId);
+        recordModelHits(this.db, model, rankedOwn.map((r) => r.id));
+        for (const r of rankedOwn) {
+          recordDeliveryReceipt(this.db, {
+            ruleId: r.id,
+            sessionId: opts.sessionId,
+            model,
+            projectScope: scope,
+            outcome: 'delivered',
+          });
+        }
       }
     }
 
@@ -429,9 +456,9 @@ export class ImmuneStore {
    * UI is not the same as delivering a rule to a model, and letting the two
    * share a counter would inflate the numbers that drive promotion and pruning.
    */
-  peek(queryText: string, limit = 50): Antibody[] {
+  peek(queryText: string, limit = 50, projectScope = '*'): Antibody[] {
     if (!queryText.trim()) return this.listAll(true).slice(0, limit);
-    return findMatches(this.db, queryText, limit);
+    return findMatches(this.db, queryText, limit, projectScope);
   }
 
   /** Shared-library rows, for the dashboard's second tab. */
@@ -554,7 +581,17 @@ export class ImmuneStore {
     // id that happened to be in context — otherwise a model looks worse than
     // it is on turns where an unrelated failure occurred.
     if (ctx?.sessionId && penalized.length > 0) {
-      recordModelFails(this.db, resolveModel(this.db, ctx.sessionId), penalized);
+      const model = resolveModel(this.db, ctx.sessionId);
+      recordModelFails(this.db, model, penalized);
+      for (const id of penalized) {
+        recordDeliveryReceipt(this.db, {
+          ruleId: id,
+          sessionId: ctx.sessionId,
+          model,
+          projectScope: ctx.projectScope ?? '*',
+          outcome: 'failed',
+        });
+      }
     }
     return retired;
   }
@@ -595,6 +632,7 @@ export class ImmuneStore {
   stats(): {
     active: number;
     retired: number;
+    quarantined: number;
     pendingFailures: number;
     sessions: number;
     jobsPending: number;
@@ -617,7 +655,8 @@ export class ImmuneStore {
     }
     return {
       active: count("SELECT COUNT(*) AS n FROM antibodies WHERE status = 'active'"),
-      retired: count("SELECT COUNT(*) AS n FROM antibodies WHERE status != 'active'"),
+      retired: count("SELECT COUNT(*) AS n FROM antibodies WHERE status = 'retired'"),
+      quarantined: count("SELECT COUNT(*) AS n FROM antibodies WHERE status = 'quarantined'"),
       pendingFailures: count('SELECT COUNT(*) AS n FROM pending_failures'),
       sessions: count('SELECT COUNT(*) AS n FROM session_turns'),
       jobsPending: count("SELECT COUNT(*) AS n FROM distill_jobs WHERE status = 'pending'"),
@@ -648,8 +687,77 @@ export class ImmuneStore {
     humanHint = '',
     repairPath: string[] = [],
     origin = '',
+    projectScope = '*',
+    cwd = '',
   ): number {
-    return enqueueJob(this.db, tool, failure, success, injected, humanHint, repairPath, origin);
+    return enqueueJob(
+      this.db,
+      tool,
+      failure,
+      success,
+      injected,
+      humanHint,
+      repairPath,
+      origin,
+      projectScope,
+      cwd,
+    );
+  }
+
+  // ---------------------------------------------------- v2 intelligence & hygiene
+  /** Run admission hygiene audit/repair across stored antibodies. */
+  repairHygiene(opts: { dryRun?: boolean } = {}): HygieneReport {
+    return repairLibraryHygiene(this.db, opts);
+  }
+
+  /** Read Red-3 Triage telemetry across failure buckets. */
+  triageSummary(limit = 20): TriageSummary {
+    return summarizeTriage(this.db, limit);
+  }
+
+  /** Verify and summarize SHA-256 chained delivery receipts. */
+  receiptSummary(limit = 500): ReceiptSummary {
+    return summarizeReceipts(this.db, limit);
+  }
+
+  /** Build per-model immunity matrix + adaptive escalation targets. */
+  modelImmunity(magpie?: MagpieTelemetryReport | null) {
+    return buildModelImmunityReport(this.db, magpie);
+  }
+
+  /** Register or update a discovered workspace profile. */
+  upsertWorkspaceProfile(profile: WorkspaceProfile): void {
+    this.db
+      .prepare(
+        `INSERT INTO workspace_profiles
+           (scope_id, name, root_path, stack, baseline, rules_count, source, last_scanned_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(scope_id) DO UPDATE SET
+           name = excluded.name,
+           root_path = excluded.root_path,
+           stack = excluded.stack,
+           baseline = excluded.baseline,
+           rules_count = excluded.rules_count,
+           source = excluded.source,
+           last_scanned_at = excluded.last_scanned_at`,
+      )
+      .run(
+        profile.scope_id,
+        profile.name,
+        profile.root_path,
+        profile.stack,
+        profile.baseline,
+        profile.rules_count,
+        profile.source,
+        profile.last_scanned_at,
+      );
+  }
+
+  /** List all discovered/ingested workspace profiles. */
+  listWorkspaceProfiles(): WorkspaceProfile[] {
+    return this.db
+      .prepare('SELECT * FROM workspace_profiles ORDER BY rules_count DESC, name ASC')
+      .all() as unknown as WorkspaceProfile[];
   }
 
   claimJob(): DistillJob | null {

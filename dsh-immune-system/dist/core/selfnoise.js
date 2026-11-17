@@ -26,8 +26,23 @@ const SELF_PACKAGE_NAMES = new Set(['dsh-immune-system', 'dsh-plugin-immune', 'a
 const MAX_UPWARD = 8;
 /** Cap on paths pulled out of one trace. */
 const MAX_PATHS = 6;
+/** Reject UNC/network shares, URLs, redacted placeholders, and illegal filename chars before any fs call. */
+function isSafeLocalFsCandidate(candidate) {
+    const s = candidate.trim();
+    if (s.length < 3)
+        return false;
+    if (/^(?:\/\/|\\\\)/.test(s))
+        return false; // UNC / protocol-relative URL (prevents Windows SMB hangs!)
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(s))
+        return false; // http://, https://, file://, etc.
+    if (/[<>"|?*]/.test(s))
+        return false; // invalid Windows fs chars & <redacted> tokens
+    return true;
+}
 /** `realpath` that never throws (missing files are normal here). */
 function safeRealpath(path) {
+    if (!isSafeLocalFsCandidate(path))
+        return null;
     try {
         return realpathSync(path);
     }
@@ -70,8 +85,12 @@ function parentDir(path) {
 }
 /** Nearest directory at or above `start` that holds a package.json. */
 function findPackageRoot(start) {
+    if (!isSafeLocalFsCandidate(start))
+        return null;
     let dir = start;
     for (let i = 0; i < MAX_UPWARD; i += 1) {
+        if (!isSafeLocalFsCandidate(dir))
+            return null;
         if (existsSync(resolve(dir, 'package.json')))
             return dir;
         const parent = parentDir(dir);
@@ -122,7 +141,7 @@ function unescapeTraceString(raw) {
 function collectCommandPaths(command, found) {
     const pushCandidate = (candidate) => {
         const trimmed = candidate.replace(/^['"]+|['"]+$/g, '');
-        if (trimmed.length < 3 || /^https?:\/\//i.test(trimmed))
+        if (!isSafeLocalFsCandidate(trimmed))
             return;
         if (/[\\/]/.test(trimmed) && !found.includes(trimmed)) {
             found.push(trimmed);

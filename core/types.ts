@@ -1,12 +1,36 @@
 /**
- * Shared types for the immune system.
+ * Shared types for the immune system (v2).
  *
- * These are host-agnostic: `core/` never imports a ZCode or DSH API, so both
- * adapters can reuse them unchanged.
+ * Host-agnostic domain contracts: `core/` never imports ZCode, DSH, Claude Code,
+ * Codex, or Antigravity host packages, so every adapter shares one engine.
  */
 
-/** Lifecycle of an antibody. Retired antibodies are kept for audit but never injected. */
-export type AntibodyStatus = 'active' | 'retired';
+/** Lifecycle of an antibody. Only `active` rules are injected into context. */
+export type AntibodyStatus = 'active' | 'retired' | 'quarantined';
+
+/** Structural quality tier assigned by the admission & hygiene gate. */
+export type RuleQualityGrade = 'advice' | 'tactic' | 'quarantined';
+
+/** Causal failure taxonomy produced by deterministic or LLM distillation. */
+export type RootCauseType =
+  | 'missing_prerequisite'
+  | 'env_or_path'
+  | 'api_or_schema_drift'
+  | 'stale_read'
+  | 'config_mismatch'
+  | 'command_syntax'
+  | 'flake'
+  | 'other'
+  | '';
+
+/** Red-3 Triage buckets (from daily-patrol methodology). */
+export type TriageBucket =
+  | 'flake_or_transient'
+  | 'wrong_scope_leak'
+  | 'stale_or_bad_advice'
+  | 'ignored_by_agent'
+  | 'coverage_blindspot'
+  | '';
 
 /** A pitfall-avoidance rule distilled from one failed-then-fixed episode. */
 export interface Antibody {
@@ -24,34 +48,34 @@ export interface Antibody {
   status: AntibodyStatus;
   /** Which tool the episode came from (e.g. Bash, Edit), for diagnostics. */
   tool_name: string | null;
-  /**
-   * The write actions that repaired the problem when this rule was learned
-   * (the action diff, newest last, capped at three). Provenance: it shows HOW
-   * the lesson was learned. Empty for seeded and older rules.
-   */
+  /** Write actions that repaired the problem when this rule was learned (capped at 3). */
   repair_path: string[];
-  /**
-   * Optional. Who wrote the current prescription: '' (older or captured),
-   * 'rule', 'llm' or 'human'. `immune rewrite` replaces command dumps and
-   * records 'llm', so an operator can tell rewritten wording from evidence.
-   */
+  /** Provenance of current prescription wording: '', 'rule', 'llm', 'host_llm', 'human'. */
   prescription_source?: string;
-  /**
-   * Optional. ROADMAP 1.4b: what taught the lesson — '' (self-repair),
-   * 'user_correction' (a human hint closed the episode). Provenance only;
-   * never a behavior switch.
-   */
+  /** Teaching origin: '' (self-repair), 'user_correction', 'self_healing_experiment', 'disk_corpus'. */
   origin?: string;
-  /** ROADMAP 2.2: the rule this refined child was mutated from (lineage). */
+  /** Mutation lineage: parent antibody id when refined from post-injection failure. */
   parent_id?: number | null;
-  /** ROADMAP 2.2: when the last evidence-based trigger refinement landed. */
+  /** Timestamp of last evidence-based trigger refinement. */
   mutated_at?: number;
-  /** ROADMAP 3.1: which workspace taught the rule (lockfile content hash). */
+  /** Workspace lockfile/runtime fingerprint hash. */
   env_fingerprint?: string;
-  /** ROADMAP 3.1: nonzero when the workspace changed and the rule awaits re-validation. */
+  /** Nonzero when the workspace env changed and the rule awaits re-validation. */
   probation_at?: number;
-  /** ROADMAP 3.1: why a rule left the active set when it was not anti-rot. */
+  /** Why a rule left active set when not anti-rot. */
   retire_reason?: string;
+  /** Isolation scope: '*' = universal across all projects; 'proj:<slug>:<hash>' = workspace-locked. */
+  project_scope?: string;
+  /** Admission quality tier: 'advice' (transferable), 'tactic' (scoped), 'quarantined' (echo/noise). */
+  quality_grade?: RuleQualityGrade;
+  /** 0..100 multi-dimension rubric score (specificity, actionability, portability, evidence, safety). */
+  rubric_score?: number;
+  /** Causal root cause category. */
+  root_cause?: RootCauseType;
+  /** Last Red-3 Triage classification when evaluated/penalized. */
+  triage_bucket?: TriageBucket;
+  /** Count of times a valid rule was delivered but ignored by the agent. */
+  ignored_count?: number;
   created_at: number;
   updated_at: number;
 }
@@ -65,6 +89,12 @@ export type NewAntibody = Pick<
   repair_path?: string[];
   origin?: string;
   env_fingerprint?: string;
+  prescription_source?: string;
+  project_scope?: string;
+  quality_grade?: RuleQualityGrade;
+  rubric_score?: number;
+  root_cause?: RootCauseType;
+  status?: AntibodyStatus;
 };
 
 /** One failed tool call, captured so a later success can be paired with it. */
@@ -75,21 +105,9 @@ export interface FailureSnapshot {
   trace: string;
   /** Antibody ids injected before this failure, so they can be penalised. */
   injected_ids: number[];
-  /**
-   * What the human said in the turn AFTER the failure.
-   *
-   * Real sessions often read: tool fails → agent asks → the human explains
-   * ("这个仓库用 pnpm, 不要用 npm") → the next call works. That sentence is the
-   * best distillation input available, and it is what makes the resulting
-   * prescription better than the model's own guess at a retry.
-   */
+  /** What the human said in the turn AFTER the failure. */
   human_hint: string;
-  /**
-   * Non-probe write actions recorded between the failure and the closing
-   * success (the EMG action-diff): what actually repaired the problem, e.g.
-   * ["Edit tsconfig.json", "Write vite.config.ts"]. Empty when the fix was a
-   * plain retry.
-   */
+  /** Non-probe write actions recorded between the failure and the closing success. */
   repair_path: string[];
   created_at: number;
 }
@@ -109,13 +127,46 @@ export type DistillResult =
   | {
       ok: true;
       antibody: NewAntibody;
-      /**
-       * Which path produced the rule. `rule` on a configured-LLM run means the
-       * model call failed and the loop degraded silently — the runtime
-       * counter is the only way an operator learns that.
-       */
+      /** Which path produced the rule. */
       source?: 'llm' | 'rule';
       /** Why the LLM path did not produce the rule, when it did not. */
       degradedReason?: string;
     }
   | { ok: false; reason: 'skip' | 'invalid' | 'error'; detail?: string };
+
+/** Verifiable delivery receipt (inspired by Beacon usage receipts). */
+export interface DeliveryReceipt {
+  id: number;
+  rule_id: number;
+  session_id: string;
+  model: string;
+  project_scope: string;
+  outcome: 'delivered' | 'held' | 'ignored' | 'failed' | 'wrong_scope';
+  tokens_est: number;
+  digest: string;
+  created_at: number;
+}
+
+/** Red-3 Triage event log row. */
+export interface TriageEvent {
+  id: number;
+  rule_id: number | null;
+  session_id: string;
+  tool_name: string;
+  bucket: Exclude<TriageBucket, ''>;
+  reason: string;
+  action_taken: string;
+  created_at: number;
+}
+
+/** Discovered workspace profile on local disk. */
+export interface WorkspaceProfile {
+  scope_id: string;
+  name: string;
+  root_path: string;
+  stack: string;
+  baseline: string;
+  rules_count: number;
+  source: string;
+  last_scanned_at: number;
+}

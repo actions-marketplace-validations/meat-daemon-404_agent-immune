@@ -1,3 +1,4 @@
+import { lexicalTriggerAffinity } from '../retrieval.js';
 /** Path-ish tokens in the query: names with an extension, or dotted dirs. */
 function queryPathTokens(query) {
     const tokens = new Set();
@@ -21,7 +22,6 @@ function hasPathAffinity(trigger, tokens) {
     return tokens.some((token) => {
         if (haystack.includes(token))
             return true;
-        // A bare basename still counts: "vite.config.ts" inside a long path.
         const base = token.split('/').pop();
         return Boolean(base && base.length >= 5 && haystack.includes(base));
     });
@@ -33,10 +33,6 @@ export function timeDecay(ageMs) {
 }
 /**
  * Re-rank candidates in memory.
- *
- * Base score is log-scaled hit count (so a proven rule beats an unused one of
- * equal relevance without letting a single popular rule dominate), multiplied
- * by path affinity, shared-library discount, and time decay.
  */
 export function rerank(candidates, opts) {
     const tokens = queryPathTokens(opts.query);
@@ -49,6 +45,16 @@ export function rerank(candidates, opts) {
             : 1 + Math.log1p(Math.max(0, antibody.hit_count));
         if (hasPathAffinity(antibody.trigger_pattern, tokens))
             score *= 1.5;
+        // Reward concrete trigger/symptom lexical+concept overlap over short-field BM25 rank ties.
+        const lex = lexicalTriggerAffinity(opts.query, antibody);
+        if (lex > 0)
+            score *= 1 + Math.min(4.5, lex * 0.65);
+        // Mild quality boost: generalized advice outranks raw command tactics on ties.
+        const rubric = antibody.rubric_score ?? 70;
+        if (rubric >= 85)
+            score *= 1.12;
+        else if (rubric < 50)
+            score *= 0.7;
         const isShared = opts.sharedSet ? opts.sharedSet.has(antibody) : Boolean(sharedIds?.has(antibody.id));
         if (isShared)
             score *= 0.85;
