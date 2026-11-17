@@ -31,10 +31,17 @@ test('the dist hooks directory has every script the connect table wires', () => 
     for (const [event, groups] of Object.entries(table)) {
       const hook = 'hooks' in groups[0] ? groups[0].hooks[0] : groups[0];
       assert.ok(groups.length === 1 && hook, `${event}: one entry, one handler`);
-      const script = hook.command.match(/"(.+)"/)?.[1];
-      assert.ok(script, `command must carry a quoted script path: ${hook.command}`);
+      const expectUnquoted = host.dialect === 'antigravity' && !/\s/.test(SCRIPT_DIR);
+      const script = expectUnquoted
+        ? hook.command.replace(/^node\s+/, '')
+        : hook.command.match(/"(.+)"/)?.[1];
+      assert.ok(script, `command must resolve to a script path: ${hook.command}`);
       assert.ok(existsSync(script), `script must exist: ${script}`);
-      assert.match(hook.command, /^node "/, 'command runs node with a quoted path');
+      if (expectUnquoted) {
+        assert.match(hook.command, /^node [^"]/, 'antigravity space-free path stays unquoted');
+      } else {
+        assert.match(hook.command, /^node "/, 'shell hosts run node with a quoted path');
+      }
       assert.ok(Number.isInteger(hook.timeout) && hook.timeout > 0, `${event}: timeout is positive seconds`);
     }
     if (!host.includesFailureHook) {
@@ -367,6 +374,11 @@ test('connect antigravity writes hybrid flat/grouped hooks under "dsh-immune-sys
   assert.ok(parsed['other-hook'], 'unrelated named hooks survive');
   const pack = parsed['dsh-immune-system'];
   assert.equal(pack.SessionStart[0].type, 'command', 'SessionStart is a flat handler array');
+  assert.doesNotMatch(
+    pack.SessionStart[0].command,
+    /"/,
+    'antigravity hook commands must stay unquoted when vendor path has no spaces',
+  );
   assert.equal(pack.PreInvocation[0].type, 'command', 'PreInvocation maps from UserPromptSubmit and is flat');
   assert.equal(pack.Stop[0].type, 'command', 'Stop is flat');
   assert.match(pack.PreToolUse[0].matcher, /run_command/, 'PreToolUse matcher includes run_command');

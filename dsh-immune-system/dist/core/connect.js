@@ -159,9 +159,14 @@ export function defaultScriptDir() {
 function configPathOf(host, home) {
     return join(home, host.relativeConfigPath);
 }
-function commandFor(scriptDir, script) {
+function commandFor(scriptDir, script, unquoted = false) {
     // Forward slashes keep the JSON readable and work for node on every platform.
-    return `node "${join(scriptDir, script).replace(/\\/g, '/')}"`;
+    // Antigravity splits hook commands directly without shell quote stripping, so
+    // keep space-free paths unquoted there instead of passing literal quotes to node.
+    const full = join(scriptDir, script).replace(/\\/g, '/');
+    if (unquoted && !/\s/.test(full))
+        return `node ${full}`;
+    return `node "${full}"`;
 }
 function eventTableOf(host, config) {
     if (host.eventsKey === null)
@@ -198,7 +203,7 @@ export function buildEventTable(host, scriptDir) {
         const eventName = host.dialect === 'antigravity' ? (spec.antigravityEvent ?? spec.event) : spec.event;
         const handler = {
             type: 'command',
-            command: commandFor(scriptDir, spec.script),
+            command: commandFor(scriptDir, spec.script, host.dialect === 'antigravity'),
             timeout: spec.timeout,
         };
         if (host.dialect === 'antigravity' && spec.antigravityFlat) {

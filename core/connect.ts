@@ -265,9 +265,13 @@ function configPathOf(host: HostDefinition, home: string): string {
   return join(home, host.relativeConfigPath);
 }
 
-function commandFor(scriptDir: string, script: string): string {
+function commandFor(scriptDir: string, script: string, unquoted = false): string {
   // Forward slashes keep the JSON readable and work for node on every platform.
-  return `node "${join(scriptDir, script).replace(/\\/g, '/')}"`;
+  // Antigravity splits hook commands directly without shell quote stripping, so
+  // keep space-free paths unquoted there instead of passing literal quotes to node.
+  const full = join(scriptDir, script).replace(/\\/g, '/');
+  if (unquoted && !/\s/.test(full)) return `node ${full}`;
+  return `node "${full}"`;
 }
 
 function eventTableOf(host: HostDefinition, config: Record<string, unknown>): Record<string, HookEventEntry[]> {
@@ -309,7 +313,7 @@ export function buildEventTable(host: HostDefinition, scriptDir: string): Record
     const eventName = host.dialect === 'antigravity' ? (spec.antigravityEvent ?? spec.event) : spec.event;
     const handler: HookHandler = {
       type: 'command',
-      command: commandFor(scriptDir, spec.script),
+      command: commandFor(scriptDir, spec.script, host.dialect === 'antigravity'),
       timeout: spec.timeout,
     };
     if (host.dialect === 'antigravity' && spec.antigravityFlat) {
