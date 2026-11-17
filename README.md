@@ -350,9 +350,9 @@ Different jobs, mostly: deja-vu indexes everything you did and searches it; this
 
 ---
 
-## What changed in v2.0 (plain version)
+## What changed in v2.0
 
-Running v1 in real production databases taught us an uncomfortable truth: blindly saving every "failed → fixed" pair fills the library with junk. On real production machines, **70.4%** of ZCode rules and **100%** of DSH rules had decayed into one-off file paths (`Write: D:\...`), read-only probes, or chat fragments that leaked across unrelated repositories.
+Running v1 in real production databases taught us an uncomfortable truth: blindly saving every "failed → fixed" pair fills the library with junk. On real production machines, **70.4%** of ZCode rules and **100%** of DSH rules had decayed into one-off file paths (`Write: <path>`), read-only probes, or chat fragments that leaked across unrelated repositories.
 
 So v2.0 rebuilt the internals around four plain rules: **check quality at the door, isolate by workspace, blame the right cause, and never bury a good rule.**
 
@@ -371,11 +371,10 @@ So v2.0 rebuilt the internals around four plain rules: **check quality at the do
 
 - **Zero runtime dependencies**: Both [package.json](package.json) and [dsh-immune-system/package.json](dsh-immune-system/package.json) have empty `dependencies`. Only **Node.js `^22.19.0 || >=24.0.0`** (`node:sqlite`, `node:zlib`) is needed.
 - **Optional environment variables**: Works out of the box with zero configuration. To hook up cloud/local LLMs, Magpie (`127.0.0.1:3425/v1`), Ollama (`127.0.0.1:11434/v1`), guard modes, or doc auto-sync, copy/check [`.env.example`](.env.example).
-- **Reproduce everything**: `npm run build && npm test` (`245/245` passing), plus `node scripts/bench-ablation.mjs` for live DB hygiene, `D:\` ingestion, and counterfactual replay. Full write-ups live in [docs/ARCHITECTURE-V2.md](docs/ARCHITECTURE-V2.md) and [docs/EVALUATION.md](docs/EVALUATION.md).
+- **Reproduce everything**: `npm run build && npm test` (`245/245` passing), plus `node scripts/bench-ablation.mjs` for live DB hygiene, workspace ingestion, and counterfactual replay. Full write-ups live in [docs/ARCHITECTURE-V2.md](docs/ARCHITECTURE-V2.md) and [docs/EVALUATION.md](docs/EVALUATION.md).
 
-## Author & How AI Is Used
+## How AI Is Used in This Project
 
-- **Author**: Sun Zihang (孙梓航) — Yunnan University, Optoelectronic Information Science & Engineering (9th Chuanzhi Cup AI Challenge — Individual Track).
 - **AI-assisted development without regressions**: Across 180+ commits, [AGENTS.md](AGENTS.md) keeps 42 hard architectural invariants (structured exit codes over regex heuristics, no arbitrary regex deny guards, strict hook stdout schemas) enforced by automated `check-versions`, `verify-dist-integrity`, and 245 tests.
 - **Prompts inside the product ([core/prompts.ts](core/prompts.ts), [core/rewrite.ts](core/rewrite.ts))**: Strict JSON extraction with `repair actions:` edit diffs and `allowed.has(id)` batch validation (`DISTILL_PROMPT` / `BATCH_DISTILL_PROMPT`), automatic 1-shot rubric self-reflection when a first draft scores `< 68` or fails hygiene (`CRITIQUE_DISTILL_PROMPT`), and command-fact-first dump rewriting via cloud/local API or host MCP (`immune_rewrite_candidates` / `immune_rewrite_apply`).
 

@@ -282,53 +282,45 @@ immune sync-doc --out CLAUDE.md --min-hits 5
 
 ---
 
-## v2.0 改了什么（说人话版）
+## v2.0 架构升级
 
-老版本跑了一段时间真实库之后，我们发现一个很现实的问题：**光把“失败→成功”原样存下来太天真了。** 生产库里一大半规则其实是 `Write: D:\某个具体文件`、`pwsh` 查端口，甚至模型随口回的碎片——既没法跨项目复用，还经常串台去误导别的仓库（ZCode 实库里 70.4%、DSH 实库里 100% 都是这种垃圾）。
+在真实多宿主仓库的长期运行中，我们发现单纯记录“失败 → 成功”的原始配对会产生大量噪声规则（如绑定特定本地路径的文件写入、一次性环境探测命令或孤立报错碎片），不仅无法跨项目复用，还容易在不同仓库间造成误导。
 
-所以 v2.0 把底层彻底重写了一遍，一句话总结就是：**进门先体检、串门分项目、犯错先查原因、老规则不冤死。**
+为此，v2.0 对底层引擎进行了系统性重构，核心围绕**统一运行时、入库质检、因果分诊、高精度检索与本地知识沉淀**五个方面展开：
 
 <div align="center">
   <img src="docs/fig-arch-v2.png" alt="v2.0 系统架构图" width="720">
   <img src="docs/fig-benchmarks-v2.png" alt="v2.0 实测对比图" width="720">
 </div>
 
-* **统一一套大脑管五个宿主（`core/runtime.ts`）**：以前 ZCode 钩子和 DSH 插件各写一套状态机，改一个 bug 漏另一边；现在合并成一个内核，预算严格卡死在 `1–60` 秒，绝不卡住正常写代码。
-* **进门先打分，脏东西关小黑屋（`core/hygiene.ts` + `core/rubric.ts`）**：每条规则按 5 个维度满分 100 体检，同时把本机路径脱敏成 `<repo>`/`<path>`、打上项目指纹。真能通用的才放进共享库；只属于当前项目的锁在本仓；那些路径转储、探测指令和废话直接放进隔离区。ZCode 实库活跃垃圾从 `70.4%` 降到 `0%`，平均分从 `68.9` 涨到 `94.4`。
-* **注入了还失败？先分清锅算谁的（`core/triage.ts` + `core/receipts.ts`）**：老版本只要注入完报错就扣好规则的分，结果好规则也被误杀。现在红三分诊先分五种情况：断网超时算天气不好（不怪规则）；串错仓库立刻隔离；模型自己忽略了好规则就给它挂上 `[CRITICAL · ignored N×]` 大红标强提醒；只有真的误导了才淘汰。每次投递都记一笔带 SHA-256 防篡改的回执账本，省没省 Token 清清楚楚。
-* **查得更准、错前提前拦（`core/retrieval.ts` + `core/relevance.ts`）**：修掉了两字中文词（像“跨域”“权限”）查不到、长代码 diff 把结尾 `error=` 截断、连字符词根拆不开的坑，再配上 19 组中英开发黑话同义词。42 道种子题首位命中率从 `69%` 拉到 **`95%`**；回放近 3 万次真实历史，不靠先验也能提前拦住 **`88.5%`** 的重复犯错，带上本地项目先验后能拦住 **`96.9%`**。
-* **把电脑里现成的资料用起来（`core/disk-ingest.ts` + `core/audit/magpie.ts`）**：一键扫整块磁盘里的项目和 `SKILL.md`（`D:\` 3 秒扫 184 个项目挖出 937 条规则），也能只读读取本机 Magpie 多模型网关日志（11,165 次请求、70 个模型、只看流量绝不碰密钥），跑一趟 `immune models` 就知道每款模型在哪个坑最听劝、哪些坑总无视。
+* **统一运行时与预算控制（`core/runtime.ts`）**：将多宿主状态机收拢为单一内核，统一处理事件映射、会话隔离与 `1–60` 秒蒸馏预算钳位，避免钩子阻塞正常开发流程。
+* **五维质量门禁与路径脱敏（`core/hygiene.ts` + `core/rubric.ts`）**：每条规则入库前均需通过 5 维评分（满分 100），自动将本地路径脱敏为 `<repo>`/`<path>` 并绑定项目指纹；通用规则进入共享库，项目级规则锁在本仓，低质或一次性探测碎片自动隔离。
+* **Red-3 五桶因果分诊与回执账本（`core/triage.ts` + `core/receipts.ts`）**：区分网络超时、跨仓串台、模型忽略提醒与规则自身误导，避免健康规则因外部偶发错误被误杀；对模型持续忽略的高价值规则自动升级为 `[CRITICAL · ignored N×]` 强提醒，并通过 SHA-256 防篡改回执链记录每次投递结果。
+* **双语检索增强与反事实拦截（`core/retrieval.ts` + `core/relevance.ts`）**：补齐短词检索、长 diff 截断保护与词根切分，结合中英开发同义词图谱提升首条命中率与跨会话重复错误拦截率。
+* **本地工程知识沉淀与模型分析（`core/disk-ingest.ts` + `core/audit/magpie.ts`）**：支持对本地工程与 `SKILL.md` 进行脱敏提取，并支持只读解析本地网关流量以统计不同模型对规则的采纳与忽略分布（全程不接触敏感凭证）。
 
 ---
 
-## 环境要求、配置与怎么跑
+## 环境要求与配置
 
-* **零第三方依赖**：[package.json](package.json) 里的 `dependencies` 是空的——装完不拉任何乱七八糟的 npm 包，只需要 **Node.js `^22.19.0 || >=24.0.0`**（只用它自带的 `node:sqlite` 和 `node:zlib`）。
-* **不用配 Key 也能直接跑**：默认用本地数据库 + 确定性引擎开箱即用。如果你想接大模型蒸馏、接本地网关（Magpie / Ollama），或者开启危险命令拦截守卫，照着根目录的 [`.env.example`](.env.example) 改几个环境变量就行：
-  * 云端大模型：`IMMUNE_LLM_BASE_URL`、`IMMUNE_LLM_MODEL`、`IMMUNE_LLM_API_KEY`（自带隐私脱敏和私网 SSRF 拦截）
-  * 本地模型 / 网关：`IMMUNE_MAGPIE_MODEL`（本机 `127.0.0.1:3425/v1`）或 `IMMUNE_OLLAMA_MODEL`（本机 `127.0.0.1:11434/v1`）
-  * 蒸馏预算 & 护卫：`IMMUNE_DISTILL_BUDGET_MS`（`1000–60000` 毫秒）、`IMMUNE_GUARD`（`off` / `warn` / `deny`）、`IMMUNE_SYNC_DOC`（自动把学到的规则写进 `AGENTS.md`）
-* **常用复现命令**：
-  * `npx dsh-immune-system@latest demo`（内存跑一圈最直观）
-  * `npm run build && npm test`（编完跑 245 项全量单测）
-  * `node scripts/bench-ablation.mjs`（实库治污 + 全盘扫描 + 反事实回放一键验）
+* **零第三方运行时依赖**：[package.json](package.json) 的 `dependencies` 为空，仅依赖 **Node.js `^22.19.0 || >=24.0.0`** 原生内置模块（`node:sqlite`、`node:zlib`）。
+* **开箱即用与可选配置**：默认启用本地数据库与确定性引擎。如需接入云端/本地大模型蒸馏、危险命令拦截或文档自动同步，可参考根目录的 [`.env.example`](.env.example)：
+  * 云端大模型：`IMMUNE_LLM_BASE_URL`、`IMMUNE_LLM_MODEL`、`IMMUNE_LLM_API_KEY`（内置路径脱敏与私网 SSRF 拦截）
+  * 本地模型网关：`IMMUNE_MAGPIE_MODEL`（`127.0.0.1:3425/v1`）或 `IMMUNE_OLLAMA_MODEL`（`127.0.0.1:11434/v1`）
+  * 预算与护卫：`IMMUNE_DISTILL_BUDGET_MS`（`1000–60000` 毫秒）、`IMMUNE_GUARD`（`off` / `warn` / `deny`）、`IMMUNE_SYNC_DOC`
+* **常用验证命令**：
+  * `npx dsh-immune-system@latest demo`（纯内存端到端演示）
+  * `npm run build && npm test`（构建并运行 245 项单元测试）
+  * `node scripts/bench-ablation.mjs`（运行脱敏消融与反事实回放基准）
 
-更多技术细节和评测完整数据见 [架构文档 docs/ARCHITECTURE-V2.md](docs/ARCHITECTURE-V2.md) 与 [评测报告 docs/EVALUATION.md](docs/EVALUATION.md)。
+更多架构与评测细节见 [架构文档 docs/ARCHITECTURE-V2.md](docs/ARCHITECTURE-V2.md) 与 [评测报告 docs/EVALUATION.md](docs/EVALUATION.md)。
 
 ---
 
-## 作者与参赛信息
+## 仓库与工程规范
 
-* **作者**：孙梓航（云南大学 · 光电信息科学与工程）
-* **赛事**：第九届传智杯 AI 大模型创新应用挑战赛（个人赛）
-* **仓库**：`https://github.com/meat-daemon-404/agent-immune`（npm 包名 `dsh-immune-system`）
+* **开源仓库**：`https://github.com/meat-daemon-404/agent-immune`（npm 包名 `dsh-immune-system`）
+* **工程约束**：[AGENTS.md](AGENTS.md) 记录了核心架构不变量（如退出码优先判定、禁止将不可信输出编译为正则拦截规则、严格的钩子 JSON 输出契约），并由自动化版本检查、构建完整性校验与 245 项测试共同保障。
+* **提示词与自检机制（[core/prompts.ts](core/prompts.ts)）**：采用严格 JSON 抽取、基于真实文件修改差异的修复归纳、低分草稿单轮自省重写（`< 68` 分触发 `CRITIQUE_DISTILL_PROMPT`），以及面向无 API Key 宿主的 MCP 规则改写接口（`immune_rewrite_candidates` / `immune_rewrite_apply`）。
 
-## 写这个项目时怎么用 AI（以及系统里怎么用 Prompt）
-
-1. **人机协同写代码怎么不翻车**：180 多次提交全靠人定方向 + AI 写实现，但 AI 改着改着最容易忘掉以前踩过的坑。所以我把 **42 条工程铁律**全写进了 [AGENTS.md](AGENTS.md)（比如“千万别简化退出码判断”“绝对不要把学出来的规律编成阻止运行的正则”），配上每次改动必跑的 `245` 个自动化测试和完整性门禁，让 AI 自己查自己。真实迭代里也是直接拿生产痛点喂给它，比如「*拿本机真实库、全盘历史和网关日志跑消融，把垃圾规则清零、把 R@1 拉上去*」，每一步都有数据打分。
-2. **产品内部怎么用 Prompt 调教模型（见 [core/prompts.ts](core/prompts.ts)）**：
-   * **结构化提炼（`DISTILL_PROMPT` / `BATCH_DISTILL_PROMPT`）**：逼着模型只交干净 JSON（不许瞎写废话，最多 8 个触发词 + 35 字原因 + 60 字做法），把两次调用之间实际改了哪几个文件的 diff（`repair actions:`）喂给它，免得模型只会复读“再运行一次试试”；遇到断网、502 或一次手滑打错字直接交 `{"skip": true}` 跳过。
-   * **写得太差让模型自己重写一遍（`CRITIQUE_DISTILL_PROMPT`）**：模型第一次吐出来的草稿先过一遍质检器；要是分数低于 `68` 或者漏了本机绝对路径，系统会把“具体哪条扣分了”直接甩回给模型让它自省重写一轮，哪版分高留哪版。
-   * **没 API Key 就找宿主大模型帮忙（MCP Rewrite）**：通过 `immune_rewrite_candidates` 把以前留下的难懂命令转储交给你正在对话的宿主 AI 改写成一句人话（有条前提：只认当时修好问题的真实命令事实，不看早过期了的描述，实在看不懂就跳过绝不瞎编）。
-
-那些做过的决定、以及试过又撤回的改动，都写在 [AGENTS.md](AGENTS.md) 里。
+完整的设计取舍与历史变更记录见 [AGENTS.md](AGENTS.md)。
