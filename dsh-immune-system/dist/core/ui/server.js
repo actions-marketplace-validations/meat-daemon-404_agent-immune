@@ -18,11 +18,12 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { ImmuneStore } from '../store/index.js';
 import { renderPage } from './page.js';
 import { resolveLocale } from '../i18n.js';
-import { applyAction, dashboardStats, evolutionStats, readState, readWorkspaces, resolveBudgetMs, runHygieneAction, } from './query.js';
+import { applyAction, evolutionStats, readState, readWorkspaces, resolveBudgetMs, runHygieneAction, } from './query.js';
 import { exportLibrary, importLibrary } from '../sync.js';
 import { renderSkillMarkdown } from '../export.js';
 import { shareSanityCheck } from '../share-guard.js';
 import { scanMagpieTelemetry } from '../audit/magpie.js';
+import { explainRecall } from '../explain.js';
 export async function startUiServer(options = {}) {
     const store = new ImmuneStore(options.dbPath ? { dbPath: options.dbPath } : {});
     const token = randomBytes(24).toString('hex');
@@ -42,13 +43,12 @@ export async function startUiServer(options = {}) {
         const b = Buffer.from(token);
         return a.length === b.length && timingSafeEqual(a, b);
     }
-    function stats() {
-        return dashboardStats(store);
-    }
     function handle(req, res) {
         const url = new URL(req.url ?? '/', 'http://127.0.0.1');
         const path = url.pathname;
         if (path === '/' || path === '/index.html') {
+            const langParam = url.searchParams.get('lang');
+            const pageLocale = langParam === 'en' ? 'en' : langParam === 'zh-CN' ? 'zh-CN' : locale;
             res.writeHead(200, {
                 'content-type': 'text/html; charset=utf-8',
                 'cache-control': 'no-store',
@@ -58,7 +58,7 @@ export async function startUiServer(options = {}) {
             });
             res.end(renderPage({
                 token,
-                locale,
+                locale: pageLocale,
                 dbPath: store.dbPath,
                 budgetMs: resolveBudgetMs(),
                 evolution: evolutionStats(store),
@@ -133,6 +133,14 @@ export async function startUiServer(options = {}) {
         }
         if (path === '/api/models' && req.method === 'GET') {
             sendJson(res, 200, store.modelImmunity(scanMagpieTelemetry()));
+            return;
+        }
+        if (path === '/api/explain' && req.method === 'GET') {
+            const query = url.searchParams.get('q') ?? '';
+            const rawLimit = Number(url.searchParams.get('limit') ?? '5');
+            const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(10, rawLimit) : 5;
+            const toolName = url.searchParams.get('tool') ?? undefined;
+            sendJson(res, 200, explainRecall(store, query, { limit, toolName }));
             return;
         }
         if (path === '/api/hygiene' && req.method === 'POST') {

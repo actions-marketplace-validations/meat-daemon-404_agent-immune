@@ -63,6 +63,20 @@ const QUESTIONS = [
   ['patrol-triage', 'npm publish prepare', '工作区还有别人在改的半成品，直接 npm publish 把坏文件发上去了'],
   ['patrol-triage', 'LLM stub 评分', '离线桩总返回固定高分掩盖评分逻辑坏掉怎么校准'],
   ['patrol-triage', '跨项目 污染 project_scope', '包含特定机器绝对路径的规则串联污染别的仓库记忆'],
+  // rust-cargo
+  ['rust-cargo', 'borrow checker E0502', 'Rust 同时可变和不可变借用冲突报 E0502 怎么修'],
+  ['rust-cargo', 'tokio async 阻塞', '在 tokio async 函数里直接调同步文件读写把运行时卡死了'],
+  ['rust-cargo', 'serde Serialize Deserialize', 'Rust 写了 derive Serialize 却提示找不到宏'],
+  ['rust-cargo', 'cargo check 快速类型检查', '每次改代码跑完整 cargo build 编译链接太慢了'],
+  ['rust-cargo', 'cargo workspace 多成员包', 'Cargo workspace 多包仓库怎么只跑某一个子包的测试'],
+  ['rust-cargo', 'cargo clippy -D warnings', '本地测试过了但 CI 上 clippy -D warnings 报错挂掉'],
+  // go-mod
+  ['go-mod', 'missing go.sum entry', 'Go 编译提示 missing go.sum entry 缺依赖校验怎么办'],
+  ['go-mod', 'nil map', 'Go 往声明但没初始化的 map 写键值直接 panic 崩溃了'],
+  ['go-mod', 'goroutine 泄漏 context.Context', 'Go 后台 goroutine 卡在 channel 发送不退出导致泄漏'],
+  ['go-mod', 'errors.Is errors.As', 'Go 用 fmt.Errorf %w 包装后的错误直接用 == 比较失效'],
+  ['go-mod', 'encoding/json struct 小写私有字段', 'Go 结构体 json.Marshal 出来是空对象字段全丢了'],
+  ['go-mod', 'go test -race', 'Go 并发写 map 偶发崩溃怎么在测试时查出数据竞争'],
 ];
 
 /** Unrelated prompts — gram-clean enough that no seed rule should surface. */
@@ -73,6 +87,9 @@ const NEGATIVES = [
   '你好',
   'k8s 调度策略怎么配',
   '给我讲讲量子计算',
+  '继续优化',
+  '好的继续下一步',
+  '帮我看看这里',
 ];
 
 const store = new ImmuneStore({ dbPath: ':memory:' });

@@ -114,7 +114,12 @@ export function removeSeedPack(db: DatabaseSync, pack: string): SeedRemoveReport
 /** Per-pack counts of still-recorded seed rows, for the list view. */
 export function seededPackCounts(db: DatabaseSync): Map<string, number> {
   const rows = db
-    .prepare('SELECT pack, COUNT(*) AS n FROM seed_packs GROUP BY pack')
+    .prepare(
+      `SELECT sp.pack AS pack, COUNT(*) AS n
+         FROM seed_packs sp
+         JOIN antibodies a ON a.id = sp.rule_id
+        GROUP BY sp.pack`,
+    )
     .all() as Array<{ pack: string; n: number }>;
-  return new Map(rows.map((row) => [row.pack, row.n]));
+  return new Map(rows.map((row) => [row.pack, Number(row.n)]));
 }

@@ -19,6 +19,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import type { Antibody, AntibodyStatus, NewAntibody, RuleQualityGrade } from './types.js';
 import { matchGenericLesson } from './lessons.js';
 import { redact, redactOutbound } from './redact.js';
+import { looksEchoPrescription } from './rewrite.js';
 import { inferRootCause, scoreAntibodyRubric } from './rubric.js';
 
 const ROOT_MARKERS = [
@@ -35,8 +36,11 @@ const WIN_ABS_PATH_RE = /(?<![A-Za-z0-9_])([A-Za-z]:(?:\\\\|\\|\/)[^\s"'`<>|]{2,
 const UNIX_HOME_PATH_RE = /(?<![A-Za-z0-9_.\/-])(\/(?:Users|home)\/[^\s"'`<>|]{2,}|\/root\/[^\s"'`<>|]+)/g;
 const RAW_JSON_WRAPPER_RE = /^\s*\{\s*"(?:stdout|stderr|interrupted|isImage|filePath|command|code)"\s*:/i;
 const RAW_TOOL_WRAPPER_RE = /^\s*tool=[A-Za-z0-9_-]+\s+input=/i;
-const FILE_TOOL_ABS_DUMP_RE = /^(?:Edit|Write|MultiEdit|NotebookEdit):\s*(?:[A-Za-z]:[\\/]|\/Users\/|\/home\/|<path>|<repo>)/i;
-const URL_TOOL_DUMP_RE = /^mcp__[\w-]+:\s*https?:\/\//i;
+const FILE_TOOL_ABS_DUMP_RE =
+  /^(?:Edit|Write|MultiEdit|NotebookEdit):\s*(?:[A-Za-z]:[\\/]|\/Users\/|\/home\/|\/root\/|~?\/?<path>|<repo>|[\w./\\-]+\.[A-Za-z0-9]{1,8}\s*$)/i;
+const URL_TOOL_DUMP_RE = /^[A-Za-z][\w-]*:\s*https?:\/\/\S+\s*$/i;
+const INLINE_CODE_DUMP_RE =
+  /\b(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*=|\bawait\s+[A-Za-z_$][\w$.]*\(|\bfunction\s+[A-Za-z_$]|\bdef\s+[A-Za-z_]\w*\s*\(|;\s*(?:const|let|var|await|return)\b/;
 const AD_HOC_PROBE_CMD_RE =
   /^(?:(?:bash|pwsh|powershell|cmd):\s*)?(?:grep|rg|sed|awk|head|tail|cat|ls|dir|find|tasklist|Get-ChildItem|Get-NetTCPConnection|Get-Process|Get-Content|Select-String|Write-Output|\$[A-Za-z_]+\s*=|set\s+-[a-z]\s+[A-Z_]+=)/i;
 const SCRIPT_DUMP_OR_CHAT_RE =
@@ -220,7 +224,9 @@ export function classifyRuleQuality(
       issues: rubric.issues,
     };
   }
-  if (URL_TOOL_DUMP_RE.test(bare) || /\b(?:bilibili\.com|youtube\.com)\b/i.test(bare)) {
+  const isUnrewrittenRule = !ab.prescription_source || ab.prescription_source === 'rule';
+
+  if (URL_TOOL_DUMP_RE.test(bare) || (isUnrewrittenRule && /\b(?:bilibili\.com|youtube\.com|alipan\.com)\b/i.test(`${s} ${bare}`))) {
     return {
       grade: 'quarantined',
       score: rubric.total,
@@ -229,7 +235,16 @@ export function classifyRuleQuality(
       issues: rubric.issues,
     };
   }
-  if (AD_HOC_PROBE_CMD_RE.test(bare) && (!ab.prescription_source || ab.prescription_source === 'rule')) {
+  if (INLINE_CODE_DUMP_RE.test(bare) && isUnrewrittenRule) {
+    return {
+      grade: 'quarantined',
+      score: rubric.total,
+      universalEligible: false,
+      quarantineReason: 'inline code snippet dump stored as prescription',
+      issues: rubric.issues,
+    };
+  }
+  if (AD_HOC_PROBE_CMD_RE.test(bare) && isUnrewrittenRule) {
     return {
       grade: 'quarantined',
       score: rubric.total,
@@ -238,7 +253,7 @@ export function classifyRuleQuality(
       issues: rubric.issues,
     };
   }
-  if (SCRIPT_DUMP_OR_CHAT_RE.test(bare) && (!ab.prescription_source || ab.prescription_source === 'rule')) {
+  if (SCRIPT_DUMP_OR_CHAT_RE.test(bare) && isUnrewrittenRule) {
     return {
       grade: 'quarantined',
       score: rubric.total,
@@ -247,7 +262,7 @@ export function classifyRuleQuality(
       issues: rubric.issues,
     };
   }
-  if (RAW_JSON_WRAPPER_RE.test(s) && (!ab.prescription_source || ab.prescription_source === 'rule')) {
+  if (RAW_JSON_WRAPPER_RE.test(s) && isUnrewrittenRule) {
     return {
       grade: 'quarantined',
       score: rubric.total,
@@ -266,13 +281,17 @@ export function classifyRuleQuality(
     };
   }
 
+  // Decision #28 & #39: deterministic rule captures (`prescription_source === 'rule'`)
+  // without a curated generic lesson are workspace tactics, never universal advice.
   const isAdvice =
-    ab.prescription_source === 'llm' ||
-    ab.prescription_source === 'host_llm' ||
-    ab.prescription_source === 'human' ||
-    ab.origin === 'user_correction' ||
-    matchGenericLesson(s) !== null ||
-    rubric.actionability >= 20;
+    ab.prescription_source !== 'rule' &&
+    !looksEchoPrescription(p) &&
+    (ab.prescription_source === 'llm' ||
+      ab.prescription_source === 'host_llm' ||
+      ab.prescription_source === 'human' ||
+      ab.origin === 'user_correction' ||
+      matchGenericLesson(s) !== null ||
+      rubric.actionability >= 20);
 
   return {
     grade: isAdvice ? 'advice' : 'tactic',

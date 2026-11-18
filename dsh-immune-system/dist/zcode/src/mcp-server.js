@@ -18,18 +18,22 @@
  * Every tool is read-heavy by design; the two mutations (learn / forget) mirror
  * the CLI exactly, including zombie semantics.
  */
+import { existsSync } from 'node:fs';
 import { createInterface } from 'node:readline';
+import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { ImmuneStore } from '../../core/store/index.js';
 import { renderSkillMarkdown } from '../../core/export.js';
-import { formatShareViolations, shareSanityCheck } from '../../core/share-guard.js';
+import { ciCheck, formatShareViolations, parseManagedBlock, shareSanityCheck } from '../../core/share-guard.js';
 import { auditHistory, renderAuditReport } from '../../core/audit.js';
 import { BUILTIN_PACKS } from '../../core/packs.js';
 import { REWRITE_PROMPT } from '../../core/rewrite.js';
 import { HOST_REWRITE_BATCH, applyHostRewrites, hostRewriteCandidates } from '../../core/host-rewrite.js';
 import { ingestDiskCorpus } from '../../core/disk-ingest.js';
 import { scanMagpieTelemetry } from '../../core/audit/magpie.js';
+import { explainRecall } from '../../core/explain.js';
 import { packageVersion } from '../../core/version.js';
+import { runDoctor } from './doctor.js';
 const SERVER_INFO = { name: 'dsh-immune-system', version: packageVersion() };
 const TOOLS = [
     {
@@ -112,7 +116,7 @@ const TOOLS = [
     },
     {
         name: 'immune_seed_packs',
-        description: 'List the builtin seed packs (git-safety, node-ts, python-uv, docker, modern-web, dsh-ecosystem, patrol-triage) and any on-demand ingested `skill:*` packs with per-pack seeded counts. Install with `immune seed <id>` or `immune ingest-skill <path>` in a terminal; this tool never writes.',
+        description: 'List the 9 builtin seed packs (git-safety, node-ts, python-uv, rust-cargo, go-mod, docker, modern-web, dsh-ecosystem, patrol-triage) and any on-demand ingested `skill:*` packs with per-pack seeded counts. Install with `immune seed <id>` or `immune ingest-skill <path>` in a terminal; this tool never writes.',
         inputSchema: { type: 'object', properties: {} },
     },
     {
@@ -196,6 +200,36 @@ const TOOLS = [
         description: 'Analyze per-model antibody survival rates, repeated-ignore adaptive escalation rules, and local Magpie gateway routing telemetry. READ-ONLY.',
         inputSchema: { type: 'object', properties: {} },
     },
+    {
+        name: 'immune_doctor',
+        description: 'Run installation health checks: Node engine, SQLite+FTS5 trigram/CJK recall probe, connected hook paths, rule hygiene, and distillation budget. READ-ONLY.',
+        inputSchema: { type: 'object', properties: {} },
+    },
+    {
+        name: 'immune_ci_check',
+        description: 'Scan a git diff patch against the repository\'s committed AGENTS.md / CLAUDE.md pitfall rules before opening a PR. READ-ONLY.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                diff: { type: 'string', description: 'Unified git diff text to scan.' },
+                doc: { type: 'string', description: 'Optional path to AGENTS.md or CLAUDE.md.' },
+            },
+            required: ['diff'],
+        },
+    },
+    {
+        name: 'immune_explain',
+        description: 'Explain why a prompt or error trace matches specific antibodies (shows bilingual concept expansion, BM25 rank, lexical/path/rubric multipliers, and exact <immune_memory> preview). READ-ONLY: never inflates hit_count.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                query: { type: 'string', description: 'Error trace, command, or natural-language question.' },
+                toolName: { type: 'string', description: 'Optional tool name tie-breaker (e.g. Bash, Edit).' },
+                limit: { type: 'number', description: 'Max candidates to return (1-10, default 5).' },
+            },
+            required: ['query'],
+        },
+    },
 ];
 /** Dispatch one tools/call. Kept pure-ish so tests can call it without stdio. */
 export function callTool(store, name, args) {
@@ -232,8 +266,9 @@ export function callTool(store, name, args) {
             const all = store.listAll(true);
             const s = store.stats();
             const sharedCount = store.sharedAntibodies(1000).length;
-            return (`active: ${all.filter((a) => a.status === 'active').length}\n` +
-                `retired: ${all.filter((a) => a.status === 'retired').length}\n` +
+            return (`active: ${s.active}\n` +
+                `retired: ${s.retired}\n` +
+                `quarantined: ${s.quarantined}\n` +
                 `shared: ${sharedCount}\n` +
                 `injections: ${all.reduce((sum, a) => sum + a.hit_count, 0)}\n` +
                 `repeats suppressed: ${s.suppressedRepeats}\n` +
@@ -266,6 +301,7 @@ export function callTool(store, name, args) {
                 symptom: symptom || '(manual rule)',
                 prescription,
                 tool_name: null,
+                prescription_source: 'human',
             });
             return id === null ? 'error: could not store the rule (duplicate prescription?).' : `learned as #${id}.`;
         }
@@ -410,6 +446,29 @@ export function callTool(store, name, args) {
                     }
                     : null,
             }, null, 2);
+        }
+        case 'immune_doctor': {
+            const checks = runDoctor(store);
+            const failed = checks.filter((c) => !c.ok).length;
+            return JSON.stringify({ ok: failed === 0, passed: checks.length - failed, total: checks.length, checks }, null, 2);
+        }
+        case 'immune_ci_check': {
+            const diff = typeof args.diff === 'string' ? args.diff : '';
+            const explicitDoc = typeof args.doc === 'string' && args.doc.trim() ? resolve(args.doc.trim()) : null;
+            const doc = explicitDoc ??
+                (existsSync(resolve(process.cwd(), 'AGENTS.md'))
+                    ? resolve(process.cwd(), 'AGENTS.md')
+                    : resolve(process.cwd(), 'CLAUDE.md'));
+            const rules = parseManagedBlock(doc);
+            return JSON.stringify(ciCheck(diff, rules), null, 2);
+        }
+        case 'immune_explain': {
+            const query = typeof args.query === 'string' ? args.query : '';
+            const toolName = typeof args.toolName === 'string' && args.toolName.trim() ? args.toolName.trim() : undefined;
+            const limit = typeof args.limit === 'number' && Number.isFinite(args.limit) && args.limit > 0
+                ? Math.min(10, Math.trunc(args.limit))
+                : 5;
+            return JSON.stringify(explainRecall(store, query, { toolName, limit }), null, 2);
         }
         default:
             return `error: unknown tool ${name}`;

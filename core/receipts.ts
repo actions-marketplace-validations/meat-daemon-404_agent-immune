@@ -95,11 +95,30 @@ export interface ReceiptSummary {
 
 /** Verify digest chain integrity over recent receipts and summarize ROI. */
 export function summarizeReceipts(db: DatabaseSync, verifyLimit = 500): ReceiptSummary {
-  const rows = db
-    .prepare('SELECT * FROM delivery_receipts ORDER BY id ASC LIMIT ?')
-    .all(verifyLimit) as unknown as DeliveryReceipt[];
+  const totalRow = db.prepare('SELECT COUNT(*) AS n FROM delivery_receipts').get() as { n: number | bigint };
+  const total = Number(totalRow.n);
+  const cap = Math.max(1, Math.trunc(verifyLimit));
 
+  let rows: DeliveryReceipt[];
   let prev = 'genesis';
+  if (total <= cap) {
+    rows = db
+      .prepare('SELECT * FROM delivery_receipts ORDER BY id ASC')
+      .all() as unknown as DeliveryReceipt[];
+  } else {
+    const desc = db
+      .prepare('SELECT * FROM delivery_receipts ORDER BY id DESC LIMIT ?')
+      .all(cap) as unknown as DeliveryReceipt[];
+    rows = desc.reverse();
+    const firstId = rows[0]?.id;
+    if (firstId !== undefined) {
+      const prior = db
+        .prepare('SELECT digest FROM delivery_receipts WHERE id < ? ORDER BY id DESC LIMIT 1')
+        .get(firstId) as { digest?: string } | undefined;
+      prev = prior?.digest ?? 'genesis';
+    }
+  }
+
   let chainValid = true;
   const byOutcome: Record<string, number> = {};
   const models = new Map<string, { total: number; failed: number; held: number }>();
@@ -127,9 +146,8 @@ export function summarizeReceipts(db: DatabaseSync, verifyLimit = 500): ReceiptS
     if (row.outcome === 'held') estimatedTokensSaved += row.tokens_est;
   }
 
-  const totalRow = db.prepare('SELECT COUNT(*) AS n FROM delivery_receipts').get() as { n: number | bigint };
   return {
-    total: Number(totalRow.n),
+    total,
     byOutcome,
     byModel: [...models.entries()]
       .map(([model, stats]) => ({ model, ...stats }))

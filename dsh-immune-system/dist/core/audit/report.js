@@ -1,6 +1,7 @@
 import { BACKFILL_TOOLS, pairSession } from '../backfill.js';
 import { isSelfEpisode } from '../selfnoise.js';
 import { redactAndClamp } from '../redact.js';
+import { pickSalientErrorLine } from '../trace.js';
 import { ROUND_TRIPS_PER_REPEAT } from '../value.js';
 import { deriveProjectScope } from '../hygiene.js';
 import { emptySource, MIN_FAMILY_COUNT, TOP_FAMILIES, TRACE_CLAMP, } from './types.js';
@@ -48,7 +49,7 @@ export function runSource(source, sessions, store, opts) {
             if (call.status !== 'error')
                 continue;
             stat.failures += 1;
-            const firstLine = (call.error_message ?? 'unknown').split('\n')[0] ?? 'unknown';
+            const firstLine = pickSalientErrorLine(call.error_message ?? 'unknown').split('\n')[0] ?? 'unknown';
             const normalized = firstLine.replace(/\s+/g, ' ').trim();
             const key = `${call.tool_name}|${normalized.toLowerCase().slice(0, 80)}`;
             const family = families.get(key);

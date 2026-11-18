@@ -23,6 +23,7 @@ import { exportLibrary, importLibrary } from '../../core/sync.js';
 import { renderSkillMarkdown } from '../../core/export.js';
 import { shareSanityCheck } from '../../core/share-guard.js';
 import { scanMagpieTelemetry } from '../../core/audit/magpie.js';
+import { explainRecall } from '../../core/explain.js';
 
 /** The slice of the host's `webServer` service this needs. */
 interface WebServerLike {
@@ -133,6 +134,20 @@ export function registerImmuneUiRoute(
 
           if (req.method === 'GET' && path.endsWith('/models')) {
             sendJson(res, 200, store.modelImmunity(scanMagpieTelemetry()));
+            return;
+          }
+
+          if (req.method === 'GET' && path.endsWith('/triage')) {
+            sendJson(res, 200, { triage: store.triageSummary(20), receipts: store.receiptSummary(500) });
+            return;
+          }
+
+          if (req.method === 'GET' && path.endsWith('/explain')) {
+            const query = url.searchParams.get('q') ?? '';
+            const rawLimit = Number(url.searchParams.get('limit') ?? '5');
+            const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(10, rawLimit) : 5;
+            const toolName = url.searchParams.get('tool') ?? undefined;
+            sendJson(res, 200, explainRecall(store, query, { limit, toolName }));
             return;
           }
 

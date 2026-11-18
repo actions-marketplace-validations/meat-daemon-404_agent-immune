@@ -1,326 +1,329 @@
 <div align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/logo-dark.svg">
-    <img src="docs/logo-light.svg" alt="dsh-immune — 自进化避坑免疫系统" width="360">
+    <img src="docs/logo-light.svg" alt="agent-immune — AI 编程助手的自进化避坑免疫系统" width="400">
   </picture>
 
-  <p><b>让 coding agent 别再重复调试自己已经修好的问题。</b></p>
+  <p><b>让你的 Coding Agent 别再重复调试自己已经修好的问题。</b></p>
 
   <p>
-    <a href="https://www.npmjs.com/package/dsh-immune-system"><img src="https://img.shields.io/npm/v/dsh-immune-system" alt="npm 版本"></a>
+    <a href="https://www.npmjs.com/package/dsh-immune-system"><img src="https://img.shields.io/npm/v/dsh-immune-system?label=npm%20%7C%20dsh-immune-system" alt="npm 版本"></a>
     <a href="https://github.com/meat-daemon-404/agent-immune/actions/workflows/ci.yml"><img src="https://github.com/meat-daemon-404/agent-immune/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-    <img src="https://img.shields.io/badge/单测-通过-4c9f4c" alt="单测通过">
+    <img src="https://img.shields.io/badge/单测-260%20通过-16a34a" alt="260 单测通过">
+    <img src="https://img.shields.io/badge/运行时依赖-0-2563eb" alt="零运行时依赖">
+    <img src="https://img.shields.io/badge/node-%5E22.19%20%7C%7C%20%3E%3D24-0ea5e9" alt="node ^22.19 || >=24">
     <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT">
-    <img src="https://img.shields.io/badge/node-%5E22.19%20%7C%7C%20%3E%3D24-blue" alt="node ^22.19 || >=24">
     <a href="https://dsh-plugin.org/plugins/meat-daemon-404/agent-immune"><img src="https://dsh-plugin.org/badges/listed.svg" alt="已收录于 DSH 插件市场"></a>
   </p>
 
   <p>
-    回放 <b>21,034 次真实工具调用</b>，判定一致率 <b>97.81%</b> · <b>0</b> 假阴性 · <b>零</b>运行时依赖 · 反事实拦截 <b>Cold 88.5% / Warm 96.9%</b>
+    回放 <b>21,034 次真实工具调用</b>判定一致率 <b>97.81%</b> · <b>0</b> 假阴性 · 反事实重复错拦截 <b>Cold 88.5% / Warm 96.9%</b>
     <br>
-    <sub><a href="#跑分和-ci">数字是测出来的，不是喊出来的——看它怎么来的</a></sub>
+    <sub><a href="#跑分与持续集成">所有数字均由本机多宿主真实日志实测产出，可一键复现</a></sub>
   </p>
 
   <p><a href="README.md">English</a> | <b>简体中文</b></p>
 </div>
 
-说白了，**这就是给 AI 编程助手装的「防二次踩坑免疫系统」**：工具调用报错、下一次调用修好，这两条会被提炼成一条“什么错 → 怎么改”的精简规矩。等下次快踩同一个坑时，这条规矩先一步塞进上下文提醒它，不让 AI 在同一个地方反复交学费。
+**agent-immune**（npm 包名：`dsh-immune-system`）是一套**零第三方运行时依赖的 AI 编程助手避坑免疫系统**。每当一次工具调用失败、随后被修好，引擎就会将这次「踩坑 → 修复」经脱敏与五维评分后蒸馏成一条**抗体规则**（`触发场景 → 忌/错误直觉 → 宜/正确做法`），存入本地 `node:sqlite` + FTS5（含两字中文双字回退索引），并在下次即将重蹈覆辙**之前**自动注入 `<immune_memory>`。
 
-只有一个 `core/`：**DSH** 和 **ZCode** 以插件形式原生安装（按真实宿主契约验证过），`immune connect` 还能把同一个引擎以普通 hook 的方式接进 **Claude Code**、**Codex CLI** 和 **Google Antigravity**——不依赖任何插件系统。
+单一 `core/` 内核同时驱动 **13 种主流开发环境与 CI/SDK 场景**：一条 `connect` 命令免插件接入 **Claude Code**、**Cursor**、**Codex CLI**、**Google Antigravity**、**Gemini CLI**、**VS Code (Copilot Agent)**、**Zed**、**Windsurf**、**Roo Code**、**Claude Desktop** 与 **Cline**；原生插件包支持 **DeepSeek Harness (DSH)** 与 **ZCode**；并提供无状态的 **3 行 GitHub Action**、本地 `.git/hooks/pre-commit` 钩子与带类型声明的 **`dsh-immune-system/core` SDK**。
 
 <div align="center">
-  <img src="docs/hero.svg" alt="免疫系统：蒸馏、召回、注入" width="720">
-  <img src="docs/dashboard.png" alt="免疫仪表盘：KPI 行、按模型归因、规则表" width="720">
-  <p><sub>任何安装都会看到这样的仪表盘——截图用的是演示规则，不是私人库。</sub></p>
+  <img src="docs/hero.svg" alt="agent-immune：失败感知、五维质检、事前拦截" width="760">
+  <br>
+  <img src="docs/dashboard.png" alt="免疫仪表盘：KPI 行、按模型归因、规则表" width="760">
+  <p><sub>本地回环仪表盘（`immune ui`）与 DSH Shadow-DOM 原生设置页 —— 100% 离线运行、零遥测，上图为演示规则。</sub></p>
 </div>
 
-### 先跑三十秒
+## 目录
 
-不装东西、不写任何文件，全程内存里跑：
+- [30 秒快速体验](#30-秒快速体验)
+- [支持的 Agent 与宿主矩阵](#支持的-agent-与宿主矩阵)
+- [GitHub Action：3 行接入 PR 避坑门禁](#github-action3-行接入-pr-避坑门禁)
+- [9 套内置种子包（54 条规则）与外部 Skill 索引](#9-套内置种子包54-条规则与外部-skill-索引)
+- [历史会话体检冷启动（`audit`）](#历史会话体检冷启动audit)
+- [五维质检、规则改写、去重合并与盲区覆盖率](#五维质检规则改写去重合并与盲区覆盖率)
+- [CLI 命令与 21 项 MCP 工具速查表](#cli-命令与-21-项-mcp-工具速查表)
+- [跑分与持续集成](#跑分与持续集成)
+- [核心架构与工程细节](#核心架构与工程细节)
+
+---
+
+## 30 秒快速体验
+
+**1. 纯内存跑通完整闭环**（不安装任何文件、不落盘、零网络请求）：
 
 ```bash
 npx dsh-immune-system@latest demo
 ```
 
-它会真的蒸馏一条失败→成功的记录，用一句换了说法的提问去召回，然后把 hook 实际会注入的 `<immune_memory>` 打印出来。这台机器上已经有历史？`npx dsh-immune-system@latest audit --dry-run` 会读它，并展示能学到什么。
-
-### 装
-
-**DSH**，从 npm 装（有预构建产物，不用本地编译）：
+**2. 一条命令自动探测并接入本机所有已安装的编程助手**：
 
 ```bash
-dsh plugin --profile <profile> add dsh-immune-system
+npx dsh-immune-system@latest connect
 ```
 
-想用 tarball 或直接从 git 装：
+`connect` 会自动探测本机已装的宿主，将预构建引擎固定复制到 `~/.dsh-immune/`（不受 `npx` 缓存清理影响），首次修改前自动留存 `.bak-immune` 备份，幂等合并配置且绝不触碰你的其它设置。随时可用 `npx dsh-immune-system@latest connect --remove` 一键无痕卸载。
+
+**3. 从本机已有历史记录冷启动 + 打开可视化面板**：
 
 ```bash
-cd dsh-immune-system && npm pack        # 会打印它写出的 dsh-immune-system-<version>.tgz 文件名
+npx dsh-immune-system@latest audit --dry-run   # 只读扫描历史重复踩坑与可省 Token
+npx dsh-immune-system@latest seed git-safety   # 安装精选防呆种子包
+npx dsh-immune-system@latest ui                # 启动本机 127.0.0.1 仪表盘（支持中英文切换）
+```
+
+> **全局短命令别名**：执行 `npm install -g dsh-immune-system` 后可直接使用 `immune <命令>`。
+> *（Windows 源码目录提示：若在本仓库根目录下直接运行 `cmd`，同名子目录 `dsh-immune-system/` 会抢先匹配；在仓库内调试请直接运行 `node dsh-immune-system/dist/zcode/src/cli.js <命令>`，用户在自己的项目目录中不受影响。）*
+
+---
+
+## 支持的 Agent 与宿主矩阵
+
+| 宿主 / 环境 | 接入形态 | 一键接入命令 | 运行机制与注入通道 |
+| --- | --- | --- | --- |
+| **Claude Code** | 6 个生命周期 Hook 或原生插件 | `npx dsh-immune-system@latest connect claude-code` | `~/.claude/settings.json` (`hookSpecificOutput`) 或 `.claude-plugin/` |
+| **Cursor** | 6 个生命周期 Hook + 旁路 MCP（20 工具） | `npx dsh-immune-system@latest connect cursor` | `~/.cursor/hooks.json` (`permission` / `agent_message`) + `~/.cursor/mcp.json` |
+| **Codex CLI** | 5 个生命周期 Hook（首次需跑 `/hooks` 信任） | `npx dsh-immune-system@latest connect codex` | `~/.codex/hooks.json`（自动映射 `shell_command` / `apply_patch`） |
+| **Google Antigravity** | 5 个生命周期 Hook（驼峰协议适配） | `npx dsh-immune-system@latest connect antigravity` | `~/.gemini/config/hooks.json`（`SessionStart` / `UserPromptSubmit` / `PreInvocation` / `PostToolUse` / `Stop`） |
+| **Gemini CLI** | 5 个生命周期 Hook | `npx dsh-immune-system@latest connect gemini-cli` | `~/.gemini/settings.json`（`BeforeAgent` / `BeforeTool` / `AfterTool` / `AfterAgent`） |
+| **Windsurf / Roo Code / Cline / Claude Desktop** | MCP Server（21 工具） | `npx dsh-immune-system@latest connect <host>` | 自动接入 Windsurf、Roo Code、Cline 与 Claude Desktop 配置 |
+| **VS Code / Zed** | 原生 MCP / Context Server（21 工具） | `npx dsh-immune-system@latest connect vscode` / `zed` | `Code/User/mcp.json`（`servers`） · `zed/settings.json`（`context_servers`） |
+| **自定义 Node/TS Agent** | 零依赖强类型 SDK | `import { ImmuneRuntime } from 'dsh-immune-system/core'` | 自带完整 `.d.ts` 类型声明（`./dist/core/index.d.ts`） |
+| **DeepSeek Harness (DSH)** | 原生 Cordis 插件包 + Shadow-DOM 设置页 | `dsh plugin --profile <profile> add dsh-immune-system` | `agent/session-start`、`pre-step`、`tools/post-execute`、`turn-stopping` |
+| **ZCode** | 原生插件市场源 + 斜杠命令 + MCP | `zcode plugins marketplace add meat-daemon-404/agent-immune` | `.zcode-plugin/plugin.json` + `/immune*` 斜杠命令 |
+
+<details>
+<summary><b>展开查看 DSH / ZCode 原生安装说明与通用 MCP 配置</b></summary>
+
+**DeepSeek Harness (DSH)**：
+```bash
+dsh plugin --profile <profile> add dsh-immune-system
+# 或通过 tarball / GitHub 安装：
+cd dsh-immune-system && npm pack
 dsh plugin --profile <profile> add ./dsh-immune-system-<version>.tgz
 dsh plugin --profile <profile> add github:meat-daemon-404/agent-immune
 ```
+*（`github:` 安装方式会触发 `prepare` 编译；pnpm 10 默认拦截构建脚本，需先执行 `pnpm approve-builds` 放行 `dsh-immune-system`，直接从 npm 或 tarball 安装则无需编译。安装后请重启 DSH。）*
 
-`github:` 这种方式会在安装时跑 `prepare`，pnpm 10 默认拦构建脚本，得先 `pnpm approve-builds` 把 `dsh-immune-system` 加进 `onlyBuiltDependencies`。不想折腾就用 npm 或 tarball。装完记得重启 DSH —— 插件 bundle 是启动时组装的。
-
-**ZCode**，这个仓库本身就是市场源：
-
+**ZCode**：
 ```bash
 node "<zcode.cjs>" plugins marketplace add meat-daemon-404/agent-immune
 node "<zcode.cjs>" plugins install dsh-immune-system@dev-dsh-plugin-immune
 ```
 
-装完开新任务；老任务还拿着它启动时的能力清单。
-
-### 接入 Claude Code、Codex 与 Antigravity
-
-原生插件安装只覆盖 DSH 和 ZCode。Claude Code、Codex CLI 和 Google Antigravity 走的是普通 hook——同一个引擎，不依赖插件系统：
-
-```bash
-npx dsh-immune-system@latest connect               # 自动探测本机装了哪些宿主并逐一接入
-npx dsh-immune-system@latest connect claude-code   # 写 ~/.claude/settings.json
-npx dsh-immune-system@latest connect codex         # 写 ~/.codex/hooks.json
-npx dsh-immune-system@latest connect antigravity   # 写 ~/.gemini/config/hooks.json
+**任意其它 MCP 客户端**（纯标准输入输出，零外部依赖）：
+```json
+{
+  "mcpServers": {
+    "dsh-immune-system": {
+      "command": "npx",
+      "args": ["-y", "dsh-immune-system@latest", "mcp"]
+    }
+  }
+}
 ```
+</details>
 
-它做的事：把引擎复制到固定的 `~/.dsh-immune/` 安装位（这样钩子不随 npx 缓存清理或包升级而失效），往宿主自己的配置里合并 hook 条目（Codex 五个——它没有 `PostToolUseFailure` 事件，Claude Code 六个，Antigravity 四个：按 `dsh-immune-system` 插件节接入 `PreToolUse` / `PostToolUse` / `BeforeAgent` / `AfterAgent`）并指向该固定副本，用户的其它配置一概不动；首次写入前留一份 `.bak-immune` 备份；重复执行是空操作（`--refresh` 强制重灌）；旧版 connect 留下的 npx 缓存路径会被原地升级；`connect <host> --remove` 只摘走 immune 的条目，最后一个宿主卸载时顺带删除 `~/.dsh-immune/`。不带宿主参数的 `connect` 会探测这台机器实际装了哪些宿主（`~/.claude`、`~/.codex`、`~/.gemini/antigravity`）并逐一幂等接入——ZCode 也会被探测到，但只报告不写入，因为 ZCode 走自己的插件市场安装。Antigravity 适配器会自动解包 `toolCall` / `workspacePaths` 等驼峰字段，通过 `invocationNum` 避免同回合内部子调用重复注入，并将 `run_command` / `edit_file` / `write_file` / `read_file` / `grep_search` 等工具名映射回引擎核心词汇；其余宿主沿用 ZCode 同款 `hookSpecificOutput` 注入契约。vendor 运行时已在**零宿主环境变量**下端到端验证过（`scripts/verify-connected-runtime.mjs`）：库经回退链落位、事件在回合末蒸馏、新会话拿到注入；Codex 原生 `shell_command` / `apply_patch` 与 Antigravity 驼峰事件（含 `invocationNum` 门控与拦截拒绝格式）也已跑通；六个 hook 事件、人工纠偏挂载、注入分隔符对伪造闭合标签的隔离、guard deny 分支，以及**一个会话踩的坑由新会话在项目 30 分钟窗口内闭合**，都在 `scripts/verify-connected-runtime.mjs` 的断言里。仍未覆盖的：真实宿主 CLI 自身的分发。
-
-两个提醒：接完重启宿主会话才生效；**Codex 需要先在 Codex 里跑一次 `/hooks` 信任这些命令**，否则不会执行。
-
-Windows 注意：`npx dsh-immune-system@latest <命令>` 走 shell 解析，cmd 的命令搜索会被当前目录下的**同名目录**绊住——在本仓库 checkout 里（根目录就有 `dsh-immune-system/`）请换到别的目录执行，或按路径直调 CLI：`node dsh-immune-system/dist/zcode/src/cli.js <命令>`。用户在自己的项目里不受影响。
-
-### 体检：用你已有的历史冷启动
-
-刚装完的库是空的。`immune audit` 把活体配对循环原样重放到这台机器已有的会话历史上——ZCode 的会话库、Codex 的 rollout 文件（`~/.codex/sessions`）、Claude Code 的转录（`~/.claude/projects`，含嵌套的子代理转录；工具结果没带 `is_error` 标记时回退读 `Exit code:` 文本标记），以及 Antigravity 的对话日志（`~/.gemini/antigravity/brain/*/.system_generated/logs/transcript.jsonl`，可用 `--source antigravity` 单独扫描）——打印一份可截图分享的摘要（按工具的失败计数、最高频的重复坑点、有用量记录时的可省 token 估算），然后把这些历史蒸馏成你自己最早的一批规则：
-
-```bash
-npx dsh-immune-system@latest audit --dry-run   # 只出报告，不写库
-npx dsh-immune-system@latest audit             # 报告 + 蒸馏（配了 LLM 就走模型）
-```
-
-缺席也是明说的：某个源在这台机器上没有历史，就打印自己那一行。Codex rollout 格式和 ZCode 库结构对过真实文件；Claude Code 转录解析器目前只有夹具测试——等它见过一次真实安装再转正，报告里每次都会注明这一点。跑不了钩子的 agent（Cursor、Cline 等）走 MCP 拿同一份报告：`immune_audit` 是只读预览（写入版留在终端——MCP 宿主没有回合末 drain），`immune_seed_packs` 列出种子包。
-
-### 种子包与外部 Skill 按需索引
-
-不是每个坑你都踩过。五套手工编写的规则包——与内置通用教训同一信任等级，**不是**模型输出——走正常 insert 路径安装，你已经学过的同文规则会合并而不是重复：
-
-```bash
-npx dsh-immune-system@latest seed                      # 列出包与当前项目识别到的 Baseline
-npx dsh-immune-system@latest seed git-safety           # 装一套
-npx dsh-immune-system@latest seed modern-web           # 现代 Web 规则（按项目 Baseline 过滤）
-npx dsh-immune-system@latest seed modern-web --baseline widely  # 强制只装广泛兼容子集
-npx dsh-immune-system@latest seed git-safety --remove  # 卸载
-```
-
-卸载是保守的：agent 已经命中过的、或你改写过措辞的种子规则会被保留——它们现在承载的是你自己的证据。现有包：`git-safety`、`node-ts`、`python-uv`、`docker`、`modern-web`（仅当检测到 Vite/Next/React 或 `index.html` 等前端标志时自动预热，并读取 `.browserslistrc`、`package.json#browserslist` 与 `tsconfig.json` `target`，避免在旧浏览器兼容项目里误推 CSS Anchor Positioning / View Transitions 等 `Newly available` 特性）。每条发布出去的规则都受 `scripts/bench-seed-recall.mjs`（也在 CI 里）约束：用换过说法的用户提问必须能在 top-3 召回它——当前 R@3 100%、零误报。
-
-遇到成百上千条的前端/框架指南（例如 `modern-web-guidance` 或团队自己的 `SKILL.md` / Markdown 手册）时，不需要整份塞进每轮上下文，可用 `ingest-skill` 按章节/表格索引进 FTS5，只在触发相关编辑或报错时按需召回：
-
-```bash
-npx dsh-immune-system@latest ingest-skill ./path/to/guidance --pack web-guidance
-npx dsh-immune-system@latest ingest-skill ./SKILL.md --baseline widely
-npx dsh-immune-system@latest ingest-skill --remove --pack web-guidance
-```
-
-导入的规则同样经过密钥/路径脱敏和项目 Baseline 过滤，零静态 token 占用。
-
-### 装完先自检：该看到什么，没看到查什么
-
-先跑自检，出问题时客服（以及你自己）第一句就会问这个：
-
-```bash
-immune doctor
-# ZCode 斜杠命令还没生效时：
-node "<插件根目录>/dist/zcode/src/cli.js" doctor
-```
-
-检查项包括：包的 Node engine（`^22.19 || >=24`，node:sqlite 的门槛）、FTS5 trigram 探针（含两字中文的兜底）、项目库和共享库、marker 文件、MCP 脚本、原生 UI 契约、各项计数，以及规则卫生（重复规则、同 symptom 但未达合并线的组，并给出复核命令）。非零退出说明下一个会话会缺东西；提示类检查永远不会把退出码变红——不然几个月前一次模型降级会让你永远忽略这个退出码。
-
-然后，摊开说哪些验过、哪些没验：
-
-* **hook** —— 在真实的 DSH 事件总线和 ZCode 的 hook 生命周期上验过（`scripts/verify-live-host.mjs`、`scripts/verify-client-serve.mjs`）。
-* **ZCode 的设置页 tab** —— 能挂载、能服务 `/plugins/<id>/client.js`；但没在浏览器里端到端点过。要是它没出现，数据本身还能从 `immune list` 和 `immune ui` 里看到。
-* **外部 LLM 蒸馏** —— 在一条真实的 OpenAI 兼容端点上跑通过（商汤 Token Plan）。别的厂商走同一份代码，但没实测。不配 `IMMUNE_LLM_BASE_URL` 和 `IMMUNE_LLM_MODEL` 就走确定性规则路径，模型计数保持为 0。有端点时用 `node scripts/verify-llm.mjs` 一条命令验。
-* **`IMMUNE_GUARD=warn` 只有 ZCode 支持。** DSH 侧配了 guard 照样**会拦**：宿主契约只给 allow / deny / ask，没有「仅提醒」这一档。不想被拦就保持默认的 `IMMUNE_GUARD=off`。
-
-### 规则写成了命令怎么办
-
-确定性路径写不出建议：只有一条"跑通了的命令"当证据，处方就只能是那条命令本身。维护者自己的库里，13 条规则有 6 条是 100–200 字符的 shell，占了全部投递的一半。`immune rewrite` 把它们交给配置好的模型，原地换掉措辞，触发词、症状和计数都不动：
-
-```bash
-immune rewrite --dry-run     # 只列候选，一个字不改
-immune rewrite --max 3       # 改三条
-immune rewrite --id 49,50    # 重做指定的几条
-```
-
-被重写的规则会带 `prescription_source = 'llm'`，所以"抓到的证据"和"模型写的措辞"在库里分得清。模型有时会顺着过期的 symptom 编而不是看命令——生产库里好几条规则共用一个泛化 symptom——所以 prompt 明说以命令为准，说不清用途的直接 skip，不许猜。这个功能必须有模型：确定性路径再来一遍，只会得到同样一条命令。
-
-**没有 API Key？宿主 agent 自己就是模型。** 在任何支持 MCP 的宿主里，`immune_rewrite_candidates` 会把回声级规则连同改写契约一起交给你，`immune_rewrite_apply` 收回你的一句话改写——全程带守卫（每 12h 一轮、单轮最多 3 条、规则必须仍是转储、你的替换文本必须是建议否则拒绝）。改写后的规则带 `prescription_source = 'host_llm'`，立刻获得 priming 与导出资格：在维护者的生产库上，这条环路只用宿主模型就退役了三条投递量最高的命令转储（合计 6,694 次 lifetime 投递），零端点调用。
-
-### 同一课在库里出现了两次
-
-插入时会合并近似规则，但一次重写或一次换模型，可能让同一课留下两种措辞。`immune consolidate` 只找这种配对：symptom 归一化后相同、同一个工具、触发词有交集，且处方相似度 ≥70%。动手前先预览：
-
-```bash
-immune consolidate --dry-run   # 列出可合并的配对，以及「同 symptom 但不会自动合并」的组
-immune consolidate             # 保留命中更多的那条措辞，其余退役
-```
-
-保留者接过来自对方的触发词、命中/失败计数、修复动作和按模型归因；被合并的规则退役而不是删除。只有 symptom 相同的组只会打印出来供人工复核，绝不自动合并——维护者自己的库里，五条规则用五种措辞讲同一课，最高相似度只有 65%。
-
-### 库的盲区在哪
-
-`immune stats` 说的是规则发生了什么，完全没说**没有规则命中的失败**。`immune coverage` 把宿主的错误行按时间窗回放一遍，走只读检索问一句“有没有一条规则真的适用”（用的就是反腐蚀判定），再把漏掉的按签名聚类：
-
-```bash
-immune coverage --days 30 --top 8
-```
-
-第一版把所有 FTS 命中都算覆盖，八条规则的库报出 99%——明显是假的。现在一条规则必须共享有意义的词、属于同一个工具、而且真的相关，才算覆盖。报告给三个数字，因为它们回答三个不同问题：
-
-```
-coverage: last 30 days · 505 judgeable failure(s) · 381 known (75%) · 105 still injected · 124 uncovered · 79 ignored as noise
-  276 failure(s) match a retired rule: the advice exists but is not injected
-```
-
-`known` 是「库里有规则提到这件事」（任何状态，宽松上界），`still injected` 是「模型真的会收到警告」，`uncovered` 才是真盲区。三者的差很重要：这份报告促成的「先 Read 再 Edit」规则，注入 3 次、失败 3 次，被反腐蚀退役了——覆盖率随即又把这条教训报成盲区，既不真实也不可行动。看到「知道但没注入」，才知道该恢复哪条规则。剩下的未覆盖簇是 Mimosa 拦截这类每次原因不同的环境失败，报告如实列出来比藏起来有用。
-
-### 备份
-
-```bash
-immune backup [路径]   # 默认 <库>.<日期>.bak.sqlite
-```
-
-数据库是 WAL 模式，`cp immune.sqlite backup` 复制出来的文件可能打开是空的——本项目发版过程中真的踩到过。这条命令走 node:sqlite 的 backup API，会穿过 WAL 写出一个完整快照。
-
-### 把学到的东西分享出去
-
-```bash
-immune export 5                     # 导出 SKILL.md，只收命中 ≥5 次的
-immune export 3 ./docs/pitfalls.md  # 自己指定路径
-```
-
-```markdown
----
-name: project-pitfalls
-description: 本仓库踩过的坑 … 11 proven rules.
 ---
 
-| 触发 / Trigger | 错误直觉 / Wrong instinct | 正确做法 / Do this instead | 命中 / Hits |
-| --- | --- | --- | --- |
-| Edit old_string-not-found 精确匹配 | old_string 与文件实际内容不一致 | Edit: 重新 Read 后精确复制待替换文本 | 234 |
-| EPERM mkdir 只读目录 模型测试 | 在只读目录建 .dsh 或文件报 EPERM | 换可写工作目录，或用 IMMUNE_DB_PATH 显式指定库路径 | 37 |
-| … | … | … | … |
+## GitHub Action：3 行接入 PR 避坑门禁
+
+用 `immune sync-doc` 将本仓库验证过的抗体同步进 `AGENTS.md` 或 `CLAUDE.md` 后，无需任何云端数据库即可在 GitHub Pull Request 中自动巡检新增代码：
+
+```yaml
+# .github/workflows/pitfall-check.yml
+name: Pitfall Check
+on: [pull_request]
+jobs:
+  immune:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: meat-daemon-404/agent-immune@main
 ```
 
-仪表盘的 `/api/export?format=json` 导出的快照能被 `immune import` 读回，团队可以从某个人的成熟规则起步。全部导出出口（CLI `export` / `export-json` / `sync-doc`、MCP `immune_export`、DSH `/immune-export` 以及返回 HTTP `422` 的 `/api/export`）均强制经过隐私闸门：落盘、发送外部 LLM 及仪表盘展示前会自动脱敏 JSON 转义凭据、`.npmrc` `_authToken`、URL 查询凭据、敏感请求头、PEM/SSH 私钥、邮箱及本机用户名路径，仍含机器路径或密钥形状文本的规则会被直接拦截，不会流出团队。
+- 自动解析 `+++ b/<file>` 与 `@@ +line @@` 行号，在 PR 代码行直接输出 **GitHub 精准行级批注（Annotations）** 并生成 **$GITHUB_STEP_SUMMARY** 汇总表。
+- 自动跳过 `<!-- immune:generated -->` 托管块自身的变更，更新文档绝不自摆乌龙。
+- 严格遵守命令行参数边界（例如 `--force` 规则只会拦截 `git push --force`，绝不误伤建议写法 `git push --force-with-lease`）。如需仅提示不阻断流水线，传入 `fail-on-findings: 'false'` 即可。
+- **想要本地提交前即时拦截？** 运行 `immune git-hook --install`（或附加 `--warn-only`）即可向 `.git/hooks/pre-commit` 无损注入 `< 40 ms` 的暂存区巡检片段，与现有的 Husky / lint-staged 和平共存（`immune git-hook --remove` 一键卸载）。
 
-### 遥测：弯路、进化曲线和 CI 闸门
+---
 
-不是所有值得知道的事都会变成规则。剩下的一半有三块面板：
+## 9 套内置种子包（54 条规则）与外部 Skill 索引
+
+九套由维护者手工编写的高频工程防呆包（与内置通用教训同级，**绝非**未经审核的模型输出），走标准去重合并通道安装：
+
+| 种子包 ID | 规则数 | 覆盖痛点 |
+| --- | --- | --- |
+| `git-safety` | 6 | 强推防护（`--force-with-lease`）、`reset --hard`、`clean -fd`、`commit -F`、测试假凭据防拦截 |
+| `node-ts` | 6 | `node:sqlite` 版本门槛、ESM `.js` 扩展名、Windows `pathToFileURL`、`ERESOLVE`、WAL 安全备份 |
+| `python-uv` | 6 | `uv run` 环境隔离、PEP 668 系统 Python 保护、`pytest -s`、可变默认参数陷阱 |
+| `rust-cargo` | 6 | 借用检查器可变别名冲突（`E0502`）、跨 `.await` 的 `Send` 约束、阻塞 Tokio 线程、Workspace 特性漂移 |
+| `go-mod` | 6 | 带类型 `nil` 接口陷阱、`go mod tidy` 校验、`-race` 并发 Map 写崩溃、`errgroup` 上下文取消 |
+| `docker` | 6 | BuildKit 缓存挂载、`.dockerignore` 构建上下文膨胀、`127.0.0.1` 容器监听陷阱、Alpine `musl` 兼容 |
+| `modern-web` | 6 | `<dialog>`、Popover、`100dvh`、CSS 锚点定位、View Transitions（自动识别浏览器 Baseline 兼容级别！） |
+| `dsh-ecosystem` | 6 | Cordis `inject` 服务声明、Waterfall 非零退出判定、Shadow-DOM 插件样式隔离 |
+| `patrol-triage` | 6 | Red-3 反腐蚀根因分诊、工作区作用域锁、先 Read 后 Edit 铁律 |
 
 ```bash
-immune detours                    # 同一目标探测 4+ 次才修好的弯路记录
-immune stats                      # 含 5+ 条同课规则的"睡眠评审"簇，等 `immune consolidate`
-immune ci-check --diff pr.diff    # 拿 PR 新增行扫本仓库已提交的 AGENTS.md 托管块
+immune seed                                    # 查看全部 9 套种子包及当前项目识别到的 Baseline
+immune seed rust-cargo                         # 安装指定种子包
+immune seed modern-web --baseline widely       # 仅安装广泛兼容（Widely available）子集
+immune seed rust-cargo --remove                # 保守卸载（已被实战命中的规则会自动保留！）
 ```
 
-`immune detours` 只是遥测——确定性路径绝不会从它蒸馏"捷径规则"（那只能是回声命令；写规则走 `immune rewrite`）。`immune ci-check` 刻意无状态：CI 里没有免疫库，它读的是仓库已经提交的 `<!-- immune:generated -->` 托管块，新增行碰到某条规则的触发领地就 exit 1（`--json` 供机器读）。仪表盘（`immune ui`）多了进化条带：每周新规则/episode 直方图，加谱系、来源、probation 和弯路计数——只展示库能证明的数据。`immune doctor` 用一行 advisory 报告同一份生命周期状态。
+全部 54 条内置种子规则均受 CI `scripts/bench-seed-recall.mjs` 门禁守护（当前 **54/54 在 R@1 = 100%，R@3 = 100%，误报率 0%**）。
 
-1.1 给循环本身加的东西：对无规则覆盖的目标第三次尝试前，会注入一次结构化诊断提示（"先读报错第一行、查 --help/版本、看锁文件和环境变量，确认原因再改参数重试"）；这样找到的修复结晶为 `origin = self_healing_experiment`，被人工纠偏救回的规则带 `origin = user_correction`。环境变更（锁文件内容、Node 主版本）会把旧环境学的规则放入观察期，新环境自己重新学会同一课时将其退役为 `superseded_by_env_upgrade`。每条规则都带出处：哪个工作区教的（`env_fingerprint`）、什么修好的（`repair_path`）、从哪条规则变异来的（`parent_id`）。
+**按需索引大型外部 `SKILL.md` 与全盘工程资产（零静态上下文占用）**：
+```bash
+immune ingest-skill ./path/to/SKILL.md --pack team-playbook
+immune ingest-disk D:/Projects --max-depth 3   # 批量扫描本地仓库与 SKILL.md 脱敏入库
+```
 
-### 不跑 hook 的 agent 怎么办
+---
 
-Cursor、Codex 这些不认我们的 hook，但它们都读 `AGENTS.md` / `CLAUDE.md`。所以加了条命令，把成熟的规则写进这些文件：
+## 历史会话体检冷启动（`audit`）
+
+刚安装时库是空的。`immune audit` 会流式回放本机已有的 **ZCode** 会话库、**Codex CLI** 记录（`~/.codex/sessions`）、**Claude Code** 转录（`~/.claude/projects`，含嵌套子代理转录）以及 **Google Antigravity** 轨迹日志（`~/.gemini/antigravity/brain/*/.system_generated/logs/transcript.jsonl`）：
 
 ```bash
-immune sync-doc                        # 默认写 AGENTS.md
-immune sync-doc --out CLAUDE.md --min-hits 5
+immune audit --dry-run                 # 只读生成踩坑体检报告：按工具统计失败、高频重复坑点与可省 Token
+immune audit --days 30 --max 25        # 将历史经验入队蒸馏成你的首批抗体（配置了 LLM 则自动走模型）
 ```
 
-内容写在 `<!-- immune:generated -->` 标记之间。标记外的内容一个字不动，规则里的尖括号先剥掉再写，重复执行是替换那一段，不会越写越长。
+---
 
-想让它每回合自动同步，开两个环境变量：`IMMUNE_SYNC_DOC=AGENTS.md`（或 `1` 表示用默认目标），`IMMUNE_SYNC_DOC_MIN_HITS=3`（少于三次命中的规则不导出）。
+## 五维质检、规则改写、去重合并与盲区覆盖率
 
-### 跑分和 CI
+### 五维入库质量门禁与工作区严格隔离（`v2.1`）
+每条候选规则入库前均按 **具体性、可执行性、可移植性、证据强度、防泄漏安全性** 进行 `0–100` 评分（`core/rubric.ts`、`core/hygiene.ts`）：
+- **`advice`（全局通用建议，`project_scope = '*'`）**：经模型或人工提炼的跨项目工程准则（纯确定性命令回声在结构上严禁进入全局作用域，彻底杜绝跨仓库串味）。
+- **`tactic`（项目专属战术，`proj:<slug>:<hash8>`）**：绑定项目目录指纹，仅在该项目工作区内召回注入。
+- **`quarantined`（自动隔离）**：原始 `tool=` 包装文本、绝对路径文件写入、内联 JS/Python 代码块、音视频上传指令或一次性只读探针（`ls`/`grep`/`cat`）直接拦截隔离。旧版数据库可运行 `immune hygiene` 一键自愈。
 
-每次 push 都在 Node 22 和 24 上跑一遍召回闸和单测：
+### 把命令转储升级成精炼建议（`immune rewrite`）
+不配大模型时，确定性路径会忠实记录修好问题的那条命令。你可以通过两种方式将命令转储升级为一句话建议：
+- **配置云端 API / 本地 Magpie / Ollama**：运行 `immune rewrite --dry-run` → `immune rewrite --max 5`（标记 `prescription_source = 'llm'`）。
+- **零 API Key（借用宿主大模型 MCP 自省）**：让当前连接了 MCP 的 Agent 调用 `immune_rewrite_candidates` 读取待改写规则，并调用 `immune_rewrite_apply` 写回（标记 `prescription_source = 'host_llm'`）。
 
-* **失败判定**（`scripts/eval-judge.mjs`）：把 **21,034 次带宿主标注的真实工具调用**回放给判定器——与宿主标注**一致率 97.81%**，**0 假阴性**，461 个假阳性（2.19%）——全部是探针/检查类命令，非零退出本来就是想要的"答案"，宿主因此标注为"完成"。该类别已量化并在 AGENTS.md 决策 #25 接受。
-* **单测**：`npm test`（当前 **245 / 245** 全部通过；CI 在 Node 22 和 24 上跑，徽章链接到结果）。`scripts/verify-*.mjs` 另加 15 + 24 + 20 + 10 + 34 条宿主与契约级断言。本地都能用上面的命令复现。
-* **召回**：固定的中英场景矩阵，8 条改述正例、6 条 gram 干净的负例，现为 **R@1 100%、R@3 100%、误报 0%**；42 条内置种子规则集经 `lexicalTriggerAffinity` 重排与双语概念图扩展，**R@1 从 69% 提升至 95%、R@3 100%、误报 0%**。
-* **索引和查询**（`scripts/bench-scale.mjs`）：300 条规则入库 55 ms（每条 0.18 ms）；67 次匹配 p50 0.58 ms、p95 1.03 ms。
-* **反事实拦截**：在 28,961 次真实多宿主（ZCode + Codex + Antigravity）历史流式重放（`scripts/bench-ablation.mjs`）中，**Cold-Start 重复错提前拦截率 88.5%（115/130）**，加载内置包与全盘规则先验后 **Warm-Start 重复拦截率 96.9%（126/130）**、全错误覆盖率 **94.3%（416/441）**。
-* **hook 开销**（`scripts/bench-tool-latency.mjs`）：工具执行路径永远不碰模型（中位 1.697 ms），蒸馏计算放在回合边界并受 `1–60 s` 预算钳位。
-* **真机验证 LLM**（`scripts/verify-llm.mjs`）：配了端点就一条命令走通全链路。
+### 近似规则合并、盲区覆盖率、Red-3 分诊与 WAL 安全备份
+```bash
+immune consolidate --dry-run       # 预览同症状、同工具且处方相似度 >=70% 的可合并规则对
+immune coverage --days 30 --top 8  # 区分历史错误：已知（known）、仍在注入（still injected）与真盲区（uncovered）
+immune triage                      # 查看 Red-3 注入后失败五桶分诊（网络抖动 / 跨仓串台 / 模型无视 / 过期建议）
+immune receipts                    # 校验防篡改 SHA-256 投递回执哈希链与按模型统计的节省收益
+immune models                      # 各模型规则存活率矩阵 + 本机 Magpie 网关只读遥测关联
+immune backup                      # WAL 安全热备份（直接 cp 复制 WAL 模式下的 SQLite 可能得到 0 行空库！）
+immune export 5 ./SKILL.md         # 经隐私闸门脱敏导出高命中规则（自动阻断含路径/邮箱/密钥的条目）
+immune sync-doc                    # 将成熟规则同步写入 AGENTS.md（或已存在的 CLAUDE.md）托管块
+```
 
-### 和别的工具比
+---
 
-|  | agent-immune | [deja-vu](https://github.com/vshulcz/deja-vu) | [mem0](https://github.com/mem0ai/mem0) | [claude-memory-compiler](https://github.com/nicobailon/claude-memory-compiler) |
+## CLI 命令与 21 项 MCP 工具速查表
+
+随时可运行 `immune --help` 或 `immune <子命令> --help` 查看详细参数（只读与巡检命令均支持 `--json` 机器可读输出）。
+
+<details>
+<summary><b>展开查看全部 27 个 CLI 子命令</b></summary>
+
+| 分类 | 命令 | 作用 |
+| --- | --- | --- |
+| **快速上手与宿主连接** | `immune demo` | 在内存中演示完整的「失败 → 蒸馏评分 → 异构提问召回 → `<immune_memory>`」闭环 |
+| | `immune connect [host] [--status\|--refresh\|--remove] [--json]` | 一键接入或卸载 11 类外部编程助手（省略 `host` 自动探测本机环境） |
+| | `immune git-hook [--install\|--remove\|--status] [--warn-only]` | 无损安装或卸载 `.git/hooks/pre-commit` 本地提交前避坑巡检钩子 |
+| | `immune completions <bash\|zsh\|fish\|powershell>` | 输出终端 Tab 自动补全脚本（支持 `immune` 与 `dsh-immune-system`） |
+| | `immune doctor [--json]` | 自检 Node/FTS5、双库状态、固定安装位钩子路径、UI 契约、预算钳位与规则卫生 |
+| | `immune ui [--port 7788]` | 启动本地离线回环仪表盘（含「召回模拟器」、中英双语切换） |
+| **抗体库管理与同步** | `immune list [--all] [--json]` | 查看当前生效（或含已退役/隔离）的抗体列表、评分与作用域 |
+| | `immune search <query>` | 只读搜索（不虚增命中计数） |
+| | `immune explain "<query>" [--tool T] [--limit N] [--json]` | 只读「召回模拟器」：查看概念图谱扩展、打分拆解与注入预览 |
+| | `immune forget <id> \| --last \| --prune [days]` | 删除指定规则（完整保留只追加 SHA-256 回执链）或清理长期零命中僵尸规则 |
+| | `immune stats [--json]` | 查看规则分布、抑制重复带来的可省 Token 估算、模型归因与睡眠评审簇 |
+| | `immune export [min_hits] [out.md]` | 将验证过的抗体经隐私闸门导出为 `SKILL.md` |
+| | `immune export-json [out.json]` / `import-json <in.json>` | 导出或导入可迁移 JSON 规则快照（强制执行 `shareSanityCheck`） |
+| | `immune sync-doc [--out FILE] [--min-hits N]` | 将成熟规则同步至 `AGENTS.md`（若仅存在 `CLAUDE.md` 则自动对齐） |
+| | `immune ci-check [--diff FILE] [--doc FILE] [--github] [--warn-only] [--json]` | 无状态扫描 Git Diff 风险行，支持 GitHub PR 行级批注与 Step Summary |
+| | `immune backup [dest.sqlite]` | 调用 `node:sqlite` 原生备份接口穿过 WAL 写出一致快照 |
+| **冷启动与知识摄入** | `immune seed [pack] [--baseline widely\|newly] [--remove] [--json]` | 列出、安装或保守卸载 9 套内置防呆种子包 |
+| | `immune audit [--dry-run] [--days N] [--max N] [--source S] [--json]` | 回放 ZCode / Codex / Claude Code / Antigravity 历史日志生成体检报告与蒸馏任务 |
+| | `immune ingest-skill <path> [--pack P] [--baseline B] [--remove]` | 将外部 `SKILL.md` 或规范文档按章节/表格索引进 FTS5 |
+| | `immune ingest-disk [roots...] [--max-depth N] [--dry-run]` | 扫描指定磁盘目录树下的工程规范与技能资产并脱敏入库 |
+| **质量治理与遥测** | `immune hygiene [--dry-run] [--json]` | 执行五维评分、路径抽象、工作区作用域加锁与噪声隔离修复 |
+| | `immune rewrite [--dry-run] [--max N] [--id a,b]` | 调用所配模型将命令行转储改写为精炼建议 |
+| | `immune consolidate [--dry-run] [--json]` | 合并同课近似规则，无损继承触发词、命中计数与多模型归因 |
+| | `immune coverage [--days N] [--top K] [--json]` | 审计宿主近期真实报错的规则覆盖率与未覆盖盲区簇 |
+| | `immune triage [--limit N] [--json]` | 查看 Red-3 注入后失败五桶分诊详情 |
+| | `immune receipts [--limit N] [--json]` | 校验 SHA-256 投递回执哈希链完整性与节省统计 |
+| | `immune models [--json]` / `workspaces [--json]` / `detours [--json]` | 模型免疫存活矩阵（含 Magpie 遥测）、已登记工作区画像与 4+ 次探测弯路记录 |
+</details>
+
+<details>
+<summary><b>展开查看全部 21 项 MCP Server 工具</b></summary>
+
+| MCP 工具名 | 功能说明 |
+| --- | --- |
+| `immune_match` | 针对当前任务检索匹配抗体并记录投递回执 |
+| `immune_list` | 只读浏览抗体库（绝不虚增命中计数） |
+| `immune_learn` | 写入人工或 Agent 确认的经验规则（`prescription_source = 'human'`） |
+| `immune_forget` | 按 ID 或 `--last` 删除规则 |
+| `immune_status` | 激活或退役指定规则 |
+| `immune_stats` | 读取库健康度、隔离计数、模型归因与节省 Token 统计 |
+| `immune_export` | 经隐私安全门禁导出成熟规则 Markdown |
+| `immune_audit` | 只读扫描本机多宿主会话历史并生成踩坑报告 |
+| `immune_seed_packs` | 查询或安装 9 套内置种子规则包 |
+| `immune_ingest_skill` | 按需索引或移除外部 `SKILL.md` / Markdown 指南 |
+| `immune_rewrite_candidates` | 获取待改写的回声级命令规则与严格改写契约（供无 API Key 宿主自省改写） |
+| `immune_rewrite_apply` | 提交经守卫校验的宿主改写结果（`prescription_source = 'host_llm'`） |
+| `immune_hygiene` | 预览或执行五维质量清洗与作用域修复 |
+| `immune_triage` | 查询 Red-3 五桶因果分诊统计 |
+| `immune_receipts` | 校验 SHA-256 投递回执链完整性与 ROI |
+| `immune_workspaces` | 列出已索引工作区作用域、技术栈与规则数 |
+| `immune_ingest_disk` | 扫描指定工作区目录提取规范与技能规则 |
+| `immune_models` | 查询跨模型规则存活矩阵与本地 Magpie 网关流量摘要 |
+| `immune_doctor` | 执行完整的运行环境、SQLite FTS5、钩子路径与规则卫生体检 |
+| `immune_ci_check` | 无状态扫描 Git Diff 是否触碰仓库 `AGENTS.md` / `CLAUDE.md` 已登记坑点 |
+| `immune_explain` | 只读召回模拟器：实时返回概念图谱扩展、多维打分拆解与 `<immune_memory>` 注入预览 |
+</details>
+
+---
+
+## 跑分与持续集成
+
+每次提交与 PR 均在 **Linux（Node 22 & 24）** 与 **Windows（Node 24）** 双平台矩阵运行门禁：
+
+- **失败判定真值回放**（`scripts/eval-judge.mjs`）：回放 **21,034 次带宿主标注的真实工具调用**，判定一致率 **97.81%**，**0 假阴性**；`2.19%`（`461` 次）假阳性全部为「非零退出即预期答案」的只读探针命令，由探针免疫与 Red-3 分诊在下游安全隔离（详见 [AGENTS.md](AGENTS.md) 决策 #25）。
+- **自动化单测与多宿主契约验证**：**`260 / 260` 项单测与集成测试全绿**（`npm test`）、**`42 / 42` 项多宿主真实子进程 Hook 端到端断言**（覆盖 Claude Code、Codex、Antigravity、Gemini CLI 与 Cursor，`scripts/verify-connected-runtime.mjs`）、**`20 / 20` 项真实 Cordis 事件总线断言**（`scripts/verify-live-host.mjs`），以及 **`100%` 源码与构建产物 1:1 静态导入图校验**（`scripts/verify-dist-integrity.mjs`）。
+- **中英双语召回与 9 包内容门禁**：`scripts/bench-recall.mjs` 达 **R@1 100%、R@3 100%、误报 0%**；覆盖全部 **54 条内置种子规则**的 `scripts/bench-seed-recall.mjs` 达 **R@1 100%（54/54）、R@3 100%（54/54）、误报 0%（0/9）**。
+- **索引规模与热路径延迟**（`scripts/bench-scale.mjs`、`scripts/bench-tool-latency.mjs`）：300 条规则入库仅需 `60 ms`（`0.20 ms/条`），检索延迟 `p50 = 0.60 ms`、`p95 = 1.20 ms`；工具执行路径零模型调用（中位延迟 `1.8 ms`），蒸馏统一在回合末 `1–60 s` 预算钳位内批量排空。
+- **严格因果反事实拦截回放**（`scripts/bench-ablation.mjs`）：在 **28,961 次真实多宿主调用**上按时间顺序严格前向重放，零先验 **Cold-Start 提前拦截 88.5%（115/130）** 的重复错误；预热内置包与本地资产后 **Warm-Start 拦截率达 96.9%（126/130）**，全错误覆盖率 **94.3%**。
+
+### 与同类工具的定位对比
+
+| 维度 | **agent-immune** | [deja-vu](https://github.com/vshulcz/deja-vu) | [mem0](https://github.com/mem0ai/mem0) | [claude-memory-compiler](https://github.com/nicobailon/claude-memory-compiler) |
 | --- | --- | --- | --- | --- |
-| 存什么 | 失败→成功的配对，蒸馏成规则 | 完整会话记录 | 对话里的事实 | 编译好的 skill 文件 |
-| 怎么用上 | 靠 hook，在重蹈之前注入 | 需要时搜索（MCP / TUI） | SDK 层召回 | 模型得主动去读 |
-| 依赖 | 无（`node:sqlite` FTS5） | 一个 Go 二进制 | Python + 向量库 | Node |
-| 宿主 | DSH、ZCode 原生；Claude Code、Codex 与 Antigravity 走 `connect` | Claude Code、Codex、Cursor 等 36+ | 走 SDK 都行 | Claude Code |
-
-其实是两件不同的事：deja-vu 把你做过的全量索引起来供搜索，这里只留教训，然后不请自来地塞进上下文。
-
-### 实现上几个躲不过去的问题
-
-**怎么判断一次调用失败了。** 两个宿主都不会因为退出码非零就报错：ZCode 的 `PostToolUseFailure` 只有 handler 抛异常才触发，DSH 文档写得很清楚——非零退出是"报告"，不是"错误"。所以两边都自己判，顺序是：结构化 `value.exitCode` 优先；其次是 `isError` 或 `error` 载荷；再其次是尾部的 `[exit code: N]`、`[killed by signal: X]`、超时标记；最后才是窄范围的关键字正则。有结构化载荷但没有退出状态的，一律当成功，正文不扫——不然 grep 一个日志、日志里写着 `Error:`，就被记成一次失败。
-
-**配对的边界。** 失败的调用只跟"同一类活"的成功配对：文件工具看同一个文件，命令看是否同族（`npm`、`npx`、`pnpm` 算一族，所以 `npm` 编译失败换 `npx` 编译成功是同一次修复；`npm …` 后面接 `git …` 不算）。只读探测（`ls`、`cat`、`git status`、`git diff`、`which`）永远不会闭合一次失败——它没可能修好任何东西。
-
-**合并与淘汰。** 处方用字符 3-gram 的 Jaccard 比（中文短句会和字符集相似度取最大值，因为插一个字就把所有 trigram 错位了）。到 0.70 就并进已有那条，同时把新触发词拼进去，所以每换个说法，规则的召回面就宽一点。被注入过却还是没能阻止失败的规则，三次就退役——但前提是这三次至少占它投递量的四分之一。只看绝对次数会把好规则扔掉：生产库里有一条 516 次命中、3 次失败（0.6%）的规则就这样被退役了。偶尔失手的规则是在工作，不是烂了；当初促成反腐蚀的垃圾规则失败率是 50%。扣分仍带相关性门控，免得一条 `Bash …` 规则被无关的 Bash 失败连坐。
-
-**检索。** 三个字以上走 FTS5 trigram，两个字的词（跨域、端口、权限这种）走绑定参数的 LIKE——trigram 根本索引不了两个字。候选再做一次重排：prompt 里提到的路径 ×1.5，来自共享库的规则 ×0.85，时间衰减是 `1 / (1 + 0.02 × 天数)`。
-
-**哪个模型。** hook 的 payload 里只有 `session_id`，没有模型名。但宿主自己是记的——每次请求一行 `model_usage`——所以投递时去读这条会话最新的模型（只读、参数绑定、约 6 ms），且每 30 秒重新问一次。这个窗口是量出来的：本机同一条会话里 GLM-5.3-Flash 用了 1395 次、auto/deepseek-v4.1-flash 用了 1248 次，按会话缓存会把后面所有投递都记到最先回答的模型头上。仪表盘按模型列投递量，被两个以上模型投递过且没失败的规则算"跨模型成立"——这是"处方是通用动作，不是某个模型的毛病"的可测形式。别的宿主可以用 `IMMUNE_MODEL_NAME` 直接指定。
-
-**省了多少。** `immune stats` 用抑制掉的重复次数 × 两次往返（没发生的失败 + 没发生的重试）× 本项目自己已完成请求的 token 中位数，并把三个输入都打出来。它故意不打美元数：不同模型价格不同、有些模型未计价、缓存影响在工具内部根本观测不到。
-
-**注入和预算。** 注入的文字只来自我们自己蒸馏出来的字段，尖括号剥掉（不然一行就能把包装标签提前闭合），长度截断，并且标注是"仅供参考"。同一组候选在四回合内不重复注入，被跳过的那几回合也不计命中数——那个计数驱动晋升和淘汰，灌水会让统计说谎。蒸馏任务在工具调用期间入队，回合末按 `IMMUNE_DISTILL_BUDGET_MS`（默认 12 秒）排空，有模型时一次请求处理四条。
+| **存什么** | 经五维评分的「失败 → 修复」抗体 + SHA-256 回执链 | 完整会话记录原文 | 对话事实片段 | 编译后的静态 Skill 文件 |
+| **怎么生效** | Hook 在重蹈覆辙前主动注入 + PR GitHub Action | 需要主动搜索（MCP/TUI） | SDK 接口调用 | 依赖模型主动读取 |
+| **防腐烂与隔离** | 五维评分 + 工作区隔离 + Red-3 五桶因果分诊 | 无（原样检索） | 向量覆盖 | 手动重编译 |
+| **运行时依赖** | **零依赖**（Node 内置 `node:sqlite` FTS5） | Go 二进制 | Python + 向量库 | Node 第三方依赖 |
+| **覆盖环境** | Claude Code、Cursor、Codex、Antigravity、Gemini CLI、VS Code、Zed、Windsurf、Roo Code、Cline、DSH、ZCode、GitHub Actions、TS SDK | Claude Code、Codex、Cursor 等 | 自定义 SDK 应用 | Claude Code |
 
 ---
 
-## v2.0 架构升级
-
-在真实多宿主仓库的长期运行中，我们发现单纯记录“失败 → 成功”的原始配对会产生大量噪声规则（如绑定特定本地路径的文件写入、一次性环境探测命令或孤立报错碎片），不仅无法跨项目复用，还容易在不同仓库间造成误导。
-
-为此，v2.0 对底层引擎进行了系统性重构，核心围绕**统一运行时、入库质检、因果分诊、高精度检索与本地知识沉淀**五个方面展开：
+## 核心架构与工程细节
 
 <div align="center">
-  <img src="docs/fig-arch-v2.png" alt="v2.0 系统架构图" width="720">
-  <img src="docs/fig-benchmarks-v2.png" alt="v2.0 实测对比图" width="720">
+  <img src="docs/fig-arch-v2.png" alt="v2 系统架构图" width="740">
+  <br>
+  <img src="docs/fig-benchmarks-v2.png" alt="真实数据消融与反事实回放对比" width="740">
 </div>
 
-* **统一运行时与预算控制（`core/runtime.ts`）**：将多宿主状态机收拢为单一内核，统一处理事件映射、会话隔离与 `1–60` 秒蒸馏预算钳位，避免钩子阻塞正常开发流程。
-* **五维质量门禁与路径脱敏（`core/hygiene.ts` + `core/rubric.ts`）**：每条规则入库前均需通过 5 维评分（满分 100），自动将本地路径脱敏为 `<repo>`/`<path>` 并绑定项目指纹；通用规则进入共享库，项目级规则锁在本仓，低质或一次性探测碎片自动隔离。
-* **Red-3 五桶因果分诊与回执账本（`core/triage.ts` + `core/receipts.ts`）**：区分网络超时、跨仓串台、模型忽略提醒与规则自身误导，避免健康规则因外部偶发错误被误杀；对模型持续忽略的高价值规则自动升级为 `[CRITICAL · ignored N×]` 强提醒，并通过 SHA-256 防篡改回执链记录每次投递结果。
-* **双语检索增强与反事实拦截（`core/retrieval.ts` + `core/relevance.ts`）**：补齐短词检索、长 diff 截断保护与词根切分，结合中英开发同义词图谱提升首条命中率与跨会话重复错误拦截率。
-* **本地工程知识沉淀与模型分析（`core/disk-ingest.ts` + `core/audit/magpie.ts`）**：支持对本地工程与 `SKILL.md` 进行脱敏提取，并支持只读解析本地网关流量以统计不同模型对规则的采纳与忽略分布（全程不接触敏感凭证）。
+- **失败靠自己判，不轻信 `isError`**：DSH 与 ZCode 中命令非零退出均不会抛异常。判定器严格按「结构化 `exitCode` → `isError` → 尾部退出码/信号/超时标记 → 窄特征词」分级判定；带非空结构化载荷但无退出码的结果一律视为成功且不扫正文，读取含 `Error:` 的日志文件绝不误判。
+- **同目标配对与探针免疫**：失败仅与同一文件或同一命令族（`npm`/`npx`/`pnpm`、`cargo`、`go`）的后续成功配对；只读探针（`ls`、`cat`、`git status`、`grep`）及权限拒绝（`sandboxDenied`、`UPLOAD_NEEDS_PERMISSION`）绝不污染规则库。
+- **渲染层标签逃逸隔离**：所有宿主通道在渲染注入块时均强制剥离 `<` 与 `>`，恶意或畸形报错输出绝无可能提前闭合 `</immune_memory>`。
+- **确定性高危护卫**：`IMMUNE_GUARD=off|warn|deny`（默认 `off`）仅由源码中带反误伤测试矩阵的确定性规则驱动，绝不将模型输出编译为拦截正则。*（注：`IMMUNE_GUARD=warn` 仅在支持上下文提示的 Hook 宿主生效；DSH 的 `PreToolDecision` 无纯提醒通道，开启后会执行拦截。）*
+- **可选大模型配置**：默认离线可用；如需启用云端 OpenAI 兼容端点、本地 Magpie 网关（`127.0.0.1:3425/v1`）或本地 Ollama（`127.0.0.1:11434/v1`），详见 [`.env.example`](.env.example)。
 
----
-
-## 环境要求与配置
-
-* **零第三方运行时依赖**：[package.json](package.json) 的 `dependencies` 为空，仅依赖 **Node.js `^22.19.0 || >=24.0.0`** 原生内置模块（`node:sqlite`、`node:zlib`）。
-* **开箱即用与可选配置**：默认启用本地数据库与确定性引擎。如需接入云端/本地大模型蒸馏、危险命令拦截或文档自动同步，可参考根目录的 [`.env.example`](.env.example)：
-  * 云端大模型：`IMMUNE_LLM_BASE_URL`、`IMMUNE_LLM_MODEL`、`IMMUNE_LLM_API_KEY`（内置路径脱敏与私网 SSRF 拦截）
-  * 本地模型网关：`IMMUNE_MAGPIE_MODEL`（`127.0.0.1:3425/v1`）或 `IMMUNE_OLLAMA_MODEL`（`127.0.0.1:11434/v1`）
-  * 预算与护卫：`IMMUNE_DISTILL_BUDGET_MS`（`1000–60000` 毫秒）、`IMMUNE_GUARD`（`off` / `warn` / `deny`）、`IMMUNE_SYNC_DOC`
-* **常用验证命令**：
-  * `npx dsh-immune-system@latest demo`（纯内存端到端演示）
-  * `npm run build && npm test`（构建并运行 245 项单元测试）
-  * `node scripts/bench-ablation.mjs`（运行脱敏消融与反事实回放基准）
-
-更多架构与评测细节见 [架构文档 docs/ARCHITECTURE-V2.md](docs/ARCHITECTURE-V2.md) 与 [评测报告 docs/EVALUATION.md](docs/EVALUATION.md)。
-
----
-
-## 仓库与工程规范
-
-* **开源仓库**：`https://github.com/meat-daemon-404/agent-immune`（npm 包名 `dsh-immune-system`）
-* **工程约束**：[AGENTS.md](AGENTS.md) 记录了核心架构不变量（如退出码优先判定、禁止将不可信输出编译为正则拦截规则、严格的钩子 JSON 输出契约），并由自动化版本检查、构建完整性校验与 245 项测试共同保障。
-* **提示词与自检机制（[core/prompts.ts](core/prompts.ts)）**：采用严格 JSON 抽取、基于真实文件修改差异的修复归纳、低分草稿单轮自省重写（`< 68` 分触发 `CRITIQUE_DISTILL_PROMPT`），以及面向无 API Key 宿主的 MCP 规则改写接口（`immune_rewrite_candidates` / `immune_rewrite_apply`）。
-
-完整的设计取舍与历史变更记录见 [AGENTS.md](AGENTS.md)。
+延伸阅读：[V2 架构白皮书](docs/ARCHITECTURE-V2.md) · [评测与消融实验报告](docs/EVALUATION.md) · [版本更新日志](CHANGELOG.md) · [42 条核心工程不变量 (`AGENTS.md`)](AGENTS.md) · [贡献指南](CONTRIBUTING.md) · [安全策略](SECURITY.md)。

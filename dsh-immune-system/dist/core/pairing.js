@@ -179,6 +179,8 @@ export function targetSignature(toolName, input, cwd) {
 const PROGRAM_FAMILIES = [
     new Set(['npm', 'npx', 'pnpm', 'yarn', 'bun', 'bunx', 'node', 'corepack']),
     new Set(['python', 'python3', 'py', 'pip', 'pip3', 'uv', 'poetry']),
+    new Set(['cargo', 'rustc', 'rustup']),
+    new Set(['go']),
     new Set(['git', 'gh']),
     new Set(['docker', 'docker-compose', 'podman']),
 ];

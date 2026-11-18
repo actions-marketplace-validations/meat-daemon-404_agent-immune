@@ -29,6 +29,12 @@ export interface SnapshotAntibody {
   status: string;
   tool_name: string | null;
   repair_path?: string[];
+  project_scope?: string;
+  quality_grade?: string;
+  rubric_score?: number;
+  root_cause?: string;
+  prescription_source?: string;
+  origin?: string;
   created_at: number;
 }
 
@@ -41,7 +47,7 @@ export interface LibrarySnapshot {
 }
 
 export function exportLibrary(store: ImmuneStore): LibrarySnapshot {
-  const rows = store.listAll(true);
+  const rows = store.listAll(true).filter((a) => a.status !== 'quarantined');
   return {
     format: SNAPSHOT_FORMAT,
     version: SNAPSHOT_VERSION,
@@ -56,6 +62,12 @@ export function exportLibrary(store: ImmuneStore): LibrarySnapshot {
       status: a.status,
       tool_name: a.tool_name,
       repair_path: (a.repair_path ?? []).map((step) => redact(step)),
+      ...(a.project_scope ? { project_scope: a.project_scope } : {}),
+      ...(a.quality_grade ? { quality_grade: a.quality_grade } : {}),
+      ...(typeof a.rubric_score === 'number' ? { rubric_score: a.rubric_score } : {}),
+      ...(a.root_cause ? { root_cause: a.root_cause } : {}),
+      ...(a.prescription_source ? { prescription_source: a.prescription_source } : {}),
+      ...(a.origin ? { origin: a.origin } : {}),
       created_at: a.created_at,
     })),
   };
@@ -71,7 +83,8 @@ function asNumber(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }
 
-function asStatus(value: unknown): 'active' | 'retired' {
+function asStatus(value: unknown): 'active' | 'retired' | 'quarantined' {
+  if (value === 'quarantined') return 'quarantined';
   return value === 'retired' ? 'retired' : 'active';
 }
 
@@ -141,6 +154,14 @@ export function importLibrary(store: ImmuneStore, snapshot: unknown): ImportRepo
       symptom: incoming.symptom,
       prescription: incoming.prescription,
       tool_name: incoming.tool_name,
+      ...(typeof row.project_scope === 'string' && row.project_scope.trim()
+        ? { project_scope: row.project_scope.trim() }
+        : {}),
+      ...(typeof row.prescription_source === 'string'
+        ? { prescription_source: row.prescription_source as NewAntibody['prescription_source'] }
+        : {}),
+      ...(typeof row.origin === 'string' ? { origin: row.origin } : {}),
+      ...(incoming.status === 'quarantined' ? { status: 'quarantined' as const } : {}),
       ...(repairPath.length > 0 ? { repair_path: repairPath } : {}),
     };
     const id = store.insert(created);
@@ -151,7 +172,9 @@ export function importLibrary(store: ImmuneStore, snapshot: unknown): ImportRepo
     if (incoming.hit_count > 0 || incoming.fail_count > 0) {
       applyTallies(store, id, incoming.hit_count, incoming.fail_count, incoming.created_at);
     }
-    if (incoming.status === 'retired') store.setStatus(id, 'retired');
+    if (incoming.status === 'retired' || incoming.status === 'quarantined') {
+      store.setStatus(id, incoming.status);
+    }
     report.added += 1;
   }
 

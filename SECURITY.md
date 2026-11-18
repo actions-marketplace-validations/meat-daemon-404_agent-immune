@@ -3,7 +3,7 @@
 ## Supported versions
 
 Only the latest release line receives security fixes. Given the release
-cadence, that is effectively "update to the newest 1.0.x".
+cadence, that is effectively "update to the newest `2.x` release".
 
 ## Reporting a vulnerability
 

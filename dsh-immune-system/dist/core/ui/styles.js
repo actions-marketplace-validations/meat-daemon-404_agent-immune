@@ -186,6 +186,13 @@ export const DASHBOARD_CSS = `  :root {
   }
   .tag.hi { border-color: var(--ok); color: var(--ok); }
   .tag.low { border-color: var(--warn); color: var(--warn); }
+  .tag.crit { border-color: var(--bad); color: var(--bad); background: var(--bad-soft); font-weight: 600; }
+  .tag.link { cursor: pointer; border-color: var(--accent); color: var(--accent); }
+  .tag.link:hover { background: var(--accent-soft); }
+  .explain-box { padding: 14px; border-bottom: 1px solid var(--line-soft); background: var(--bg-soft); }
+  .explain-row { display: flex; gap: 8px; align-items: center; }
+  .explain-row input { flex: 1; padding: 8px 12px; font-size: 13px; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-sm); }
+  .explain-preview { margin: 10px 0 0; padding: 10px 12px; border-radius: var(--radius-sm); border: 1px solid var(--line); background: var(--panel); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; white-space: pre-wrap; color: var(--ok); overflow-x: auto; }
   .counts { font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--faint); }
   .counts b { color: var(--ok); font-weight: 600; }
   .counts .f { color: var(--bad); font-weight: 600; }

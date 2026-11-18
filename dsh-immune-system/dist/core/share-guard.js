@@ -113,35 +113,147 @@ export function parseManagedBlock(docPath) {
         rules.push({ trigger_pattern: current.trigger, symptom: current.avoid, prescription: '' });
     return rules.filter((rule) => rule.trigger_pattern.length > 0);
 }
+const GENERIC_CI_WORDS = new Set([
+    'file', 'files', 'url', 'urls', 'path', 'paths', 'import', 'export',
+    'code', 'line', 'lines', 'node', 'json', 'text', 'data', 'value',
+    'type', 'call', 'test', 'read', 'write', 'open', 'close', 'check',
+    'list', 'name', 'true', 'false', 'null', 'error', 'failed', 'failure',
+    'command', 'exit', 'status', 'output', 'input', 'result', 'sync', 'auto',
+    'probe', 'windows', 'linux', 'macos',
+]);
+const HIGH_RISK_CODE_ANCHORS = new Set([
+    '__dirname', '__filename', 'eresolve', 'err_unsupported_esm_url_scheme',
+    'eperm', 'eacces', 'enoent', 'eaddrinuse', 'indentationerror',
+]);
+function escapeRegex(raw) {
+    return raw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+function tokenMatchesDiffLine(lowerLine, token) {
+    if (/^[a-z0-9_.]+$/i.test(token)) {
+        // Allow leading flag hyphens (`--force` matches `force`), while refusing
+        // trailing hyphen extensions (`--force-with-lease` does NOT match `force`, #17).
+        return new RegExp(`(?<![a-z0-9_])${escapeRegex(token)}(?![a-z0-9_-])`, 'i').test(lowerLine);
+    }
+    if (/^[a-z0-9_.-]+$/i.test(token)) {
+        return new RegExp(`(?<![a-z0-9_])${escapeRegex(token)}(?![a-z0-9_-])`, 'i').test(lowerLine);
+    }
+    return lowerLine.includes(token);
+}
 /**
- * Scan diff added lines against the managed-block rules. A finding is an
- * advisory: the trigger text (a recall key) appearing in an ADDED line means
- * the pitfall's territory was just touched — worth a look before push.
+ * Scan diff added lines against the managed-block rules.
  *
- * `diffText` is the raw `git diff` output; only + lines are considered.
+ * Improvements in v2.1:
+ *  - Parses unified diff `+++ b/<file>` and `@@ -a,b +c,d @@` hunk headers so
+ *    findings carry real file paths and line numbers (for GitHub PR annotations).
+ *  - Skips changes inside the `<!-- immune:generated -->` block itself so
+ *    running `immune sync-doc` never self-triggers CI failure.
+ *  - Uses word-boundary + hyphen-safe token matching and requires >=2 matched
+ *    trigger tokens (or an unambiguous high-specificity anchor), eliminating
+ *    single-word false positives on ordinary `import` / `file` / `url` lines.
  */
-export function ciCheck(diffText, rules) {
+export function ciCheck(diffText, rules, opts = {}) {
+    const ignoreSet = new Set((opts.ignoreFiles ?? []).map((f) => f.replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase()));
     const added = [];
-    let lineNo = 0;
-    for (const line of diffText.split('\n')) {
-        lineNo += 1;
-        if (!line.startsWith('+') || line.startsWith('+++'))
+    let rawLineNo = 0;
+    let currentFile;
+    let hunkLine = null;
+    let inGeneratedBlock = false;
+    for (const rawLine of diffText.split('\n')) {
+        rawLineNo += 1;
+        const line = rawLine.replace(/\r$/, '');
+        if (line.startsWith('diff --git ')) {
+            hunkLine = null;
+            inGeneratedBlock = false;
+            continue;
+        }
+        if (line.startsWith('+++ ')) {
+            const m = line.match(/^\+\+\+\s+(?:b\/)?(.+)$/);
+            const candidate = m?.[1]?.trim();
+            currentFile = candidate && candidate !== '/dev/null' ? candidate.replace(/\\/g, '/') : undefined;
+            hunkLine = null;
+            inGeneratedBlock = false;
+            continue;
+        }
+        if (line.startsWith('@@ ')) {
+            const m = line.match(/^@@\s+-\d+(?:,\d+)?\s+\+(\d+)(?:,\d+)?\s+@@/);
+            hunkLine = m?.[1] ? Number(m[1]) : null;
+            continue;
+        }
+        if (line.startsWith('--- '))
+            continue;
+        if (line.includes(SECTION_START)) {
+            inGeneratedBlock = true;
+        }
+        if (line.includes(SECTION_END)) {
+            inGeneratedBlock = false;
+            if (line.startsWith('+') && hunkLine !== null)
+                hunkLine += 1;
+            else if (line.startsWith(' ') && hunkLine !== null)
+                hunkLine += 1;
+            continue;
+        }
+        if (line.startsWith(' ')) {
+            if (hunkLine !== null)
+                hunkLine += 1;
+            continue;
+        }
+        if (line.startsWith('-')) {
+            continue;
+        }
+        if (!line.startsWith('+'))
+            continue;
+        const targetLine = hunkLine !== null ? hunkLine : rawLineNo;
+        if (hunkLine !== null)
+            hunkLine += 1;
+        if (inGeneratedBlock)
+            continue;
+        if (currentFile && ignoreSet.has(currentFile.toLowerCase()))
             continue;
         const text = line.slice(1).trim();
         if (text.length < 3)
             continue;
-        added.push({ line: lineNo, text });
+        // Skip managed-block three-line bullets even when hunk context started inside the block.
+        if (/^-\s*(?:忌\/avoid:|宜\/do:|repaired by:)/.test(text))
+            continue;
+        added.push({ ...(currentFile ? { file: currentFile } : {}), line: targetLine, text });
     }
+    const preparedRules = rules
+        .map((rule) => {
+        const rawTrigger = rule.trigger_pattern ?? '';
+        const tokens = [...signals(rawTrigger)].filter((token) => !TOOL_NAMES.has(token));
+        const requiredFlags = rawTrigger
+            .split(/\s+/)
+            .map((t) => t.replace(/^[^-a-zA-Z0-9]+|[^a-zA-Z0-9_-]+$/g, '').toLowerCase())
+            .filter((t) => /^--?[a-z0-9][\w-]*$/.test(t));
+        return { rule, tokens, requiredFlags };
+    })
+        .filter((entry) => entry.tokens.length > 0);
     const findings = [];
     for (const addedLine of added) {
-        for (const rule of rules) {
-            const tokens = [...signals(rule.trigger_pattern ?? '')].filter((token) => !TOOL_NAMES.has(token));
-            if (tokens.length === 0)
+        const lower = addedLine.text.toLowerCase();
+        for (const { rule, tokens, requiredFlags } of preparedRules) {
+            // Decision #17 parity: if a rule's trigger explicitly names CLI flag(s)
+            // (e.g. `--force`), a diff line using a safe alternative (`--force-with-lease`)
+            // that matches none of those flags must not be flagged.
+            if (requiredFlags.length > 0 && !requiredFlags.some((flag) => tokenMatchesDiffLine(lower, flag))) {
                 continue;
-            const lower = addedLine.text.toLowerCase();
-            // One distinctive token in an added line is enough to name the territory.
-            if (tokens.some((token) => lower.includes(token))) {
-                findings.push({ line: addedLine.line, text: addedLine.text.slice(0, 120), trigger: rule.trigger_pattern.slice(0, 80) });
+            }
+            const matched = tokens.filter((token) => tokenMatchesDiffLine(lower, token));
+            if (matched.length === 0)
+                continue;
+            const hasHighAnchor = matched.some((token) => HIGH_RISK_CODE_ANCHORS.has(token));
+            const nonGenericCount = matched.filter((token) => !GENERIC_CI_WORDS.has(token)).length;
+            const hit = hasHighAnchor ||
+                (tokens.length === 1 ? nonGenericCount === 1 : matched.length >= 2 && nonGenericCount >= 1);
+            if (hit) {
+                findings.push({
+                    ...(addedLine.file ? { file: addedLine.file } : {}),
+                    line: addedLine.line,
+                    text: addedLine.text.slice(0, 120),
+                    trigger: rule.trigger_pattern.slice(0, 80),
+                    ...(rule.symptom ? { symptom: rule.symptom.slice(0, 120) } : {}),
+                    ...(rule.prescription ? { prescription: rule.prescription.slice(0, 140) } : {}),
+                });
                 break;
             }
         }

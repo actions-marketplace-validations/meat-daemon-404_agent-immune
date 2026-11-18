@@ -10,7 +10,7 @@ import { BUILTIN_PACKS } from '../../../core/packs.js';
 import { ingestSkillPaths, normalizeSkillPackId } from '../../../core/skill-ingest.js';
 import { drainJobs } from '../drain.js';
 import { selfMarkers } from '../root-marker.js';
-import { parseSeedCliArgs } from './shared.js';
+import { flagValue, parseSeedCliArgs } from './shared.js';
 
 export function cmdSeed(store: ImmuneStore, args: string[]): number {
   const flags = parseSeedCliArgs(args, ['--baseline']);
@@ -138,7 +138,7 @@ export function cmdIngestSkill(store: ImmuneStore, args: string[]): number {
 
 export function cmdIngestDisk(store: ImmuneStore, args: string[]): number {
   const flags = parseSeedCliArgs(args, ['--max-projects', '--max-rules', '--depth']);
-  const roots = flags.positional.length > 0 ? flags.positional : ['D:\\'];
+  const roots = flags.positional.length > 0 ? flags.positional : [process.cwd()];
   const dryRun = flags.booleans.has('--dry-run');
   const includeCodexSkills = !flags.booleans.has('--no-codex-skills');
   const maxProjects = Number(flags.values.get('--max-projects') ?? '150');
@@ -171,8 +171,12 @@ export function cmdIngestDisk(store: ImmuneStore, args: string[]): number {
   return 0;
 }
 
-export function cmdWorkspaces(store: ImmuneStore): number {
+export function cmdWorkspaces(store: ImmuneStore, args: string[] = []): number {
   const profiles = store.listWorkspaceProfiles();
+  if (args.includes('--json')) {
+    process.stdout.write(`${JSON.stringify(profiles, null, 2)}\n`);
+    return 0;
+  }
   if (profiles.length === 0) {
     process.stdout.write('no workspace profiles recorded yet — run `immune ingest-disk <root>`\n');
     return 0;
@@ -191,19 +195,19 @@ export function cmdBackfillAsync(
   args: string[],
   onDone: () => void,
 ): void {
-  const dbArg = args.indexOf('--db');
-  const daysArg = args.indexOf('--days');
-  const sessionArg = args.indexOf('--session');
-  const budgetArg = args.indexOf('--budget-ms');
-  const maxArg = args.indexOf('--max');
+  const dbRaw = flagValue(args, '--db');
+  const daysRaw = flagValue(args, '--days');
+  const sessionRaw = flagValue(args, '--session');
+  const budgetRaw = flagValue(args, '--budget-ms');
+  const maxRaw = flagValue(args, '--max');
   const report = backfill(store, {
-    sourceDb: dbArg >= 0 ? resolve(args[dbArg + 1] ?? '') : undefined,
-    days: daysArg >= 0 ? Number(args[daysArg + 1] ?? '120') : 120,
-    sessionId: sessionArg >= 0 ? args[sessionArg + 1] : undefined,
-    ...(maxArg >= 0 ? { max: Number(args[maxArg + 1] ?? '0') } : {}),
+    sourceDb: dbRaw ? resolve(dbRaw) : undefined,
+    days: daysRaw !== undefined ? Number(daysRaw) : 120,
+    sessionId: sessionRaw,
+    ...(maxRaw !== undefined ? { max: Number(maxRaw) } : {}),
     selfMarkers: selfMarkers(),
   });
-  const budget = budgetArg >= 0 ? Number(args[budgetArg + 1] ?? '60000') : 60_000;
+  const budget = budgetRaw !== undefined ? Number(budgetRaw) : 60_000;
   const noLlm = args.includes('--no-llm');
   const llm = noLlm ? null : readLlmConfig();
   let drained = 0;
@@ -242,28 +246,32 @@ export function cmdAudit(
   args: string[],
   onAsyncDone: () => void,
 ): { asyncStarted: boolean; code: number } {
-  const daysArg = args.indexOf('--days');
-  const sourceArg = args.indexOf('--source');
-  const maxArg = args.indexOf('--max');
-  const budgetArg = args.indexOf('--budget-ms');
+  const daysRaw = flagValue(args, '--days');
+  const sourceRaw = flagValue(args, '--source');
+  const maxRaw = flagValue(args, '--max');
+  const budgetRaw = flagValue(args, '--budget-ms');
   const dryRun = args.includes('--dry-run');
-  const source = sourceArg >= 0 ? (args[sourceArg + 1] ?? 'auto') : 'auto';
+  const source = sourceRaw ?? 'auto';
   if (!['auto', 'zcode', 'codex', 'claude-code', 'antigravity'].includes(source)) {
     process.stderr.write(`audit: unknown source "${source}"\n`);
     return { asyncStarted: false, code: 2 };
   }
   const days = args.includes('--all-time')
     ? 3650
-    : daysArg >= 0 && Number.isFinite(Number(args[daysArg + 1]))
-      ? Number(args[daysArg + 1] ?? '30')
+    : daysRaw !== undefined && Number.isFinite(Number(daysRaw))
+      ? Number(daysRaw)
       : 30;
   const report = auditHistory(store, {
     days,
     source: source as 'auto' | 'zcode' | 'codex' | 'claude-code' | 'antigravity',
-    ...(maxArg >= 0 ? { max: Number(args[maxArg + 1] ?? '0') } : {}),
+    ...(maxRaw !== undefined ? { max: Number(maxRaw) } : {}),
     dryRun,
     selfMarkers: selfMarkers(),
   });
+  if (dryRun && args.includes('--json')) {
+    process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+    return { asyncStarted: false, code: 0 };
+  }
   process.stdout.write(`${renderAuditReport(report, days, dryRun)}\n`);
   if (args.includes('--magpie') || args.includes('--all-time')) {
     const mg = scanMagpieTelemetry();
@@ -278,7 +286,7 @@ export function cmdAudit(
 
   const noLlm = args.includes('--no-llm');
   const llm = noLlm ? null : readLlmConfig();
-  const budget = budgetArg >= 0 ? Number(args[budgetArg + 1] ?? '60000') : 60_000;
+  const budget = budgetRaw !== undefined ? Number(budgetRaw) : 60_000;
   let drained = 0;
   (async () => {
     for (;;) {

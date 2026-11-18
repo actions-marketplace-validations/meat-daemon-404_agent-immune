@@ -1,4 +1,5 @@
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { renderSkillMarkdown } from '../../../core/export.js';
 import { strings } from '../../../core/i18n.js';
@@ -6,10 +7,16 @@ import { SNAPSHOT_FORMAT, exportLibrary, importLibrary } from '../../../core/syn
 import { syncDoc } from '../../../core/sync-doc.js';
 import { ciCheck, formatShareViolations, parseManagedBlock, shareSanityCheck } from '../../../core/share-guard.js';
 import { dshDirOf } from '../root-marker.js';
-import { clamp, pad } from './shared.js';
-export function cmdList(store, includeRetired) {
-    const t = strings();
+import { clamp, flagValue, pad } from './shared.js';
+export function cmdList(store, argsOrRetired) {
+    const args = Array.isArray(argsOrRetired) ? argsOrRetired : [];
+    const includeRetired = typeof argsOrRetired === 'boolean' ? argsOrRetired : args.includes('--all');
     const rows = store.listAll(includeRetired);
+    if (args.includes('--json')) {
+        process.stdout.write(`${JSON.stringify(rows, null, 2)}\n`);
+        return 0;
+    }
+    const t = strings();
     if (rows.length === 0) {
         process.stdout.write(`${t.noAntibodies}\n`);
         return 0;
@@ -176,15 +183,15 @@ export function cmdImportJson(store, args) {
     return 0;
 }
 export function cmdSyncDoc(store, args) {
-    const outArg = args.indexOf('--out');
-    const hitsArg = args.indexOf('--min-hits');
-    const candidates = [
-        outArg >= 0 ? args[outArg + 1] ?? '' : '',
-        'AGENTS.md',
-        'CLAUDE.md',
-    ].filter((v) => v.trim().length > 0);
-    const target = resolve(candidates[0] ?? 'AGENTS.md');
-    const minHits = hitsArg >= 0 ? Number(args[hitsArg + 1] ?? '3') : 3;
+    const explicitOut = flagValue(args, '--out');
+    const rawMinHits = flagValue(args, '--min-hits');
+    const defaultDoc = existsSync(resolve('AGENTS.md'))
+        ? resolve('AGENTS.md')
+        : existsSync(resolve('CLAUDE.md'))
+            ? resolve('CLAUDE.md')
+            : resolve('AGENTS.md');
+    const target = explicitOut ? resolve(explicitOut) : defaultDoc;
+    const minHits = rawMinHits !== undefined ? Number(rawMinHits) : 3;
     const report = syncDoc(store, {
         file: target,
         minHits: Number.isFinite(minHits) && minHits >= 0 ? minHits : 3,
@@ -196,22 +203,108 @@ export function cmdSyncDoc(store, args) {
     }
     return 0;
 }
+function escapeGhProp(value) {
+    return value.replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A').replace(/:/g, '%3A').replace(/,/g, '%2C');
+}
+function escapeGhMsg(value) {
+    return value.replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A');
+}
 export function cmdCiCheck(args) {
-    const diffArg = args.indexOf('--diff');
-    const docArg = args.indexOf('--doc');
-    const diffText = diffArg >= 0 ? readFileSync(resolve(args[diffArg + 1] ?? ''), 'utf8') : readFileSync(0, 'utf8');
-    const doc = docArg >= 0 ? resolve(args[docArg + 1] ?? '') : resolve(process.cwd(), 'AGENTS.md');
+    const explicitDiff = flagValue(args, '--diff');
+    if (args.includes('--diff') && !explicitDiff) {
+        process.stderr.write('usage: immune ci-check [--diff <patch-file>] [--doc <AGENTS.md>] [--json] [--github] [--warn-only]\n');
+        return 2;
+    }
+    const explicitDoc = flagValue(args, '--doc');
+    let diffText = '';
+    if (explicitDiff) {
+        diffText = readFileSync(resolve(explicitDiff), 'utf8');
+    }
+    else if (process.stdin.isTTY) {
+        try {
+            diffText = execFileSync('git', ['diff', 'HEAD'], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+        }
+        catch {
+            try {
+                diffText = execFileSync('git', ['diff'], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+            }
+            catch {
+                process.stderr.write('ci-check: could not read git diff; pipe a patch on stdin or pass --diff <file>\n');
+                return 2;
+            }
+        }
+    }
+    else {
+        diffText = readFileSync(0, 'utf8');
+    }
+    const doc = explicitDoc
+        ? resolve(explicitDoc)
+        : existsSync(resolve(process.cwd(), 'AGENTS.md'))
+            ? resolve(process.cwd(), 'AGENTS.md')
+            : existsSync(resolve(process.cwd(), 'CLAUDE.md'))
+                ? resolve(process.cwd(), 'CLAUDE.md')
+                : resolve(process.cwd(), 'AGENTS.md');
     const rules = parseManagedBlock(doc);
     const report = ciCheck(diffText, rules);
+    const asGithub = args.includes('--github');
+    const warnOnly = args.includes('--warn-only');
     if (args.includes('--json')) {
         process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     }
     else {
         process.stdout.write(`immune ci-check: ${report.addedLines} added line(s) vs ${report.rulesConsidered} managed rule(s)\n`);
         for (const finding of report.findings) {
-            process.stdout.write(`  L${finding.line}: ${finding.trigger} — "${finding.text}"\n`);
+            const loc = finding.file ? `${finding.file}:${finding.line}` : `L${finding.line}`;
+            process.stdout.write(`  ${loc}: ${finding.trigger} — "${finding.text}"\n`);
+            if (asGithub) {
+                const props = [
+                    finding.file ? `file=${escapeGhProp(finding.file)}` : '',
+                    `line=${finding.line}`,
+                    `title=${escapeGhProp(`Pitfall Immunity: ${finding.trigger}`)}`,
+                ]
+                    .filter(Boolean)
+                    .join(',');
+                const detail = [
+                    finding.symptom ? `Avoid: ${finding.symptom}` : '',
+                    finding.prescription ? `Do instead: ${finding.prescription}` : `Matched trigger: ${finding.trigger}`,
+                ]
+                    .filter(Boolean)
+                    .join(' — ');
+                process.stdout.write(`::warning ${props}::${escapeGhMsg(detail)}\n`);
+            }
         }
     }
+    const summaryPath = process.env.GITHUB_STEP_SUMMARY?.trim();
+    if (asGithub && summaryPath) {
+        try {
+            const mdLines = [
+                '### 🛡️ Agent Immune — PR Pitfall Check',
+                '',
+                `- **Added lines scanned**: \`${report.addedLines}\``,
+                `- **Managed repository antibodies**: \`${report.rulesConsidered}\``,
+                `- **Findings**: \`${report.findings.length}\``,
+                '',
+            ];
+            if (report.findings.length > 0) {
+                mdLines.push('| Location | Trigger | Advice |', '| --- | --- | --- |');
+                for (const f of report.findings.slice(0, 30)) {
+                    const loc = f.file ? `\`${f.file}:${f.line}\`` : `\`L${f.line}\``;
+                    const advice = (f.prescription || f.symptom || f.text).replace(/\|/g, '\\|');
+                    mdLines.push(`| ${loc} | \`${f.trigger.replace(/\|/g, '\\|')}\` | ${advice} |`);
+                }
+                mdLines.push('');
+            }
+            else {
+                mdLines.push('✅ No known repository pitfall territories triggered by this diff.', '');
+            }
+            appendFileSync(summaryPath, `${mdLines.join('\n')}\n`, 'utf8');
+        }
+        catch {
+            // Summary write is best-effort.
+        }
+    }
+    if (warnOnly)
+        return 0;
     return report.findings.length > 0 ? 1 : 0;
 }
 export function cmdBackupAsync(store, args, onDone) {

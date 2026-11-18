@@ -25,6 +25,8 @@ function versionFields() {
   const pkg = readJson('dsh-immune-system/package.json');
   const zcode = readJson('dsh-immune-system/.zcode-plugin/plugin.json');
   const market = readJson('marketplace.json');
+  const claudePlugin = readJson('.claude-plugin/plugin.json');
+  const claudeMarket = readJson('.claude-plugin/marketplace.json');
   return {
     'package.json version': root.version,
     'package.json dsh.version': root.dsh?.version,
@@ -32,10 +34,12 @@ function versionFields() {
     'dsh-immune-system/package.json dsh.version': pkg.dsh?.version,
     '.zcode-plugin/plugin.json version': zcode.version,
     'marketplace.json plugins[0].version': market.plugins?.[0]?.version,
+    '.claude-plugin/plugin.json version': claudePlugin.version,
+    '.claude-plugin/marketplace.json plugins[0].version': claudeMarket.plugins?.[0]?.version,
   };
 }
 
-test('the four manifests agree on one version', () => {
+test('all six manifests agree on one version', () => {
   const fields = versionFields();
   const versions = Object.values(fields);
   assert.equal(
@@ -44,6 +48,22 @@ test('the four manifests agree on one version', () => {
     `manifests drifted: ${JSON.stringify(fields, null, 2)}`,
   );
   assert.match(versions[0], /^\d+\.\d+\.\d+$/u);
+});
+
+test('root and nested manifests expose matching CLI bin aliases, SDK exports, and DSH client inject edges', () => {
+  const root = readJson('package.json');
+  const pkg = readJson('dsh-immune-system/package.json');
+  assert.equal(root.bin?.['dsh-immune-system'], 'dsh-immune-system/dist/zcode/src/cli.js');
+  assert.equal(root.bin?.immune, 'dsh-immune-system/dist/zcode/src/cli.js');
+  assert.equal(pkg.bin?.['dsh-immune-system'], './dist/zcode/src/cli.js');
+  assert.equal(pkg.bin?.immune, './dist/zcode/src/cli.js');
+  assert.equal(root.exports?.['./core']?.default, './dsh-immune-system/dist/core/index.js');
+  assert.equal(root.exports?.['./core']?.types, './dsh-immune-system/dist/core/index.d.ts');
+  assert.equal(pkg.exports?.['./core']?.default, './dist/core/index.js');
+  assert.equal(pkg.exports?.['./core']?.types, './dist/core/index.d.ts');
+  assert.ok(existsSync(join(ROOT, 'dsh-immune-system', 'dist', 'core', 'index.js')));
+  assert.ok(existsSync(join(ROOT, 'dsh-immune-system', 'dist', 'core', 'index.d.ts')));
+  assert.deepEqual(root.dsh?.client, pkg.dsh?.client);
 });
 
 test('the installable package references only files inside itself', () => {

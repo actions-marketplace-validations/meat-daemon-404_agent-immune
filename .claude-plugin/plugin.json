@@ -1,6 +1,22 @@
 {
   "name": "dsh-immune-system",
-  "description": "Hook-based immune system for coding agents — turns failed-then-fixed tool episodes into injected antibodies (trigger -> avoid -> do). Zero runtime dependencies.",
-  "version": "2.0.0",
-  "keywords": ["hooks", "agents", "memory", "self-improvement"]
+  "description": "Self-evolving pitfall immunity for coding agents — turns failed-then-fixed tool episodes into injected SQLite+FTS5 antibodies (trigger -> avoid -> do). Zero runtime dependencies.",
+  "version": "2.3.0",
+  "author": {
+    "name": "meat-daemon-404",
+    "url": "https://github.com/meat-daemon-404"
+  },
+  "homepage": "https://github.com/meat-daemon-404/agent-immune",
+  "repository": "https://github.com/meat-daemon-404/agent-immune",
+  "license": "MIT",
+  "keywords": [
+    "hooks",
+    "coding-agents",
+    "claude-code",
+    "agent-memory",
+    "self-improving",
+    "pitfalls",
+    "sqlite",
+    "mcp"
+  ]
 }

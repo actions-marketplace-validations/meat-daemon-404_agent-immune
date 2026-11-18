@@ -5,13 +5,35 @@
  * All command handlers live in focused sub-modules under `zcode/src/commands/`.
  */
 import { ImmuneStore } from '../../core/store/index.js';
+import { packageVersion } from '../../core/version.js';
 import { cmdBackupAsync, cmdCiCheck, cmdExport, cmdExportJson, cmdForget, cmdImportJson, cmdLearn, cmdList, cmdSearch, cmdSyncDoc, } from './commands/library.js';
-import { cmdConsolidate, cmdCoverage, cmdDetours, cmdHygiene, cmdModels, cmdReceipts, cmdRewriteSyncOrAsync, cmdStats, cmdTriage, } from './commands/intelligence.js';
+import { cmdConsolidate, cmdCoverage, cmdDetours, cmdExplain, cmdHygiene, cmdModels, cmdReceipts, cmdRewriteSyncOrAsync, cmdStats, cmdTriage, } from './commands/intelligence.js';
 import { cmdAudit, cmdBackfillAsync, cmdIngestDisk, cmdIngestSkill, cmdSeed, cmdWorkspaces, } from './commands/ingest.js';
-import { cmdConnect, cmdDoctor, cmdUi, runDemo } from './commands/system.js';
+import { cmdCompletions } from './commands/completions.js';
+import { hasHelpFlag, renderCommandHelp, renderMainHelp } from './commands/shared.js';
+import { cmdConnect, cmdDoctor, cmdGitHook, cmdUi, runDemo } from './commands/system.js';
 function main(argv) {
     const [command = 'list', ...args] = argv;
     let deferStoreClose = false;
+    if (command === '--version' || command === '-v' || command === 'version') {
+        process.stdout.write(`dsh-immune-system v${packageVersion()}\n`);
+        return 0;
+    }
+    if (command === '--help' || command === '-h' || command === 'help') {
+        const sub = args[0] ? renderCommandHelp(args[0]) : null;
+        process.stdout.write(sub ?? renderMainHelp(packageVersion()));
+        return 0;
+    }
+    // Intercept `--help` / `-h` before opening SQLite or dispatching mutating commands!
+    if (hasHelpFlag(args)) {
+        const sub = renderCommandHelp(command);
+        if (sub) {
+            process.stdout.write(sub);
+            return 0;
+        }
+        process.stdout.write(renderMainHelp(packageVersion()));
+        return 0;
+    }
     if (command === 'demo') {
         const keepAlive = setInterval(() => { }, 60_000);
         runDemo()
@@ -24,19 +46,25 @@ function main(argv) {
     }
     if (command === 'connect')
         return cmdConnect(args);
+    if (command === 'git-hook')
+        return cmdGitHook(args);
+    if (command === 'completions')
+        return cmdCompletions(args);
     if (command === 'ui')
         return cmdUi(args);
     if (command === 'ci-check')
         return cmdCiCheck(args);
     if (command === 'doctor')
-        return cmdDoctor();
+        return cmdDoctor(args);
     const store = new ImmuneStore();
     try {
         switch (command) {
             case 'list':
-                return cmdList(store, args.includes('--all'));
+                return cmdList(store, args);
             case 'search':
                 return cmdSearch(store, args);
+            case 'explain':
+                return cmdExplain(store, args);
             case 'learn':
                 return cmdLearn(store, args);
             case 'forget':
@@ -54,7 +82,7 @@ function main(argv) {
             case 'sync-doc':
                 return cmdSyncDoc(store, args);
             case 'stats':
-                return cmdStats(store);
+                return cmdStats(store, args);
             case 'detours':
                 return cmdDetours(store);
             case 'coverage':
@@ -64,11 +92,11 @@ function main(argv) {
             case 'hygiene':
                 return cmdHygiene(store, args);
             case 'triage':
-                return cmdTriage(store);
+                return cmdTriage(store, args);
             case 'receipts':
-                return cmdReceipts(store);
+                return cmdReceipts(store, args);
             case 'models':
-                return cmdModels(store);
+                return cmdModels(store, args);
             case 'seed':
                 return cmdSeed(store, args);
             case 'ingest-skill':
@@ -76,7 +104,7 @@ function main(argv) {
             case 'ingest-disk':
                 return cmdIngestDisk(store, args);
             case 'workspaces':
-                return cmdWorkspaces(store);
+                return cmdWorkspaces(store, args);
             case 'backup': {
                 deferStoreClose = true;
                 const keepAlive = setInterval(() => { }, 60_000);
@@ -122,9 +150,7 @@ function main(argv) {
                 return res.code;
             }
             default:
-                process.stderr.write('usage: immune <list|stats|coverage|detours|hygiene|triage|receipts|models|export|search|learn|forget|prune|' +
-                    'rewrite|consolidate|backup|connect|seed|ingest-skill|ingest-disk|workspaces|backfill|audit|sync-doc|' +
-                    'export-json|import-json|ci-check|ui|doctor|demo> [...args]\n');
+                process.stderr.write(`unknown command "${command}". Run \`immune --help\` to see all available commands.\n`);
                 return 2;
         }
     }

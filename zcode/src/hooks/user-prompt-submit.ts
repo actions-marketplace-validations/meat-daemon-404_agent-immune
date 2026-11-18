@@ -15,10 +15,12 @@ await runHook('UserPromptSubmit', (event) => {
     (typeof event.cwd === 'string' && event.cwd) ||
     process.env.ZCODE_PROJECT_DIR ||
     process.cwd();
-  const store = new ImmuneStore();
+  const store = new ImmuneStore({ cwd: workspace });
   try {
+    const sessionId = sessionIdOf(event);
+    if (!store.claimPromptTurn(sessionId, prompt)) return null;
     const hits = new ImmuneRuntime(store).userPrompt({
-      sessionId: sessionIdOf(event),
+      sessionId,
       prompt,
       workspace,
       excludeInjected: true,

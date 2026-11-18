@@ -1,25 +1,30 @@
-name: Feature request
-description: An idea for the immune system
+name: Feature / Seed Pack / Host Adapter Request
+description: Propose a new coding agent integration, starter seed pack, or engine enhancement
 labels: [enhancement]
 body:
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Proposal category
+      options:
+        - New coding agent host (connect / hooks / MCP)
+        - New or expanded starter seed pack
+        - Retrieval / rubric / triage improvement
+        - CLI / Dashboard / GitHub Action UX
+        - Other
+    validations:
+      required: true
   - type: textarea
     id: problem
     attributes:
-      label: The pitfall this would prevent
-      description: "Describe the repeated mistake (yours or the agent's) this feature would stop — with the actual failure→fix sequence if you have it."
+      label: Problem or recurring pitfall
+      description: "What concrete failure -> repair pattern or developer workflow does this address?"
     validations:
       required: true
   - type: textarea
-    id: idea
+    id: proposal
     attributes:
-      label: Proposed shape
-      description: "What the agent should recall/inject/warn about, and when."
+      label: Proposed design
+      description: "Keep AGENTS.md invariants in mind (zero runtime dependencies, node:sqlite built-in only, strict hook schemas)."
     validations:
       required: true
-  - type: checkboxes
-    id: invariants
-    attributes:
-      label: Have you read AGENTS.md?
-      description: "Several proposals are already covered there — either implemented, or tried and reverted with a recorded reason."
-      options:
-        - label: "Yes, and I believe this is not covered by an existing invariant or a documented rejection"

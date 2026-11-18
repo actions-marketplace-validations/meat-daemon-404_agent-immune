@@ -19,7 +19,7 @@ It watches every tool call. When a call fails and a later one succeeds on the sa
 The judge was measured, not guessed: replaying 20,100 real host-labeled tool calls — 97.54% agreement, ZERO false negatives. The 2.46% false positives are probe commands where a nonzero exit IS the answer; quantified and accepted.
 
 **4/5**
-Works with Claude Code, Codex CLI (one command each), Cursor/Cline over MCP, DSH + ZCode natively. Cold start in 10s: it mines YOUR session history for lessons (`audit --dry-run`), plus hand-authored starter packs (git/node/python/docker).
+Works with Claude Code, Cursor, Codex CLI, Antigravity & Gemini CLI (`npx dsh-immune-system@latest connect`), Windsurf/Cline over MCP, DSH + ZCode natively, plus a 3-line GitHub Action. Cold start in 10s (`audit --dry-run` + 9 starter packs incl. Rust/Go/Node/Python/Web).
 
 **5/5**
 ~33M tokens burned on preventable repeats in my 120-day window. Your mileage will vary, but the audit command will tell you exactly.

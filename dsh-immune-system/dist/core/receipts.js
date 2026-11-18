@@ -48,10 +48,29 @@ export function recordDeliveryReceipt(db, entry) {
 }
 /** Verify digest chain integrity over recent receipts and summarize ROI. */
 export function summarizeReceipts(db, verifyLimit = 500) {
-    const rows = db
-        .prepare('SELECT * FROM delivery_receipts ORDER BY id ASC LIMIT ?')
-        .all(verifyLimit);
+    const totalRow = db.prepare('SELECT COUNT(*) AS n FROM delivery_receipts').get();
+    const total = Number(totalRow.n);
+    const cap = Math.max(1, Math.trunc(verifyLimit));
+    let rows;
     let prev = 'genesis';
+    if (total <= cap) {
+        rows = db
+            .prepare('SELECT * FROM delivery_receipts ORDER BY id ASC')
+            .all();
+    }
+    else {
+        const desc = db
+            .prepare('SELECT * FROM delivery_receipts ORDER BY id DESC LIMIT ?')
+            .all(cap);
+        rows = desc.reverse();
+        const firstId = rows[0]?.id;
+        if (firstId !== undefined) {
+            const prior = db
+                .prepare('SELECT digest FROM delivery_receipts WHERE id < ? ORDER BY id DESC LIMIT 1')
+                .get(firstId);
+            prev = prior?.digest ?? 'genesis';
+        }
+    }
     let chainValid = true;
     const byOutcome = {};
     const models = new Map();
@@ -80,9 +99,8 @@ export function summarizeReceipts(db, verifyLimit = 500) {
         if (row.outcome === 'held')
             estimatedTokensSaved += row.tokens_est;
     }
-    const totalRow = db.prepare('SELECT COUNT(*) AS n FROM delivery_receipts').get();
     return {
-        total: Number(totalRow.n),
+        total,
         byOutcome,
         byModel: [...models.entries()]
             .map(([model, stats]) => ({ model, ...stats }))

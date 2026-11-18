@@ -3,12 +3,15 @@ const ABS_WIN_PATH = /(?<![A-Za-z])[A-Za-z]:(?:\\\\|\\|\/)[^\s"'`<>|]{2,}/;
 const ABS_UNIX_HOME = /\/(?:Users|home)\/[^\s"'`<>|]{2,}|\/root\/[^\s"'`<>|]+/;
 const RAW_JSON_WRAP = /^\s*\{\s*"(?:stdout|stderr|interrupted|isImage|filePath|command|code)"\s*:/i;
 const RAW_TOOL_PREFIX = /^\s*tool=[A-Za-z0-9_-]+\s+input=/i;
-const ECHO_CMD_DUMP = /^(?:bash|pwsh|powershell|cmd|mcp__[\w-]+):\s+.{32,}/i;
-const FILE_TOOL_ABS_DUMP = /^(?:Edit|Write|MultiEdit|NotebookEdit):\s*(?:[A-Za-z]:[\\/]|\/Users\/|\/home\/|<path>|<repo>)/i;
+const ECHO_CMD_DUMP = /^(?!(?:Edit|Write|MultiEdit|NotebookEdit|Note|Tip|Fix|Do|Avoid)\b)[A-Za-z][\w-]*:\s+.{32,}/i;
+const FILE_TOOL_ABS_DUMP = /^(?:Edit|Write|MultiEdit|NotebookEdit):\s*(?:[A-Za-z]:[\\/]|\/Users\/|\/home\/|\/root\/|~?\/?<path>|<repo>|[\w./\\-]+\.[A-Za-z0-9]{1,8}\s*$)/i;
+const INLINE_CODE_DUMP = /\b(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*=|\bawait\s+[A-Za-z_$][\w$.]*\(|\bfunction\s+[A-Za-z_$]|\bdef\s+[A-Za-z_]\w*\s*\(|;\s*(?:const|let|var|await|return)\b/;
 const AD_HOC_PROBE = /^(?:(?:bash|pwsh|powershell):\s*)?(?:grep|rg|sed|awk|head|tail|cat|ls|dir|find|tasklist|Get-ChildItem|Get-NetTCPConnection|Get-Process|Get-Content|Select-String|Write-Output|\$[A-Za-z_]+\s*=)/i;
 const CHAT_FRAGMENT_NOISE = /^(?:还有[，,]|\s*npowershell\b|\$pids\s*=\s*\d+)/i;
-const RAW_URL_DUMP = /^mcp__[\w-]+:\s*https?:\/\//i;
+const RAW_URL_DUMP = /^[A-Za-z][\w-]*:\s*https?:\/\/\S+\s*$/i;
 const IP_URL_OR_SSH = /\b(?:\d{1,3}\.){3}\d{1,3}\b|ssh\s+-i\b/i;
+const SESSION_URL = /https?:\/\/(?:[\w-]+\.)*(?:bilibili\.com|youtube\.com|alipan\.com|aliyundrive\.com|pan\.baidu\.com|feishu\.cn|dingtalk\.com|localhost(?::\d+)?)/i;
+const MEDIA_OR_ARCHIVE_FILE = /\b[\w-]{3,}\.(?:mp4|mov|mkv|avi|mp3|wav|png|jpe?g|webp|gif|pdf|docx?|pptx?|xlsx?|zip|rar|7z)\b/i;
 /** Infer causal root cause from error + repair signals. */
 export function inferRootCause(symptomOrError, prescription, repairs = []) {
     const combined = `${symptomOrError} ${prescription} ${repairs.join(' ')}`.toLowerCase();
@@ -65,16 +68,18 @@ export function scoreAntibodyRubric(rule) {
         issues.push('raw JSON/tool wrapper in symptom');
     }
     specificity = Math.max(0, Math.min(20, specificity));
-    // 2. Actionability (0..25): advice sentence vs raw command dump.
-    let actionability = 22;
+    // 2. Actionability (0..25): advice sentence vs raw command/code dump.
+    let actionability = rule.prescription_source === 'rule' ? 18 : 22;
     const barePrescription = prescription.replace(/\s*\(after: .+\)$/, '').trim();
     if (RAW_TOOL_PREFIX.test(barePrescription)) {
         actionability = 2;
         issues.push('raw tool trace as prescription');
     }
-    else if (FILE_TOOL_ABS_DUMP.test(barePrescription) || RAW_URL_DUMP.test(barePrescription)) {
+    else if (FILE_TOOL_ABS_DUMP.test(barePrescription) ||
+        RAW_URL_DUMP.test(barePrescription) ||
+        INLINE_CODE_DUMP.test(barePrescription)) {
         actionability = 4;
-        issues.push('one-off file/URL dump as prescription');
+        issues.push('one-off file/URL/code dump as prescription');
     }
     else if (AD_HOC_PROBE.test(barePrescription) || CHAT_FRAGMENT_NOISE.test(barePrescription)) {
         actionability = 6;
@@ -82,15 +87,15 @@ export function scoreAntibodyRubric(rule) {
     }
     else if (ECHO_CMD_DUMP.test(barePrescription)) {
         actionability = 10;
-        issues.push('long raw shell dump (needs LLM rewrite)');
+        issues.push('long raw tool/shell dump (needs LLM rewrite)');
     }
     else if (/^(?:#{1,6}\s|>\s)/.test(barePrescription)) {
         actionability = 5;
         issues.push('markdown heading or quote fragment, not actionable advice');
     }
-    else if (barePrescription.length > 160) {
+    else if (barePrescription.length > 160 || (rule.prescription_source === 'rule' && barePrescription.length > 115)) {
         actionability = 8;
-        issues.push('overlong prescription (>160 chars)');
+        issues.push('overlong prescription (>115 chars deterministic / >160 chars)');
     }
     else if (barePrescription.length < 8) {
         actionability = 5;
@@ -102,7 +107,7 @@ export function scoreAntibodyRubric(rule) {
         rule.origin === 'user_correction') {
         actionability = 25;
     }
-    // 3. Portability (0..25): absence of machine-local paths, IPs, or session-only URLs.
+    // 3. Portability (0..25): absence of machine-local paths, IPs, asset files, or session-only URLs.
     let portability = 25;
     const combined = `${symptom} ${barePrescription}`;
     if (ABS_WIN_PATH.test(combined) || ABS_UNIX_HOME.test(combined)) {
@@ -113,9 +118,13 @@ export function scoreAntibodyRubric(rule) {
         portability -= 15;
         issues.push('hardcoded IP or SSH identity path');
     }
-    if (/https?:\/\/(?:www\.)?(?:bilibili\.com|localhost:\d+)/i.test(combined)) {
-        portability -= 12;
+    if (SESSION_URL.test(combined)) {
+        portability -= 15;
         issues.push('session-specific URL');
+    }
+    if (MEDIA_OR_ARCHIVE_FILE.test(combined)) {
+        portability -= 12;
+        issues.push('project-specific media or archive filename');
     }
     portability = Math.max(0, Math.min(25, portability));
     // 4. Evidence strength (0..15): repair path, LLM/human provenance, or survival rate.

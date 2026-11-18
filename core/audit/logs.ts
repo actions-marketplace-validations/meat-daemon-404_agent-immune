@@ -6,8 +6,11 @@
  * exhausting V8 heap.
  */
 import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
+import { StringDecoder } from 'node:string_decoder';
 import type { CallRow } from '../backfill.js';
+import { resolveWorkspaceRoot } from '../hygiene.js';
+import { pickSalientErrorLine } from '../trace.js';
 import { clampText, type AuditSession } from './types.js';
 
 const STREAM_THRESHOLD_BYTES = 512 * 1024;
@@ -38,12 +41,13 @@ function forEachJsonlLine(path: string, onLine: (line: string) => void): void {
   try {
     fd = openSync(path, 'r');
     const buf = Buffer.allocUnsafe(CHUNK_BYTES);
+    const decoder = new StringDecoder('utf8');
     let leftover = '';
     let skipOversize = false;
     for (;;) {
       const bytesRead = readSync(fd, buf, 0, CHUNK_BYTES, null);
       if (bytesRead <= 0) break;
-      const chunk = buf.toString('utf8', 0, bytesRead);
+      const chunk = decoder.write(buf.subarray(0, bytesRead));
       let start = 0;
       for (;;) {
         const nl = chunk.indexOf('\n', start);
@@ -70,7 +74,11 @@ function forEachJsonlLine(path: string, onLine: (line: string) => void): void {
         start = nl + 1;
       }
     }
-    if (!skipOversize && leftover.trim()) onLine(leftover);
+    const flushed = decoder.end();
+    if (!skipOversize) {
+      leftover += flushed;
+      if (leftover.trim()) onLine(leftover);
+    }
   } catch {
     // Unreadable transcript skipped cleanly.
   } finally {
@@ -111,36 +119,65 @@ function codexStatusOf(output: string): { status: 'completed' | 'error'; error?:
     .map((line) => line.trim())
     .filter((line) => line.length > 0 && !/^Wall time:/.test(line) && !/^Output:$/.test(line))
     .join('\n');
-  return { status: 'error', error: clampText(body.length > 0 ? body : output) };
+  const salient = body.length > 0 ? pickSalientErrorLine(body) : '';
+  return { status: 'error', error: clampText(salient || body || output) };
 }
 
-function parseCodexFile(path: string): AuditSession {
+function parseCodexFile(path: string, since: number): AuditSession {
   const calls: CallRow[] = [];
   const parts = new Map<string, { input: unknown; output: string }>();
   const callIndex = new Map<string, { name: string; arguments: string; timestamp: number }>();
+  const tokenSamples: number[] = [];
+  let sessionCwd: string | undefined;
 
   forEachJsonlLine(path, (line) => {
-    if (!line.includes('response_item')) return;
+    if (
+      !line.includes('response_item') &&
+      !line.includes('session_meta') &&
+      !line.includes('turn_context') &&
+      !line.includes('token_count')
+    ) {
+      return;
+    }
     let record: {
       timestamp?: string;
       type?: string;
-      payload?: { type?: string; call_id?: string; name?: string; arguments?: string; output?: string };
+      payload?: {
+        type?: string;
+        cwd?: string;
+        call_id?: string;
+        name?: string;
+        arguments?: string;
+        input?: string;
+        output?: string;
+        info?: { last_token_usage?: { total_tokens?: number } };
+      };
     };
     try {
       record = JSON.parse(line);
     } catch {
       return;
     }
-    if (record.type !== 'response_item' || !record.payload) return;
     const payload = record.payload;
+    if (!payload) return;
+    if ((record.type === 'session_meta' || record.type === 'turn_context') && typeof payload.cwd === 'string' && payload.cwd) {
+      sessionCwd = payload.cwd;
+      return;
+    }
+    if (record.type === 'event_msg' && payload.type === 'token_count') {
+      const total = Number(payload.info?.last_token_usage?.total_tokens ?? 0);
+      if (total > 0) tokenSamples.push(total);
+      return;
+    }
+    if (record.type !== 'response_item') return;
     const timestamp = record.timestamp ? Date.parse(record.timestamp) : Date.now();
-    if (payload.type === 'function_call' && payload.call_id) {
+    if ((payload.type === 'function_call' || payload.type === 'custom_tool_call') && payload.call_id) {
       callIndex.set(payload.call_id, {
         name: payload.name ?? 'unknown',
-        arguments: payload.arguments ?? '',
+        arguments: payload.arguments ?? payload.input ?? '',
         timestamp,
       });
-    } else if (payload.type === 'function_call_output' && payload.call_id) {
+    } else if ((payload.type === 'function_call_output' || payload.type === 'custom_tool_call_output') && payload.call_id) {
       const call = callIndex.get(payload.call_id);
       if (!call) return;
       const tool = CODEX_TOOL_MAP[call.name] ?? null;
@@ -160,7 +197,12 @@ function parseCodexFile(path: string): AuditSession {
   });
 
   calls.sort((a, b) => a.started_at - b.started_at);
-  return { calls, parts, tokenSamples: [] };
+  return {
+    calls: calls.filter((c) => c.started_at >= since),
+    parts,
+    tokenSamples,
+    ...(sessionCwd ? { cwd: sessionCwd } : {}),
+  };
 }
 
 export function loadCodexSessions(
@@ -169,15 +211,30 @@ export function loadCodexSessions(
 ): { sessions: AuditSession[]; present: boolean; note?: string } {
   if (!existsSync(dir)) return { sessions: [], present: false, note: 'no ~/.codex/sessions directory' };
   const sessions: AuditSession[] = [];
-  for (const year of readdirSync(dir)) {
-    for (const month of readdirSync(join(dir, year))) {
-      for (const day of readdirSync(join(dir, year, month))) {
+  const safeDirs = (parent: string): string[] => {
+    try {
+      return readdirSync(parent, { withFileTypes: true })
+        .filter((e) => e.isDirectory())
+        .map((e) => e.name);
+    } catch {
+      return [];
+    }
+  };
+  for (const year of safeDirs(dir)) {
+    for (const month of safeDirs(join(dir, year))) {
+      for (const day of safeDirs(join(dir, year, month))) {
         const dayMs = Date.parse(`${year}-${month}-${day}T00:00:00Z`);
         if (Number.isFinite(dayMs) && dayMs < since - 86_400_000) continue;
         const dayDir = join(dir, year, month, day);
-        for (const file of readdirSync(dayDir)) {
+        let files: string[] = [];
+        try {
+          files = readdirSync(dayDir);
+        } catch {
+          continue;
+        }
+        for (const file of files) {
           if (!file.startsWith('rollout-') || !file.endsWith('.jsonl')) continue;
-          const parsed = parseCodexFile(join(dayDir, file));
+          const parsed = parseCodexFile(join(dayDir, file), since);
           if (parsed.calls.length > 0) sessions.push(parsed);
         }
       }
@@ -243,11 +300,15 @@ function parseClaudeFile(path: string, since: number): AuditSession {
   const callById = new Map<string, CallRow>();
   const parts = new Map<string, { input: unknown; output: string }>();
   const tokenSamples: number[] = [];
+  let sessionCwd: string | undefined;
 
   forEachJsonlLine(path, (line) => {
-    if (!line.includes('tool_use') && !line.includes('tool_result') && !line.includes('usage')) return;
+    if (!line.includes('tool_use') && !line.includes('tool_result') && !line.includes('usage') && !line.includes('"cwd"')) {
+      return;
+    }
     let record: {
       type?: string;
+      cwd?: string;
       timestamp?: string;
       message?: {
         content?: unknown;
@@ -258,6 +319,9 @@ function parseClaudeFile(path: string, since: number): AuditSession {
       record = JSON.parse(line);
     } catch {
       return;
+    }
+    if (!sessionCwd && typeof record.cwd === 'string' && record.cwd) {
+      sessionCwd = record.cwd;
     }
     if (record.type === 'assistant' && record.message?.usage) {
       const total = Number(record.message.usage.input_tokens ?? 0) + Number(record.message.usage.output_tokens ?? 0);
@@ -295,7 +359,12 @@ function parseClaudeFile(path: string, since: number): AuditSession {
   });
 
   calls.sort((a, b) => a.started_at - b.started_at);
-  return { calls: calls.filter((call) => call.started_at >= since), parts, tokenSamples };
+  return {
+    calls: calls.filter((call) => call.started_at >= since),
+    parts,
+    tokenSamples,
+    ...(sessionCwd ? { cwd: sessionCwd } : {}),
+  };
 }
 
 export function loadClaudeSessions(
@@ -373,7 +442,8 @@ function antigravityErrorLine(text: string): string {
         !/^(Created At|Completed At|Command output|Showing lines|Partial read):?/i.test(line),
     );
   const body = lines.join('\n').trim();
-  return clampText(body || text.trim() || 'unknown error');
+  const salient = body ? pickSalientErrorLine(body) : '';
+  return clampText(salient || body || text.trim() || 'unknown error');
 }
 
 function antigravityVerdictOf(
@@ -486,7 +556,16 @@ function parseAntigravityFile(path: string, since: number): AuditSession {
   });
 
   calls.sort((a, b) => a.started_at - b.started_at);
-  return { calls, parts, tokenSamples };
+  let sessionCwd: string | undefined;
+  for (const part of parts.values()) {
+    const obj = (part.input as Record<string, unknown> | null) ?? {};
+    const candidate = obj.file_path ?? obj.Path ?? obj.TargetFile ?? obj.AbsolutePath ?? obj.DirectoryPath;
+    if (typeof candidate === 'string' && (isAbsolute(candidate) || /^[A-Za-z]:[\\/]/.test(candidate))) {
+      sessionCwd = resolveWorkspaceRoot(dirname(candidate));
+      break;
+    }
+  }
+  return { calls, parts, tokenSamples, ...(sessionCwd ? { cwd: sessionCwd } : {}) };
 }
 
 export function loadAntigravitySessions(

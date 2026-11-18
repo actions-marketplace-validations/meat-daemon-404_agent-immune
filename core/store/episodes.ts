@@ -42,20 +42,24 @@ function parseIds(raw: string): number[] {
   }
 }
 
-/** Remember which antibodies were injected on this session's current turn. */
+/** Remember which antibodies were injected on this session's current window (accumulating unexpired deliveries). */
 export function recordInjection(
   db: DatabaseSync,
   sessionId: string,
   ids: number[],
   prescriptions: string[] = [],
 ): void {
+  const prevIds = injectedIds(db, sessionId);
+  const prevPrescriptions = injectedPrescriptions(db, sessionId);
+  const mergedIds = [...new Set([...prevIds, ...ids])].slice(-24);
+  const mergedPrescriptions = [...new Set([...prevPrescriptions, ...prescriptions])].slice(-24);
   db.prepare(
     `INSERT INTO session_injections (session_id, ids, prescriptions, created_at) VALUES (?, ?, ?, ?)
      ON CONFLICT(session_id) DO UPDATE SET
        ids = excluded.ids,
        prescriptions = excluded.prescriptions,
        created_at = excluded.created_at`,
-  ).run(sessionId, JSON.stringify(ids), JSON.stringify(prescriptions), Date.now());
+  ).run(sessionId, JSON.stringify(mergedIds), JSON.stringify(mergedPrescriptions), Date.now());
 }
 
 /** Antibody ids injected during the current turn of this session. */

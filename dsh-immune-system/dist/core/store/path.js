@@ -14,7 +14,7 @@ export const ROOT_MARKER = 'immune-root.txt';
  *      environment, and this is how their CLI finds the hooks' database
  *   4. a per-project `.dsh` folder (fresh projects without a marker)
  */
-export function resolveDbPath(env = process.env) {
+export function resolveDbPath(env = process.env, cwdOverride) {
     const explicit = env.IMMUNE_DB_PATH?.trim();
     if (explicit)
         return resolve(explicit);
@@ -23,7 +23,8 @@ export function resolveDbPath(env = process.env) {
         env.PLUGIN_DATA?.trim();
     if (pluginData)
         return resolve(pluginData, 'immune.sqlite');
-    const project = env.ZCODE_PROJECT_DIR?.trim() ||
+    const project = cwdOverride?.trim() ||
+        env.ZCODE_PROJECT_DIR?.trim() ||
         env.CLAUDE_PROJECT_DIR?.trim() ||
         env.ANTIGRAVITY_PROJECT_DIR?.trim() ||
         process.cwd();

@@ -62,6 +62,7 @@ ${css}
       <div class="sub">${esc(t.subtitle)}</div>
     </div>
     <div class="meta">
+      <a class="act" href="/?lang=${locale === 'en' ? 'zh-CN' : 'en'}">${locale === 'en' ? '简体中文' : 'English'}</a>
       <span class="chip" title="${esc(maskedPath)}"><span class="dot"></span>${esc(t.localOnly)}<code>${esc(maskedPath)}</code></span>
     </div>
   </div>
@@ -82,6 +83,7 @@ ${css}
       <button role="tab" id="tabShared" aria-selected="false">${esc(t.tabsShared)}<b id="nShared"></b></button>
       <button role="tab" id="tabQuarantined" aria-selected="false">${esc(t.tabsQuarantined)}<b id="nQuarantined"></b></button>
       <button role="tab" id="tabWorkspaces" aria-selected="false">${esc(t.tabsWorkspaces)}<b id="nWorkspaces"></b></button>
+      <button role="tab" id="tabExplain" aria-selected="false">${esc(t.tabsExplain)}</button>
     </div>
     <label class="select">
       <select id="sort" aria-label="${esc(t.sort)}">
@@ -93,6 +95,7 @@ ${css}
     </label>
     <button class="act" id="hygieneBtn" type="button">${esc(t.hygieneLabel)}</button>
     <a class="act" id="exportMd" href="/api/export?format=md&t=${esc(token)}" download="immune-library.md">${esc(t.exportLabel)}</a>
+    <a class="act" id="exportJson" href="/api/export?format=json&t=${esc(token)}" download="immune-library.json">${esc(t.exportJsonLabel)}</a>
     <label class="act" id="importWrap">${esc(t.importLabel)}<input id="importFile" type="file" accept=".json,application/json" style="display:none"></label>
   </div>
 

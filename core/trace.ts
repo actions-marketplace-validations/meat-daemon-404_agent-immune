@@ -58,6 +58,28 @@ function jsonStringField(text: string, keys: string[]): string | null {
   return null;
 }
 
+const ERROR_LINE_SIGNAL =
+  /\b(?:Error|TypeError|SyntaxError|ReferenceError|RangeError|AssertionError|ERR!|ERR_[A-Z0-9_]+|ENOENT|EACCES|EPERM|ECONNREFUSED|ERESOLVE|Exception|Traceback|IndentationError|ImportError|ModuleNotFoundError|FAIL\b|fatal:|panic:|error\[E\d+\]|TS\d{4}:|cannot find|not found|Command exited with code [1-9])/i;
+
+const BANNER_NOISE_LINE =
+  /^(?:[▶▲ℹ✔─=\-*#\s]+$|\[WARNING\]|\s*▲\s*\[WARNING\]|CloudBase CLI\s+\d)/i;
+
+/**
+ * Pick the most informative error line from multi-line tool output so CLI
+ * startup banners or proxy warnings on line 1 do not mask the actual failure.
+ */
+export function pickSalientErrorLine(text: string): string {
+  const lines = text
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+  if (lines.length <= 1) return lines[0] ?? text.trim();
+  const salient = lines.find((l) => !BANNER_NOISE_LINE.test(l) && ERROR_LINE_SIGNAL.test(l));
+  if (salient) return salient;
+  const nonBanner = lines.find((l) => !BANNER_NOISE_LINE.test(l));
+  return nonBanner ?? lines[0] ?? text.trim();
+}
+
 /** Extract the error/result text from a trace, without the tool input preamble. */
 export function extractError(trace: string): string | null {
   const markers = ['error=', 'result='];
@@ -75,16 +97,18 @@ export function extractError(trace: string): string | null {
   // input prefix is NOT the error — returning it turns `tool=Write input={...`
   // into the rule's symptom.
   if (at < 0 && /^tool=\S+\s+input=/.test(trace.trimStart())) return null;
-  const raw = (at >= 0 ? trace.slice(at + width) : trace).replace(/\s+/g, ' ').trim();
-  if (!raw) return null;
+  const tail = (at >= 0 ? trace.slice(at + width) : trace).trim();
+  if (!tail) return null;
 
+  const singleLineRaw = tail.replace(/\s+/g, ' ').trim();
   // Edit/Read results and structured payloads arrive as JSON block arrays or
   // `{stdout, stderr, ...}` objects; the human part lives in a string field
   // inside them, not in the JSON wrapper. When a JSON wrapper has only empty
   // string fields, return null rather than leaking `{"stdout":"","stderr":""}`.
-  const unwrapped = jsonStringField(raw, ['message', 'text', 'error', 'stderr', 'stdout']);
-  if (!unwrapped && (raw.startsWith('{') || raw.startsWith('['))) return null;
-  const text = (unwrapped ?? raw).replace(/\s+/g, ' ').trim();
+  const unwrapped = jsonStringField(singleLineRaw, ['message', 'text', 'error', 'stderr', 'stdout']);
+  if (!unwrapped && (singleLineRaw.startsWith('{') || singleLineRaw.startsWith('['))) return null;
+  const chosen = unwrapped ? unwrapped : pickSalientErrorLine(tail);
+  const text = chosen.replace(/\s+/g, ' ').trim();
   return text ? text.slice(0, 100) : null;
 }
 

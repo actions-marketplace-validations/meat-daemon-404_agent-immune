@@ -11,7 +11,7 @@ await runHook('PreToolUse', (event) => {
     (typeof event.cwd === 'string' && event.cwd) ||
     process.env.ZCODE_PROJECT_DIR ||
     process.cwd();
-  const store = new ImmuneStore();
+  const store = new ImmuneStore({ cwd: workspace });
   try {
     const out = new ImmuneRuntime(store).preToolUse({
       sessionId: sessionIdOf(event),

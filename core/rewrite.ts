@@ -33,27 +33,36 @@ Rules:
 - Never include secrets, tokens, hostnames or absolute user paths.
 - If the command's purpose cannot be told from the input, output {"skip": true} instead of guessing.`;
 
+const INLINE_CODE_DUMP_RE =
+  /\b(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*=|\bawait\s+[A-Za-z_$][\w$.]*\(|\bfunction\s+[A-Za-z_$]|\bdef\s+[A-Za-z_]\w*\s*\(|;\s*(?:const|let|var|await|return)\b/;
+
+const FILE_TOOL_PATH_RE =
+  /(?<![A-Za-z])[A-Za-z]:[\\/](?![\\/])|\/home\/|\/Users\/|\/root\/|<repo>\/|~?\/?<path>\/|^[\w./\\-]+(?:\.[A-Za-z0-9]{1,8})$/;
+
+const NON_FILE_TOOL_DUMP_RE =
+  /^(?!(?:Edit|Write|MultiEdit|NotebookEdit|Note|Tip|Fix|Do|Avoid)\b)[A-Za-z][\w-]*:\s+/i;
+
 /** Prescriptions that only echo the trace cannot teach anything. */
 export function looksEchoPrescription(prescription: string): boolean {
   const p = prescription.trim();
   if (p.length === 0) return true;
-  if (p.startsWith('tool=')) return true;
+  if (p.startsWith('tool=') || /^\s*\{\s*"(?:stdout|stderr|command|code)"/i.test(p)) return true;
   // ROADMAP 1.3: a trailing "(after: …)" suffix is the observed repair chain —
   // captured evidence, i.e. the causal shape advice is made of. Strip it
   // before the dump checks so an evidence-bearing prescription is judged on
   // the command it carries, not punished for its provenance.
-  const bare = p.replace(/\s*\(after: .+\)$/, '');
-  // A leading "Bash:" / "bash:" / "mcp__...:" with a real command after it is a
-  // dump. "Edit: re-read the file" is advice and stays, which is why the
-  // length guard is here.
-  if ((/^bash:\s/i.test(bare) || /^mcp__[\w-]+:\s/i.test(bare)) && bare.length > 30) return true;
-  // A file-tool dump restates the invocation too ("Write: D:\...\a.mjs") —
-  // found live when sync-doc refreshed this repo's managed block. The flag
-  // requires a PATH in the remainder, not just the tool prefix, so genuine
-  // file-tool advice ("Edit: re-read the file first") keeps its eligibility.
-  const fileTool = bare.match(/^(Edit|Write|MultiEdit|NotebookEdit):\s(.+)$/i);
-  if (fileTool && /(?<![A-Za-z])[A-Za-z]:[\\/](?![\\/])|\/home\/|\/Users\//.test(fileTool[2] ?? '')) return true;
-  return p.length > 160;
+  const bare = p.replace(/\s*\(after: .+\)$/, '').trim();
+  if (INLINE_CODE_DUMP_RE.test(bare)) return true;
+  // Any non-file tool prefix ("Bash:", "pwsh:", "webview_browser:", "mcp__...:")
+  // with a long invocation after it is a dump; short repair-chain commands
+  // ("Bash: npm install") stay eligible within their own workspace.
+  if (NON_FILE_TOOL_DUMP_RE.test(bare) && bare.length > 30) return true;
+  // A file-tool dump restates the invocation too ("Write: D:\...\a.mjs",
+  // "Write: <repo>/src/a.ts", "Edit: src/app.tsx"). Genuine file-tool advice
+  // ("Edit: re-read the file first", "Edit: pass explicit headers...") stays.
+  const fileTool = bare.match(/^(Edit|Write|MultiEdit|NotebookEdit):\s*(.+)$/i);
+  if (fileTool && FILE_TOOL_PATH_RE.test((fileTool[2] ?? '').trim())) return true;
+  return bare.length > 160;
 }
 
 /** Active rules whose prescription is a command dump, worst offenders first. */
@@ -99,8 +108,13 @@ export function parseRewrite(raw: string): { ok: true; prescription: string } | 
   const text = typeof obj.prescription === 'string' ? obj.prescription.trim() : '';
   if (text.length < 4) return { ok: false, reason: 'empty' };
   if (text.length > 120) return { ok: false, reason: 'too long' };
-  // A model that hands back another command dump has not done the job.
-  if (text.startsWith('tool=') || /^bash:\s/i.test(text) || /^mcp__[\w-]+:\s/i.test(text)) {
+  // A model that hands back another command or code dump has not done the job.
+  if (
+    text.startsWith('tool=') ||
+    /^bash:\s/i.test(text) ||
+    /^mcp__[\w-]+:\s/i.test(text) ||
+    looksEchoPrescription(text)
+  ) {
     return { ok: false, reason: 'still a command' };
   }
   return { ok: true, prescription: text };

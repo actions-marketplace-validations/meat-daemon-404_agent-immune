@@ -1,0 +1,11 @@
+import type { ImmuneStore } from '../../../core/store/index.js';
+export declare function cmdList(store: ImmuneStore, argsOrRetired: string[] | boolean): number;
+export declare function cmdSearch(store: ImmuneStore, args: string[]): number;
+export declare function cmdLearn(store: ImmuneStore, args: string[]): number;
+export declare function cmdForget(store: ImmuneStore, args: string[]): number;
+export declare function cmdExport(store: ImmuneStore, args: string[]): number;
+export declare function cmdExportJson(store: ImmuneStore, args: string[]): number;
+export declare function cmdImportJson(store: ImmuneStore, args: string[]): number;
+export declare function cmdSyncDoc(store: ImmuneStore, args: string[]): number;
+export declare function cmdCiCheck(args: string[]): number;
+export declare function cmdBackupAsync(store: ImmuneStore, args: string[], onDone: () => void): void;

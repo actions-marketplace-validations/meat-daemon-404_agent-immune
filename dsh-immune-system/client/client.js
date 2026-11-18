@@ -103,6 +103,8 @@ window.__ModuleLoader__.load({
       '.imm .tags{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}',
       '.imm .tag{display:inline-block;padding:1px 6px;border-radius:5px;font-size:10px;border:1px solid var(--i-line);color:var(--i-muted);font-family:ui-monospace,Consolas,monospace}',
       '.imm .tag.hi{border-color:var(--i-ok);color:var(--i-ok)}.imm .tag.low{border-color:var(--i-warn);color:var(--i-warn)}',
+      '.imm .tag.crit{border-color:var(--i-bad);color:var(--i-bad);background:rgba(229,101,101,.13);font-weight:600}',
+      '.imm .tag.link{cursor:pointer;border-color:var(--i-accent);color:var(--i-accent)}',
       '.imm .strip{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:11.5px;color:var(--i-muted)}',
       '.imm .strip .chip{border:1px solid var(--i-line);background:var(--i-panel);color:var(--i-text);border-radius:999px;padding:2px 8px}',
       '.imm .strip .chip.ok{border-color:var(--i-ok);color:var(--i-ok)}.imm .strip .chip.bad{border-color:var(--i-bad);color:var(--i-bad)}',
@@ -261,16 +263,18 @@ window.__ModuleLoader__.load({
         if (op === 'delete' && !window.confirm('删除后不可恢复，确定？ / Delete is permanent. Continue?')) {
           return;
         }
+        setSyncMsg('处理中 / updating…');
         request('/action', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ op: op, id: id }),
         })
           .then(function () {
+            setSyncMsg((op === 'delete' ? '已删除' : op === 'retire' ? '已退役' : '已恢复') + ' #' + id);
             load(tab, q);
           })
           .catch(function (error) {
-            window.alert(String(error.message || error));
+            setSyncMsg('操作失败 / error: ' + String(error.message || error));
           });
       }
 
@@ -461,13 +465,31 @@ window.__ModuleLoader__.load({
               h(
                 'tbody',
                 null,
-                wsList.map(function (w) {
+                wsList.map(function (w, idx) {
+                  var scopeId = w.scope_id || w.project_scope || ('ws-' + idx);
+                  var rootPath = w.root_path || w.repo_root || '—';
+                  var stackStr = typeof w.stack === 'string' && w.stack ? w.stack : (w.stacks || []).join(', ') || '—';
                   return h(
                     'tr',
-                    { key: w.project_scope },
-                    h('td', { className: 'trigger' }, w.project_scope),
-                    h('td', { className: 'txt' }, w.repo_root),
-                    h('td', { className: 'txt' }, (w.stacks || []).join(', ') || '—'),
+                    { key: scopeId },
+                    h(
+                      'td',
+                      { className: 'trigger' },
+                      w.name ? h('div', null, w.name) : null,
+                      h(
+                        'span',
+                        {
+                          className: 'tag link',
+                          onClick: function () {
+                            setQ('scope:' + scopeId);
+                            setTab('project');
+                          },
+                        },
+                        scopeId,
+                      ),
+                    ),
+                    h('td', { className: 'txt' }, rootPath),
+                    h('td', { className: 'txt' }, stackStr),
                     h('td', { className: 'counts' }, h('b', null, String(w.rules_count || 0))),
                   );
                 }),
@@ -496,14 +518,20 @@ window.__ModuleLoader__.load({
           h(
             'div',
             { className: 't' },
-            tab === 'shared' ? '共享库为空 / shared library is empty' : '还没有抗体 / no antibodies yet',
+            tab === 'shared'
+              ? '共享库为空 / shared library is empty'
+              : tab === 'quarantined'
+                ? '隔离区为空 / quarantine is empty'
+                : '还没有抗体 / no antibodies yet',
           ),
           h(
             'div',
             { className: 'hd' },
             tab === 'shared'
               ? '泛型坑在多个项目反复命中后才会晋升到这里。'
-              : '工具先失败、随后用另一种方式成功之后才会产生。',
+              : tab === 'quarantined'
+                ? '未达标或含回声转储的规则会自动隔离，避免污染召回。'
+                : '工具先失败、随后用另一种方式成功之后才会产生。',
           ),
         );
       } else {
@@ -533,17 +561,42 @@ window.__ModuleLoader__.load({
                   'td',
                   { className: 'trigger', 'data-label': '触发' },
                   a.trigger_pattern,
-                  (a.project_scope && a.project_scope !== '*') || (typeof a.rubric_score === 'number' && a.rubric_score > 0) || (a.root_cause && a.root_cause !== 'unknown')
-                    ? h(
-                        'div',
-                        { className: 'tags' },
-                        a.project_scope && a.project_scope !== '*' ? h('span', { className: 'tag' }, 'scope:' + a.project_scope) : null,
-                        typeof a.rubric_score === 'number' && a.rubric_score > 0
-                          ? h('span', { className: 'tag ' + (a.rubric_score >= 60 ? 'hi' : 'low') }, 'rubric:' + a.rubric_score)
-                          : null,
-                        a.root_cause && a.root_cause !== 'unknown' ? h('span', { className: 'tag' }, a.root_cause) : null,
-                      )
-                    : null,
+                  h(
+                    'div',
+                    { className: 'tags' },
+                    (a.ignored_count || 0) >= 2
+                      ? h('span', { className: 'tag crit' }, 'CRITICAL · ignored ' + a.ignored_count + '×')
+                      : null,
+                    a.tool_name ? h('span', { className: 'tag' }, a.tool_name) : null,
+                    a.quality_grade && a.quality_grade !== 'quarantined'
+                      ? h('span', { className: 'tag ' + (a.quality_grade === 'advice' ? 'hi' : '') }, a.quality_grade)
+                      : null,
+                    a.project_scope && a.project_scope !== '*'
+                      ? h(
+                          'span',
+                          {
+                            className: 'tag link',
+                            onClick: function () {
+                              onQuery('scope:' + a.project_scope);
+                            },
+                          },
+                          'scope:' + a.project_scope,
+                        )
+                      : null,
+                    typeof a.rubric_score === 'number' && a.rubric_score > 0
+                      ? h('span', { className: 'tag ' + (a.rubric_score >= 60 ? 'hi' : 'low') }, 'rubric:' + a.rubric_score)
+                      : null,
+                    a.root_cause && a.root_cause !== 'unknown' && a.root_cause !== 'other'
+                      ? h('span', { className: 'tag' }, a.root_cause)
+                      : null,
+                    a.prescription_source && a.prescription_source !== 'rule'
+                      ? h('span', { className: 'tag' }, 'src:' + a.prescription_source)
+                      : null,
+                    (a.probation_at || 0) > 0 && a.status === 'active'
+                      ? h('span', { className: 'tag low' }, 'probation')
+                      : null,
+                    (a.parent_id || 0) > 0 ? h('span', { className: 'tag' }, 'from #' + a.parent_id) : null,
+                  ),
                 ),
                 h('td', { className: 'txt', 'data-label': '忌' }, a.symptom),
                 h(
@@ -710,7 +763,7 @@ window.__ModuleLoader__.load({
           h(
             'div',
             { className: 'meta-row' },
-            h('span', null, sorted.length + ' 条结果 / results'),
+            h('span', null, (tab === 'workspaces' ? (data.workspaces || []).length : sorted.length) + ' 条结果 / results'),
             h('span', null, stats ? '蒸馏预算 / budget ' + formatBudget(data.budgetMs) : ''),
             h(
               'span',
@@ -733,7 +786,8 @@ window.__ModuleLoader__.load({
                       : '')
                 : '',
             ),
-            h('a', { href: API + '/export?format=md', download: 'immune-library.md' }, '导出 / export'),
+            h('a', { href: API + '/export?format=md', download: 'immune-library.md' }, '导出 MD'),
+            h('a', { href: API + '/export?format=json', download: 'immune-library.json' }, '导出 JSON'),
             h(
               'label',
               { className: 'imm-import' },

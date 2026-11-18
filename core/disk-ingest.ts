@@ -59,7 +59,7 @@ export interface DiskIngestReport {
 }
 
 const SKIP_DIR_RE =
-  /^(?:\.git|node_modules|\.venv|venv|__pycache__|dist|build|\.next|\.turbo|\.pnpm-store|target|out|coverage|\$RECYCLE\.BIN|System Volume Information|VMs|Windows|Program Files|x64|OVFTool|nmap|WPS Office|Resources|tmp|BaiduNetdiskDownload|download|Microsoft VS Code|Unity|UU远程|Tencent|微信web开发者工具|腾讯会议|QQ Agent.*|.*急救班.*|.*精听班.*|workbuddy|messages|ico|safe|wcheck|wd|tools-upgraders|CC-Switch.*|_apkcheck.*|_bundle_verify|_pubverify|_remote_head|_synchk|_trash|_verify_clone|ghp_trash.*|sm_?build.*|smbuild.*|build_.*|wt_.*|\.\w+)$/i;
+  /^(?:\.git|node_modules|\.venv|venv|__pycache__|dist|build|\.next|\.turbo|\.pnpm-store|target|out|coverage|\$RECYCLE\.BIN|System Volume Information|VMs|Windows|Program Files(?:\s*\(x86\))?|x64|OVFTool|Resources|tmp|temp|Downloads|download|Microsoft VS Code|Unity|Library|Applications|AppData|_[A-Za-z0-9_-]+|\.\w+)$/i;
 
 const PROJECT_MARKERS = [
   'package.json',
@@ -305,9 +305,9 @@ export function discoverDiskProjects(
         baseline,
         extractedRules,
       });
-      // Do not descend inside a regular app repo (only descend into organizational folders
-      // like D:\Project, D:\大创, D:\codex-skills, D:\deepseek harness project).
-      if (kind !== 'monorepo' && !/^(?:project|codex-skills|deepseek harness project|大创|数学建模大赛agent|安全渗透测试|ai\+信息素养大赛|智阅矩阵scholarmatrix)$/i.test(name)) {
+      // Do not descend inside a regular leaf app repo; organizational folders
+      // (which lack root markers) and monorepos continue descending naturally.
+      if (kind !== 'monorepo' && !/^(?:projects?|repos?|workspaces?|codex-skills|skills)$/i.test(name)) {
         return;
       }
     }
@@ -339,7 +339,7 @@ export function ingestDiskCorpus(
   store: ImmuneStore,
   opts: DiskIngestOptions = {},
 ): DiskIngestReport {
-  const roots = opts.roots && opts.roots.length > 0 ? opts.roots : ['D:\\'];
+  const roots = opts.roots && opts.roots.length > 0 ? opts.roots : [process.cwd()];
   const maxRulesPerProject = opts.maxRulesPerProject ?? 12;
   const dryRun = opts.dryRun === true;
   const repos = discoverDiskProjects(roots, {

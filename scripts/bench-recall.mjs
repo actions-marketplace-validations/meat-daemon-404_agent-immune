@@ -81,6 +81,8 @@ const NEGATIVES = [
   '你好',
   'k8s 调度',
   '帮我看看这个报错',
+  '继续优化',
+  '好的继续下一步',
 ];
 
 function seed(store) {

@@ -15,8 +15,9 @@ import { ImmuneStore } from '../../core/store/index.js';
 import { GlobalStore, globalDbPathFor } from '../../core/store/global.js';
 import { resolveDbPath } from '../../core/store/path.js';
 import { findConsolidationCandidates, findLessonGroups } from '../../core/consolidate.js';
+import { resolveDrainBudgetMs } from '../../core/runtime.js';
 import { sleepReviewGroupsOf } from '../../core/sleep-consolidate.js';
-import { verifyConnectedPaths } from '../../core/connect.js';
+import { connectStatus, verifyConnectedPaths } from '../../core/connect.js';
 import { dshDirOf, ROOT_MARKER } from './root-marker.js';
 /** The package's engines bar, as a pure predicate so tests can pin it. */
 export function nodeVersionSatisfied(version) {
@@ -80,10 +81,19 @@ function markerChecks() {
     const results = [];
     const marker = join(dshDirOf(), ROOT_MARKER);
     if (!existsSync(marker)) {
+        const hasConnectedHost = connectStatus().some((row) => row.state === 'connected');
+        if (hasConnectedHost) {
+            results.push({
+                name: 'plugin marker (.dsh/immune-root.txt)',
+                ok: true,
+                detail: 'optional outside ZCode — connected host hooks resolve workspace .dsh/immune.sqlite directly',
+            });
+            return results;
+        }
         results.push({
             name: 'plugin marker (.dsh/immune-root.txt)',
             ok: false,
-            detail: 'missing — the plugin has not run in this project yet; run any command once',
+            detail: 'missing — run `immune connect` or run any ZCode plugin command once',
         });
         return results;
     }
@@ -123,6 +133,14 @@ function nativeUiCheck() {
         // Compiles to <plugin>/dist/zcode/src/doctor.js, so the package root is
         // FOUR levels up: src -> zcode -> dist -> <plugin>.
         const pluginRoot = join(here, '..', '..', '..', '..');
+        // Vendored `~/.dsh-immune` installs hold a minimal ESM marker + version.json, not DSH client assets.
+        if (existsSync(join(pluginRoot, 'version.json'))) {
+            return {
+                name,
+                ok: true,
+                detail: 'vendored hook runtime (~/.dsh-immune) — use `immune ui` for standalone dashboard',
+            };
+        }
         const manifests = [
             join(pluginRoot, 'package.json'),
             // When run from the repo instead of an installed copy, the manifest that
@@ -205,18 +223,19 @@ function ruleHygieneRow(store) {
  */
 function llmBudgetRow(env = process.env) {
     const configured = Boolean(env.IMMUNE_LLM_BASE_URL?.trim() && env.IMMUNE_LLM_MODEL?.trim());
-    const budget = Number(env.IMMUNE_DISTILL_BUDGET_MS ?? '12000');
-    const timeout = Number(env.IMMUNE_LLM_TIMEOUT_MS ?? '20000');
+    const budget = resolveDrainBudgetMs(env);
+    const rawTimeout = Number(env.IMMUNE_LLM_TIMEOUT_MS ?? '8000');
+    const timeout = Number.isFinite(rawTimeout) && rawTimeout > 0 ? rawTimeout : 8000;
     if (!configured) {
-        return { name: 'LLM budget', ok: true, detail: 'no LLM configured - deterministic rule path' };
+        return { name: 'LLM budget', ok: true, detail: `no LLM configured - deterministic rule path (budget ${budget} ms)` };
     }
-    const tight = Number.isFinite(budget) && Number.isFinite(timeout) && budget < timeout;
+    const tight = budget < timeout;
     return {
         name: 'LLM budget',
         ok: !tight,
         detail: tight
-            ? `budget ${budget} ms < LLM timeout ${timeout} ms - turn-end distillation uses the rule path; run \`immune backfill\` for model-quality rules or raise IMMUNE_DISTILL_BUDGET_MS`
-            : `budget ${budget} ms covers the ${timeout} ms LLM timeout`,
+            ? `clamped budget ${budget} ms < LLM timeout ${timeout} ms - turn-end distillation uses the rule path; run \`immune backfill\` or adjust IMMUNE_DISTILL_BUDGET_MS / IMMUNE_LLM_TIMEOUT_MS`
+            : `clamped budget ${budget} ms covers the ${timeout} ms LLM timeout`,
     };
 }
 /**
@@ -271,16 +290,18 @@ export function runDoctor(store, options = {}) {
         results.push(...markerChecks());
     results.push(mcpCheck(), nativeUiCheck());
     results.push(connectPathsCheck());
+    const s = store.stats();
     results.push({
         name: 'counts',
         ok: true,
-        detail: `${store.listAll(false).length} active / ${store.listAll(true).length - store.listAll(false).length} retired / ${store.pendingJobCount()} queued jobs / ${store.stats().suppressedRepeats} repeats suppressed`,
+        detail: `${s.active} active / ${s.retired} retired` +
+            (s.quarantined > 0 ? ` / ${s.quarantined} quarantined` : '') +
+            ` / ${s.jobsPending} queued jobs / ${s.suppressedRepeats} repeats suppressed`,
     });
     results.push(storageRow(store));
     results.push(ruleHygieneRow(store));
     results.push(lifecycleRow(store));
     results.push(llmBudgetRow());
-    const s = store.stats();
     if (s.llmDistilled > 0 || s.llmFallbacks > 0) {
         // Advisory, not a health gate. The counters are cumulative: one degraded
         // backfill months ago would keep `immune doctor` red forever, which trains

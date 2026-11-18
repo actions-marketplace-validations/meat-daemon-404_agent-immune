@@ -8,6 +8,23 @@
  * overlapping 3-character windows before the MATCH expression is built.
  */
 const CJK = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/;
+/**
+ * Conversational / functional 2-character Chinese words that carry zero domain
+ * specificity. Without this filter, a prompt like "继续优化" or "帮我看看" matches
+ * `git rebase ... 继续` via the 2-char LIKE fallback. Domain 2-char terms
+ * (跨域, 端口, 权限, 死锁, 借用, 并发, 锁表, 缩进, 转义, 编码, 乱码, 备份…) stay untouched.
+ */
+const CJK_STOP_BIGRAMS = new Set([
+    '继续', '优化', '一下', '这个', '那个', '什么', '怎么', '如何', '为什',
+    '可以', '需要', '帮我', '帮忙', '看看', '现在', '已经', '还是', '如果',
+    '或者', '以及', '因为', '所以', '但是', '然后', '开始', '下一', '一步',
+    '好的', '一个', '一些', '我们', '你们', '自己', '没有', '进行', '使用',
+    '通过', '之后', '之前', '这里', '那里', '请问', '谢谢', '麻烦', '直接',
+]);
+const CJK_STOP_TRIGRAMS = new Set([
+    '继续优', '续优化', '好的继', '的继续', '下一步', '帮我看', '我看看',
+    '看看这', '看这里', '改一下', '看一下', '看看现', '看现在',
+]);
 /** Split text into candidate tokens, keeping paths and CJK runs intact. */
 export function tokenize(text, max = 16) {
     const cleaned = text.replace(/[^\p{L}\p{N}_.\-/@]+/gu, ' ').trim();
@@ -55,6 +72,8 @@ export function cjkBigrams(text, max = 14) {
             const window = `${chars[i]}${chars[i + 1]}`;
             if (!/^[\u4e00-\u9fff]{2}$/u.test(window))
                 continue;
+            if (CJK_STOP_BIGRAMS.has(window))
+                continue;
             if (!out.includes(window))
                 out.push(window);
         }
@@ -74,6 +93,8 @@ export function buildFtsQuery(text, maxTerms = 24) {
     const terms = [];
     const push = (value) => {
         if ([...value].length < 3)
+            return;
+        if (CJK_STOP_TRIGRAMS.has(value))
             return;
         if (terms.some((t) => t.toLowerCase() === value.toLowerCase()))
             return;

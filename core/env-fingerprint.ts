@@ -13,6 +13,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { deriveProjectScope } from './hygiene.js';
 
 /** The files whose change means "the environment this rule was learned in changed". */
 const LOCKFILES = [
@@ -20,8 +21,10 @@ const LOCKFILES = [
   'npm-shrinkwrap.json',
   'pnpm-lock.yaml',
   'yarn.lock',
+  'bun.lock',
   'bun.lockb',
   'Cargo.lock',
+  'go.sum',
   'uv.lock',
   'poetry.lock',
   'requirements.txt',
@@ -75,17 +78,23 @@ export function applyEnvMetabolism(
   cwd: string,
 ): { probation: number; revalidated: number } {
   const current = currentFingerprint(cwd).key;
+  const scope = deriveProjectScope(cwd);
+  const now = Date.now();
   const probation = db
     .prepare(
       `UPDATE antibodies SET probation_at = ?, updated_at = ?
-        WHERE status = 'active' AND env_fingerprint != '' AND env_fingerprint != ? AND probation_at = 0`,
+        WHERE status = 'active'
+          AND (project_scope = ? OR project_scope = '*')
+          AND env_fingerprint != '' AND env_fingerprint != ? AND probation_at = 0`,
     )
-    .run(Date.now(), Date.now(), current);
+    .run(now, now, scope, current);
   const revalidated = db
     .prepare(
       `UPDATE antibodies SET probation_at = 0, updated_at = ?
-        WHERE probation_at > 0 AND (env_fingerprint = ? OR env_fingerprint = '')`,
+        WHERE probation_at > 0
+          AND (project_scope = ? OR project_scope = '*')
+          AND (env_fingerprint = ? OR env_fingerprint = '')`,
     )
-    .run(Date.now(), current);
+    .run(now, scope, current);
   return { probation: Number(probation.changes), revalidated: Number(revalidated.changes) };
 }

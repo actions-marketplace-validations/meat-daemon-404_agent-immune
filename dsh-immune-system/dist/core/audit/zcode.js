@@ -28,11 +28,26 @@ export function loadZcodeSessions(sourceDb, since) {
             }
         }
         const parts = loadParts(db, candidateSessions, neededCallIds);
+        const sessionDirs = new Map();
+        try {
+            const rows = db
+                .prepare('SELECT id, directory FROM session')
+                .all();
+            for (const row of rows) {
+                if (typeof row.id === 'string' && typeof row.directory === 'string' && row.directory) {
+                    sessionDirs.set(row.id, row.directory);
+                }
+            }
+        }
+        catch {
+            // Minimal test fixtures omit the `session` table; scope falls back cleanly.
+        }
         const sessions = new Map();
         for (const call of calls) {
             let bucket = sessions.get(call.session_id);
             if (!bucket) {
-                bucket = { calls: [], parts, tokenSamples: [] };
+                const cwd = sessionDirs.get(call.session_id);
+                bucket = { calls: [], parts, tokenSamples: [], ...(cwd ? { cwd } : {}) };
                 sessions.set(call.session_id, bucket);
             }
             bucket.calls.push(call);

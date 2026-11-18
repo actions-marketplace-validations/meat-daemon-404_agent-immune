@@ -307,4 +307,90 @@ export const BUILTIN_PACKS = [
             },
         ],
     },
+    {
+        id: 'rust-cargo',
+        label: 'Rust / Cargo',
+        description: 'Borrow checker traps, async Tokio blocking, serde features, workspace Cargo.lock, clippy',
+        rules: [
+            {
+                tool_name: 'Edit',
+                trigger_pattern: 'Rust borrow checker E0502 cannot borrow mutable immutable 借用冲突',
+                symptom: '同一作用域同时持有不可变借用与可变借用报 E0502 cannot borrow as mutable',
+                prescription: '缩短不可变引用的生命周期（提前消费或用独立块包裹），不要盲目到处 .clone()',
+            },
+            {
+                tool_name: 'Edit',
+                trigger_pattern: 'Rust tokio async 阻塞 同步 文件读写 std::fs sleep spawn_blocking 卡死运行时',
+                symptom: '在 async fn 里直接调 std::fs / std::thread::sleep 或 CPU 密集操作阻塞 Tokio 工作线程',
+                prescription: '改用 tokio::fs / tokio::time::sleep，同步阻塞 IO 或 CPU 密集操作放进 tokio::task::spawn_blocking',
+            },
+            {
+                tool_name: 'Bash',
+                trigger_pattern: 'Bash cargo serde Serialize Deserialize derive feature 缺失 编译报错',
+                symptom: '写 #[derive(Serialize, Deserialize)] 报找不到宏，Cargo.toml 漏开了 derive feature',
+                prescription: '用 cargo add serde --features derive（或 serde = { version = "1", features = ["derive"] }）',
+            },
+            {
+                tool_name: 'Bash',
+                trigger_pattern: 'Bash cargo check 快速类型检查 全量编译 cargo build 慢',
+                symptom: '连续改代码每次跑完整 cargo build / test 全量链接耗时很长',
+                prescription: '迭代修复类型与借用错误先跑 cargo check（跳过代码生成与链接），通过后再跑 cargo test',
+            },
+            {
+                tool_name: 'Bash',
+                trigger_pattern: 'Bash cargo workspace 多成员包 -p package 指定目标',
+                symptom: 'Cargo workspace 根目录直接跑命令默认作用默认成员或遗漏子 crate',
+                prescription: '在 workspace 用 cargo test -p <crate> 精确指定包，全仓验证用 cargo test --workspace',
+            },
+            {
+                tool_name: 'Bash',
+                trigger_pattern: 'Bash cargo clippy -D warnings 提交前 lint 未通过 CI',
+                symptom: '本地 cargo test 通过但遗漏未使用变量或冗余克隆，CI 的 clippy -D warnings 挂掉',
+                prescription: '提交前跑 cargo clippy --all-targets -- -D warnings 与 cargo fmt --check',
+            },
+        ],
+    },
+    {
+        id: 'go-mod',
+        label: 'Go / Modules',
+        description: 'go.sum drift, nil map panics, goroutine context leaks, errors.Is wrapping, -race, JSON tags',
+        rules: [
+            {
+                tool_name: 'Bash',
+                trigger_pattern: 'Bash go build missing go.sum entry go mod tidy 依赖校验缺失',
+                symptom: '引入或升级包后 go build / test 报 missing go.sum entry for module providing package',
+                prescription: '执行 go mod tidy 补齐并裁剪 go.mod 与 go.sum，不要手改 go.sum 哈希行',
+            },
+            {
+                tool_name: 'Edit',
+                trigger_pattern: 'Go panic assignment to entry in nil map 未初始化 make 写入崩溃',
+                symptom: '声明 var m map[string]T 后直接 m[k] = v 触发 assignment to entry in nil map panic',
+                prescription: '写入前用 make(map[string]T) 或字面量 map[string]T{} 初始化；nil map 只能读不能写',
+            },
+            {
+                tool_name: 'Edit',
+                trigger_pattern: 'Go goroutine 泄漏 context.Context Done 超时取消 channel 阻塞',
+                symptom: '后台 goroutine 读写无缓冲 channel 未监听 ctx.Done()，上游超时返回后永久阻塞泄漏',
+                prescription: '在 goroutine 的 select 中同时监听 <-ctx.Done()，或使用带缓冲 channel 保证退出路径',
+            },
+            {
+                tool_name: 'Edit',
+                trigger_pattern: 'Go error 包装 fmt.Errorf %w errors.Is errors.As 直接 == 比较失效',
+                symptom: '用 err == sql.ErrNoRows 比较被 fmt.Errorf("%w") 包装过的错误永远为 false',
+                prescription: '链式包装错误统一用 errors.Is(err, target) 与 errors.As(err, &target) 判断，禁止裸 ==',
+            },
+            {
+                tool_name: 'Edit',
+                trigger_pattern: 'Go encoding/json struct 小写私有字段 序列化为空 json tag',
+                symptom: 'struct 字段首字母小写未导出，json.Marshal 输出空对象 {} 或反序列化静默丢字段',
+                prescription: '需要 JSON 序列化的 struct 字段首字母必须大写导出，并显式标注 `json:"field_name"`',
+            },
+            {
+                tool_name: 'Bash',
+                trigger_pattern: 'Bash go test -race 并发数据竞争 concurrent map writes 偶发崩溃',
+                symptom: '并发读写共享变量或 map 在普通 go test 下偶发通过，线上触发 fatal error: concurrent map writes',
+                prescription: '涉及 goroutine 的改动跑 go test -race ./...，用 sync.Mutex / sync.RWMutex 或 channel 保护共享状态',
+            },
+        ],
+    },
 ];

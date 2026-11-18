@@ -200,6 +200,8 @@ export function targetSignature(
 const PROGRAM_FAMILIES: ReadonlyArray<ReadonlySet<string>> = [
   new Set(['npm', 'npx', 'pnpm', 'yarn', 'bun', 'bunx', 'node', 'corepack']),
   new Set(['python', 'python3', 'py', 'pip', 'pip3', 'uv', 'poetry']),
+  new Set(['cargo', 'rustc', 'rustup']),
+  new Set(['go']),
   new Set(['git', 'gh']),
   new Set(['docker', 'docker-compose', 'podman']),
 ];

@@ -484,6 +484,171 @@ try {
     db.close();
     check('Antigravity modelName attributed injections in model_hits', hits.length >= 1, `rows=${hits.length}`);
   }
+
+  // --- Gemini CLI dialect: BeforeAgent / BeforeTool / AfterTool / AfterAgent ---
+  const reportGemini = connectHost('gemini-cli', { home });
+  check('connect gemini-cli wires 5 events into ~/.gemini/settings.json', reportGemini.added === 5);
+
+  const gemPrompt = runHook('user-prompt-submit.js', {
+    hook_event_name: 'BeforeAgent',
+    session_id: 'gem-1',
+    cwd: project,
+    prompt: 'npm install ERESOLVE dependency error',
+  });
+  check(
+    'Gemini CLI BeforeAgent injects via hookSpecificOutput.additionalContext',
+    (() => {
+      try {
+        const parsed = JSON.parse(gemPrompt.stdout);
+        return (
+          gemPrompt.status === 0 &&
+          parsed.hookSpecificOutput?.hookEventName === 'BeforeAgent' &&
+          /<immune_memory>/.test(parsed.hookSpecificOutput?.additionalContext ?? '')
+        );
+      } catch {
+        return false;
+      }
+    })(),
+    gemPrompt.stdout.slice(0, 200),
+  );
+
+  const gemDeny = runHook(
+    'pre-tool-use.js',
+    {
+      hook_event_name: 'BeforeTool',
+      session_id: 'gem-1',
+      cwd: project,
+      tool_name: 'run_shell_command',
+      tool_input: { command: 'git push --force origin main' },
+    },
+    { IMMUNE_GUARD: 'deny' },
+  );
+  check(
+    'Gemini CLI BeforeTool guard deny emits { decision: "deny", reason }',
+    (() => {
+      try {
+        const parsed = JSON.parse(gemDeny.stdout);
+        return gemDeny.status === 0 && parsed.decision === 'deny' && typeof parsed.reason === 'string';
+      } catch {
+        return false;
+      }
+    })(),
+    gemDeny.stdout.slice(0, 200),
+  );
+
+  // --- Cursor dialect + daemon cwd != workspace_roots isolation ------------
+  const cursorWorkspace = mkdtempSync(join(tmpdir(), 'immune-conrt-cursor-ws-'));
+  try {
+    const reportCursor = connectHost('cursor', { home, refresh: true });
+    check('connect cursor wires 6 hook events + 1 sidecar MCP entry', reportCursor.added === 7, `added=${reportCursor.added}`);
+
+    // Spawn hook with process.cwd = home (simulating a daemon cwd), while payload points at cursorWorkspace!
+    const runDaemonHook = (script, payload, extraEnv = {}) => {
+      const env = { ...process.env };
+      for (const key of Object.keys(env)) {
+        if (/^(ZCODE|CLAUDE)_/.test(key)) delete env[key];
+      }
+      delete env.IMMUNE_DB_PATH;
+      delete env.IMMUNE_GUARD;
+      Object.assign(env, extraEnv);
+      return spawnSync(process.execPath, [join(hooksDir, script)], {
+        input: JSON.stringify(payload),
+        cwd: home,
+        env,
+        encoding: 'utf8',
+        timeout: 30_000,
+      });
+    };
+
+    runDaemonHook('post-tool-use.js', {
+      hook_event_name: 'postToolUse',
+      conversation_id: 'cur-1',
+      workspace_roots: [cursorWorkspace],
+      tool_name: 'Shell',
+      tool_input: { command: 'go mod tidy' },
+      tool_output: { exitCode: 1, stderr: 'verifying module: checksum mismatch' },
+    });
+    runDaemonHook('post-tool-use.js', {
+      hook_event_name: 'postToolUse',
+      conversation_id: 'cur-1',
+      workspace_roots: [cursorWorkspace],
+      tool_name: 'Edit',
+      tool_input: { path: join(cursorWorkspace, 'go.mod') },
+      tool_output: { ok: true },
+    });
+    runDaemonHook('post-tool-use.js', {
+      hook_event_name: 'postToolUse',
+      conversation_id: 'cur-1',
+      workspace_roots: [cursorWorkspace],
+      tool_name: 'Shell',
+      tool_input: { command: 'go mod tidy' },
+      tool_output: { exitCode: 0, stdout: 'ok' },
+    });
+    const curStop = runDaemonHook('stop.js', {
+      hook_event_name: 'stop',
+      conversation_id: 'cur-1',
+      workspace_roots: [cursorWorkspace],
+    });
+    check('Cursor stop drains episode cleanly', curStop.status === 0 && curStop.stdout.trim() === '{}');
+
+    const cursorDb = join(cursorWorkspace, '.dsh', 'immune.sqlite');
+    const leakedDaemonDb = join(home, '.dsh', 'immune.sqlite');
+    check(
+      'event workspace_roots routes DB to workspace instead of daemon cwd',
+      existsSync(cursorDb) && !existsSync(leakedDaemonDb),
+      `cursorDb=${existsSync(cursorDb)} leaked=${existsSync(leakedDaemonDb)}`,
+    );
+
+    const curPre = runDaemonHook('pre-tool-use.js', {
+      hook_event_name: 'preToolUse',
+      conversation_id: 'cur-2',
+      workspace_roots: [cursorWorkspace],
+      tool_name: 'Shell',
+      tool_input: { command: 'go mod tidy' },
+    });
+    check(
+      'Cursor preToolUse recalls rule via { permission: "allow", agent_message }',
+      (() => {
+        try {
+          const parsed = JSON.parse(curPre.stdout);
+          return (
+            curPre.status === 0 &&
+            parsed.permission === 'allow' &&
+            /<immune_memory>/.test(parsed.agent_message ?? '')
+          );
+        } catch {
+          return false;
+        }
+      })(),
+      curPre.stdout.slice(0, 200),
+    );
+
+    const curDeny = runDaemonHook(
+      'pre-tool-use.js',
+      {
+        hook_event_name: 'preToolUse',
+        conversation_id: 'cur-2',
+        workspace_roots: [cursorWorkspace],
+        tool_name: 'Shell',
+        tool_input: { command: 'git push --force origin main' },
+      },
+      { IMMUNE_GUARD: 'deny' },
+    );
+    check(
+      'Cursor preToolUse guard deny emits { permission: "deny", user_message, agent_message }',
+      (() => {
+        try {
+          const parsed = JSON.parse(curDeny.stdout);
+          return curDeny.status === 0 && parsed.permission === 'deny' && typeof parsed.agent_message === 'string';
+        } catch {
+          return false;
+        }
+      })(),
+      curDeny.stdout.slice(0, 200),
+    );
+  } finally {
+    rmSync(cursorWorkspace, { recursive: true, force: true });
+  }
 } finally {
   rmSync(home, { recursive: true, force: true });
   rmSync(project, { recursive: true, force: true });

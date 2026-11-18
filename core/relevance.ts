@@ -24,6 +24,19 @@ const STOPWORDS = new Set([
   'after', 'during', 'while', 'about', 'over', 'under',
 ]);
 
+/**
+ * Ubiquitous runtime / stack-trace words (e.g. `at file:///...`, `exit code 1`).
+ * A single weak word alone must not blame an injected rule for an unrelated
+ * error; two weak words together or any specific anchor counts as related.
+ */
+const WEAK_RUNTIME_WORDS = new Set([
+  'file', 'files', 'url', 'urls', 'path', 'paths', 'import', 'export',
+  'code', 'line', 'lines', 'node', 'json', 'text', 'data', 'value',
+  'type', 'call', 'test', 'run', 'build', 'read', 'write', 'open',
+  'close', 'check', 'list', 'name', 'true', 'false', 'null', 'error',
+  'failed', 'failure', 'command', 'exit', 'status', 'output', 'input', 'result',
+]);
+
 /** Overlapping 3-character windows, so Chinese phrases can be compared. */
 function cjkGrams(token: string, size = 3): string[] {
   const chars = [...token];
@@ -77,5 +90,8 @@ export function isRelated(trigger: string, failureText: string, toolName: string
   const a = [...signals(trigger)].filter((t) => t !== ignore);
   if (a.length === 0) return false;
   const b = signals(failureText);
-  return a.some((token) => b.has(token));
+  const matched = a.filter((token) => b.has(token));
+  if (matched.length === 0) return false;
+  if (matched.some((token) => !WEAK_RUNTIME_WORDS.has(token))) return true;
+  return matched.length >= 2 || a.length === 1;
 }

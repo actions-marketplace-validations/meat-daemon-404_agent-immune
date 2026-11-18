@@ -104,10 +104,12 @@ export class ImmuneRuntime {
                 '同一目标已连续探测两次，这是第 3 次：换一条精确命令（grep -n 关键词、单次 Read）通常一步到位。' +
                     ' / Third consecutive probe of the same target — one precise command usually lands it.';
         }
+        const isPassiveReadTool = /^(?:read|glob|grep)$/i.test(opts.toolName);
         const recallRows = this.store.match(input, {
             limit: 2,
             sessionId: opts.sessionId,
             toolName: opts.toolName,
+            strictToolMatch: isPassiveReadTool,
             cwd: opts.workspace,
         });
         let stuckNote;
@@ -220,7 +222,7 @@ export class ImmuneRuntime {
             return usable;
         };
         const commit = (job, result, extraFallbackReason) => applyDistillResult(this.store, job, result, {
-            fingerprint: currentFingerprint().key,
+            fingerprint: currentFingerprint(job.cwd || undefined).key,
             ...(extraFallbackReason ? { extraFallbackReason } : {}),
         });
         while (Date.now() < deadline) {

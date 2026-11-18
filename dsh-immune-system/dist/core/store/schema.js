@@ -81,10 +81,12 @@ export const SCHEMA_STATEMENTS = [
     created_at  INTEGER NOT NULL
   )`,
     `CREATE TABLE IF NOT EXISTS session_turns (
-    session_id TEXT    PRIMARY KEY,
-    signature  TEXT    NOT NULL DEFAULT '',
-    turns      INTEGER NOT NULL DEFAULT 0,
-    updated_at INTEGER NOT NULL
+    session_id      TEXT    PRIMARY KEY,
+    signature       TEXT    NOT NULL DEFAULT '',
+    turns           INTEGER NOT NULL DEFAULT 0,
+    last_prompt_sig TEXT    NOT NULL DEFAULT '',
+    prompt_at       INTEGER NOT NULL DEFAULT 0,
+    updated_at      INTEGER NOT NULL
   )`,
     `CREATE TABLE IF NOT EXISTS session_injections (
     session_id    TEXT    PRIMARY KEY,

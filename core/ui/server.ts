@@ -22,7 +22,6 @@ import { renderPage } from './page.js';
 import { resolveLocale } from '../i18n.js';
 import {
   applyAction,
-  dashboardStats,
   evolutionStats,
   readState,
   readWorkspaces,
@@ -33,6 +32,7 @@ import { exportLibrary, importLibrary } from '../sync.js';
 import { renderSkillMarkdown } from '../export.js';
 import { shareSanityCheck } from '../share-guard.js';
 import { scanMagpieTelemetry } from '../audit/magpie.js';
+import { explainRecall } from '../explain.js';
 
 export interface UiServerOptions {
   /** Database to open. Defaults to the host's resolution. */
@@ -70,15 +70,14 @@ export async function startUiServer(options: UiServerOptions = {}): Promise<UiSe
     return a.length === b.length && timingSafeEqual(a, b);
   }
 
-  function stats(): { active: number; retired: number; hits: number; shared: number } {
-    return dashboardStats(store);
-  }
-
   function handle(req: IncomingMessage, res: ServerResponse): void {
     const url = new URL(req.url ?? '/', 'http://127.0.0.1');
     const path = url.pathname;
 
     if (path === '/' || path === '/index.html') {
+      const langParam = url.searchParams.get('lang');
+      const pageLocale: 'zh-CN' | 'en' =
+        langParam === 'en' ? 'en' : langParam === 'zh-CN' ? 'zh-CN' : locale;
       res.writeHead(200, {
         'content-type': 'text/html; charset=utf-8',
         'cache-control': 'no-store',
@@ -90,7 +89,7 @@ export async function startUiServer(options: UiServerOptions = {}): Promise<UiSe
       res.end(
         renderPage({
           token,
-          locale,
+          locale: pageLocale,
           dbPath: store.dbPath,
           budgetMs: resolveBudgetMs(),
           evolution: evolutionStats(store),
@@ -178,6 +177,15 @@ export async function startUiServer(options: UiServerOptions = {}): Promise<UiSe
 
     if (path === '/api/models' && req.method === 'GET') {
       sendJson(res, 200, store.modelImmunity(scanMagpieTelemetry()));
+      return;
+    }
+
+    if (path === '/api/explain' && req.method === 'GET') {
+      const query = url.searchParams.get('q') ?? '';
+      const rawLimit = Number(url.searchParams.get('limit') ?? '5');
+      const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(10, rawLimit) : 5;
+      const toolName = url.searchParams.get('tool') ?? undefined;
+      sendJson(res, 200, explainRecall(store, query, { limit, toolName }));
       return;
     }
 

@@ -36,10 +36,13 @@ export interface HookEvent {
   session_id?: string;
   sessionId?: string;
   conversationId?: string;
+  conversation_id?: string;
   workspacePaths?: string[];
+  workspace_roots?: string[];
   transcriptPath?: string;
   artifactDirectoryPath?: string;
   modelName?: string;
+  model?: string;
   lastUserInput?: string;
   invocationNum?: number;
   initialNumSteps?: number;
@@ -48,6 +51,10 @@ export interface HookEvent {
   terminationReason?: string;
   fullyIdle?: boolean;
   cwd?: string;
+  command?: string;
+  output?: string;
+  file_path?: string;
+  edits?: unknown[];
   tool_name?: string;
   toolName?: string;
   tool_input?: unknown;
@@ -62,6 +69,8 @@ export interface HookEvent {
 
 const MAX_CONTEXT = 10_000;
 let activeAntigravityEvent = false;
+let activeGeminiCliEvent = false;
+let activeCursorEvent = false;
 let deniedByHook = false;
 
 export function log(message: string): void {
@@ -94,9 +103,16 @@ export function emitContext(eventName: string, additionalContext: string): void 
  */
 export function emitDeny(eventName: string, reason: string): void {
   deniedByHook = true;
-  if (activeAntigravityEvent) {
+  const trimmedReason = reason.slice(0, MAX_CONTEXT);
+  if (activeCursorEvent) {
     process.stdout.write(
-      `${JSON.stringify({ decision: 'deny', reason: reason.slice(0, MAX_CONTEXT) })}\n`,
+      `${JSON.stringify({ permission: 'deny', user_message: trimmedReason, agent_message: trimmedReason })}\n`,
+    );
+    return;
+  }
+  if (activeAntigravityEvent || activeGeminiCliEvent) {
+    process.stdout.write(
+      `${JSON.stringify({ decision: 'deny', reason: trimmedReason })}\n`,
     );
     return;
   }
@@ -105,7 +121,7 @@ export function emitDeny(eventName: string, reason: string): void {
       hookSpecificOutput: {
         hookEventName: eventName,
         permissionDecision: 'deny',
-        permissionDecisionReason: reason.slice(0, MAX_CONTEXT),
+        permissionDecisionReason: trimmedReason,
       },
     }),
   );
@@ -116,6 +132,22 @@ export function isAntigravityEvent(event: HookEvent): boolean {
     typeof event.conversationId === 'string' ||
     Array.isArray(event.workspacePaths) ||
     (typeof event.toolCall === 'object' && event.toolCall !== null)
+  );
+}
+
+export function isGeminiCliEvent(event: HookEvent): boolean {
+  const name = event.hook_event_name ?? event.hookEventName ?? '';
+  return name === 'BeforeAgent' || name === 'AfterAgent' || name === 'BeforeTool' || name === 'AfterTool';
+}
+
+export function isCursorEvent(event: HookEvent): boolean {
+  const name = event.hook_event_name ?? event.hookEventName ?? '';
+  return (
+    typeof event.conversation_id === 'string' ||
+    Array.isArray(event.workspace_roots) ||
+    /^(?:beforeSubmitPrompt|beforeShellExecution|afterShellExecution|beforeMCPExecution|afterMCPExecution|afterFileEdit)$/.test(
+      name,
+    )
   );
 }
 
@@ -156,18 +188,25 @@ export function normaliseToolInput(raw: unknown): unknown {
   return obj;
 }
 
-/** Fold Antigravity camelCase fields into the shared HookEvent shape. */
+/** Fold Antigravity / Cursor / Gemini CLI fields into the shared HookEvent shape. */
 export function normaliseHookEvent(event: HookEvent): HookEvent {
-  if (!event.session_id && typeof event.conversationId === 'string' && event.conversationId) {
-    event.session_id = event.conversationId;
+  if (!event.session_id) {
+    if (typeof event.conversationId === 'string' && event.conversationId) {
+      event.session_id = event.conversationId;
+    } else if (typeof event.conversation_id === 'string' && event.conversation_id) {
+      event.session_id = event.conversation_id;
+    }
   }
-  if (
-    !event.cwd &&
-    Array.isArray(event.workspacePaths) &&
-    typeof event.workspacePaths[0] === 'string' &&
-    event.workspacePaths[0]
-  ) {
-    event.cwd = event.workspacePaths[0];
+  if (!event.cwd) {
+    if (Array.isArray(event.workspacePaths) && typeof event.workspacePaths[0] === 'string' && event.workspacePaths[0]) {
+      event.cwd = event.workspacePaths[0];
+    } else if (
+      Array.isArray(event.workspace_roots) &&
+      typeof event.workspace_roots[0] === 'string' &&
+      event.workspace_roots[0]
+    ) {
+      event.cwd = event.workspace_roots[0];
+    }
   }
   if (event.prompt === undefined && typeof event.lastUserInput === 'string') {
     event.prompt = event.lastUserInput;
@@ -180,15 +219,34 @@ export function normaliseHookEvent(event: HookEvent): HookEvent {
       event.tool_input = event.toolCall.args;
     }
   }
+  // Cursor shell / file edit payloads carry top-level `command` or `file_path` + `edits`.
+  if (!event.tool_name) {
+    if (typeof event.command === 'string' && event.command) {
+      event.tool_name = 'Bash';
+      if (event.tool_input === undefined) event.tool_input = { command: event.command };
+      if (event.tool_response === undefined && typeof event.output === 'string') {
+        const exitCode = typeof event.exit_code === 'number' ? event.exit_code : event.exitCode;
+        event.tool_response =
+          typeof exitCode === 'number' ? { exitCode, stdout: event.output } : event.output;
+      }
+    } else if (typeof event.file_path === 'string' && Array.isArray(event.edits)) {
+      event.tool_name = 'Edit';
+      if (event.tool_input === undefined) event.tool_input = { file_path: event.file_path };
+      if (event.tool_response === undefined) event.tool_response = { ok: true };
+    }
+  }
+  if (event.tool_response === undefined && event.tool_output !== undefined) {
+    event.tool_response = event.tool_output;
+  }
   if (event.tool_input !== undefined) {
     event.tool_input = normaliseToolInput(event.tool_input);
   }
-  if (
-    typeof event.modelName === 'string' &&
-    event.modelName.trim() &&
-    !process.env.IMMUNE_MODEL_NAME
-  ) {
-    process.env.IMMUNE_MODEL_NAME = event.modelName.trim();
+  const reportedModel =
+    (typeof event.modelName === 'string' && event.modelName.trim()) ||
+    (typeof event.model === 'string' && event.model.trim()) ||
+    '';
+  if (reportedModel && !process.env.IMMUNE_MODEL_NAME) {
+    process.env.IMMUNE_MODEL_NAME = reportedModel;
   }
   return event;
 }
@@ -205,6 +263,8 @@ export async function readEvent(): Promise<HookEvent> {
     if (typeof parsed !== 'object' || parsed === null) return {};
     const event = parsed as HookEvent;
     activeAntigravityEvent = isAntigravityEvent(event);
+    activeGeminiCliEvent = isGeminiCliEvent(event);
+    activeCursorEvent = isCursorEvent(event);
     return normaliseHookEvent(event);
   } catch {
     log('ignoring malformed stdin');
@@ -238,6 +298,8 @@ const HOST_TOOL_ALIASES: Record<string, string> = {
   local_shell: 'Bash',
   apply_patch: 'Edit',
   run_command: 'Bash',
+  run_shell_command: 'Bash',
+  replace: 'Edit',
   edit_file: 'Edit',
   replace_file_content: 'Edit',
   multi_replace_file_content: 'Edit',
@@ -248,7 +310,9 @@ const HOST_TOOL_ALIASES: Record<string, string> = {
   view_file_outline: 'Read',
   view_code_item: 'Read',
   grep_search: 'Grep',
+  search_file_content: 'Grep',
   find_by_name: 'Glob',
+  glob: 'Glob',
   list_dir: 'Glob',
 };
 
@@ -294,6 +358,24 @@ function emitAntigravityResult(fallbackName: string, context: string | null): vo
   }
 }
 
+function emitCursorResult(fallbackName: string, context: string | null): void {
+  const trimmed = context?.trim() ?? '';
+  switch (fallbackName) {
+    case 'UserPromptSubmit':
+      process.stdout.write(`${JSON.stringify({ continue: true })}\n`);
+      return;
+    case 'PreToolUse': {
+      const payload = trimmed
+        ? { permission: 'allow', agent_message: trimmed.slice(0, MAX_CONTEXT) }
+        : { permission: 'allow' };
+      process.stdout.write(`${JSON.stringify(payload)}\n`);
+      return;
+    }
+    default:
+      process.stdout.write('{}\n');
+  }
+}
+
 /**
  * Run a hook body. `body` returns the context to inject, or null to stay
  * silent. Any throw is logged and swallowed: a broken plugin must not break
@@ -304,6 +386,8 @@ export async function runHook(
   body: (event: HookEvent, eventName: string) => Promise<string | null> | string | null,
 ): Promise<void> {
   activeAntigravityEvent = false;
+  activeGeminiCliEvent = false;
+  activeCursorEvent = false;
   deniedByHook = false;
   try {
     rememberPluginRoot();
@@ -313,6 +397,8 @@ export async function runHook(
     const context = await body(event, eventName);
     if (deniedByHook) {
       // emitDeny already wrote the host-formatted denial.
+    } else if (activeCursorEvent) {
+      emitCursorResult(fallbackName, context);
     } else if (activeAntigravityEvent) {
       emitAntigravityResult(fallbackName, context);
     } else if (context && context.trim()) {
@@ -320,8 +406,9 @@ export async function runHook(
     }
   } catch (error) {
     log(`hook error: ${error instanceof Error ? error.message : String(error)}`);
-    if (activeAntigravityEvent && !deniedByHook) {
-      emitAntigravityResult(fallbackName, null);
+    if (!deniedByHook) {
+      if (activeCursorEvent) emitCursorResult(fallbackName, null);
+      else if (activeAntigravityEvent) emitAntigravityResult(fallbackName, null);
     }
   }
   process.exitCode = 0;

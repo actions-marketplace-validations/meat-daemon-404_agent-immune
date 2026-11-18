@@ -1,0 +1,61 @@
+name: 'Agent Immune — PR Pitfall Check'
+description: 'Zero-dependency stateless PR pitfall gate: scans git diffs against repository antibodies in AGENTS.md / CLAUDE.md.'
+author: 'meat-daemon-404'
+branding:
+  icon: 'shield'
+  color: 'green'
+
+inputs:
+  doc:
+    description: 'Path to AGENTS.md or CLAUDE.md containing the <!-- immune:generated --> pitfall block (auto-detected if omitted).'
+    required: false
+    default: ''
+  base-ref:
+    description: 'Base git ref to diff against (defaults to PR base SHA or HEAD~1).'
+    required: false
+    default: ''
+  fail-on-findings:
+    description: 'Set to "false" to emit GitHub PR warnings and step summary without failing the check.'
+    required: false
+    default: 'true'
+  node-version:
+    description: 'Node.js version (requires ^22.19.0 || >=24.0.0 for built-in node:sqlite).'
+    required: false
+    default: '24'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    - name: Run Agent Immune PR Pitfall Check
+      shell: bash
+      env:
+        INPUT_DOC: ${{ inputs.doc }}
+        INPUT_BASE_REF: ${{ inputs.base-ref }}
+        INPUT_FAIL: ${{ inputs.fail-on-findings }}
+        PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      run: |
+        set -euo pipefail
+        BASE="${INPUT_BASE_REF:-${PR_BASE_SHA:-HEAD~1}}"
+        DIFF_FILE="$(mktemp)"
+        if ! git rev-parse --verify "$BASE" >/dev/null 2>&1; then
+          git fetch --no-tags --depth=1 origin "$BASE" >/dev/null 2>&1 || true
+        fi
+        if git rev-parse --verify "$BASE" >/dev/null 2>&1; then
+          git diff "$BASE"...HEAD > "$DIFF_FILE" 2>/dev/null || git diff "$BASE" HEAD > "$DIFF_FILE"
+        else
+          git diff HEAD > "$DIFF_FILE" || true
+        fi
+        EXTRA_ARGS=("--diff" "$DIFF_FILE" "--github")
+        if [ -n "$INPUT_DOC" ]; then
+          EXTRA_ARGS+=("--doc" "$INPUT_DOC")
+        fi
+        if [ "$INPUT_FAIL" = "false" ]; then
+          EXTRA_ARGS+=("--warn-only")
+        fi
+        node "${{ github.action_path }}/dsh-immune-system/dist/zcode/src/cli.js" ci-check "${EXTRA_ARGS[@]}"
+        rm -f "$DIFF_FILE"

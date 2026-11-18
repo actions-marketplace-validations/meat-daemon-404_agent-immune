@@ -2,6 +2,7 @@ import { BACKFILL_TOOLS, pairSession } from '../backfill.js';
 import { isSelfEpisode } from '../selfnoise.js';
 import { redactAndClamp } from '../redact.js';
 import type { ImmuneStore } from '../store/index.js';
+import { pickSalientErrorLine } from '../trace.js';
 import { ROUND_TRIPS_PER_REPEAT } from '../value.js';
 import { deriveProjectScope } from '../hygiene.js';
 import {
@@ -81,7 +82,7 @@ export function runSource(
       stat.scanned += 1;
       if (call.status !== 'error') continue;
       stat.failures += 1;
-      const firstLine = (call.error_message ?? 'unknown').split('\n')[0] ?? 'unknown';
+      const firstLine = pickSalientErrorLine(call.error_message ?? 'unknown').split('\n')[0] ?? 'unknown';
       const normalized = firstLine.replace(/\s+/g, ' ').trim();
       const key = `${call.tool_name}|${normalized.toLowerCase().slice(0, 80)}`;
       const family = families.get(key);

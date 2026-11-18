@@ -31,7 +31,8 @@ function exitCodeOf(response: unknown): number | null {
 const FAILURE_MARKERS =
   /\bexit (?:code|status)\s*[:=]?\s*[1-9]\d*\b|ENOENT|EACCES|EPERM|ECONNREFUSED|command not found|is not recognized as an internal|Traceback \(most recent call last\)|npm ERR!|\bfatal:\s|^Error:|Cannot find module/i;
 
-const SANDBOX_DENIED = /\[sandbox:\s*file access denied under [^\]\n]+ mode\]/i;
+const SANDBOX_DENIED =
+  /\[sandbox:\s*file access denied under [^\]\n]+ mode\]|\bUPLOAD_NEEDS_PERMISSION\b|permission denied by user|rejected by user/i;
 const TIMED_OUT = /\n\[timed out after \d+ms\]/i;
 
 export interface Outcome {

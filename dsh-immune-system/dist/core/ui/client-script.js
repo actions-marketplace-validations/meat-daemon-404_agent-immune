@@ -21,6 +21,7 @@ export function renderClientScript(token, t, budget) {
   var tabShared = document.getElementById('tabShared');
   var tabQuarantined = document.getElementById('tabQuarantined');
   var tabWorkspaces = document.getElementById('tabWorkspaces');
+  var tabExplain = document.getElementById('tabExplain');
   var hygieneBtn = document.getElementById('hygieneBtn');
   var nProject = document.getElementById('nProject');
   var nShared = document.getElementById('nShared');
@@ -228,14 +229,128 @@ export function renderClientScript(token, t, budget) {
     var tbody = el('tbody');
     list.forEach(function (w) {
       var tr = el('tr');
-      tr.appendChild(cell(T.wsScope, 'trigger', function (td) { td.textContent = w.project_scope; }));
-      tr.appendChild(cell(T.wsRoot, 'text', function (td) { td.textContent = w.repo_root; }));
-      tr.appendChild(cell(T.wsStacks, 'text', function (td) { td.textContent = (w.stacks || []).join(', ') || '—'; }));
+      var scopeId = w.scope_id || w.project_scope || '—';
+      var rootPath = w.root_path || w.repo_root || '—';
+      var stackStr = typeof w.stack === 'string' && w.stack ? w.stack : Array.isArray(w.stacks) ? w.stacks.join(', ') : '—';
+      tr.appendChild(cell(T.wsScope, 'trigger', function (td) {
+        if (w.name) td.appendChild(el('div', '', w.name));
+        var scopeChip = el('span', 'tag link', scopeId);
+        scopeChip.onclick = function () {
+          qEl.value = 'scope:' + scopeId;
+          syncClear();
+          selectTab('project');
+        };
+        td.appendChild(scopeChip);
+      }));
+      tr.appendChild(cell(T.wsRoot, 'text', function (td) {
+        td.textContent = rootPath;
+        if (w.baseline || w.source) {
+          var meta = el('div', 'tags');
+          if (w.source) meta.appendChild(el('span', 'tag', w.source));
+          if (w.baseline) meta.appendChild(el('span', 'tag', 'baseline:' + w.baseline));
+          td.appendChild(meta);
+        }
+      }));
+      tr.appendChild(cell(T.wsStacks, 'text', function (td) { td.textContent = stackStr || '—'; }));
       tr.appendChild(cell(T.wsRules, 'counts', function (td) { td.appendChild(el('b', '', String(w.rules_count || 0))); }));
       tbody.appendChild(tr);
     });
     table.appendChild(tbody);
     bodyEl.appendChild(table);
+  }
+
+  function renderExplainView(initialQuery, data) {
+    bodyEl.textContent = '';
+    var box = el('div', 'explain-box');
+    var row = el('div', 'explain-row');
+    var inp = document.createElement('input');
+    inp.type = 'text';
+    inp.value = initialQuery;
+    inp.placeholder = T.explainPrompt;
+    var btn = el('button', 'act', T.explainButton);
+    btn.type = 'button';
+    var runSim = function () {
+      var val = inp.value.trim();
+      qEl.value = val;
+      syncClear();
+      loadExplain(val);
+    };
+    btn.onclick = runSim;
+    inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') runSim(); });
+    row.appendChild(inp);
+    row.appendChild(btn);
+    box.appendChild(row);
+    if (data && data.addedConcepts && data.addedConcepts.length > 0) {
+      var cLine = el('div', 'tags');
+      cLine.appendChild(el('span', 'tag hi', T.explainConcepts + data.addedConcepts.join(' ')));
+      box.appendChild(cLine);
+    }
+    if (data && data.renderedBlock) {
+      box.appendChild(el('div', 'tags').appendChild(el('span', 'tag', T.explainPreview)).parentNode);
+      box.appendChild(el('pre', 'explain-preview', data.renderedBlock));
+    }
+    bodyEl.appendChild(box);
+    if (!data || !initialQuery.trim()) {
+      countEl.textContent = '0 ' + T.results;
+      renderEmpty(T.tabsExplain, T.explainHint);
+      return;
+    }
+    var list = data.candidates || [];
+    countEl.textContent = list.length + ' ' + T.results;
+    if (list.length === 0) {
+      renderEmpty(T.explainNoMatch, T.explainHint);
+      return;
+    }
+    var table = el('table');
+    var thead = el('thead');
+    var hr = el('tr');
+    ['#', T.colTrigger, T.colDo, T.explainScore].forEach(function (lbl) { hr.appendChild(el('th', '', lbl)); });
+    thead.appendChild(hr);
+    table.appendChild(thead);
+    var tbody = el('tbody');
+    list.forEach(function (c) {
+      var tr = el('tr');
+      tr.appendChild(cell('#', 'id', function (td) { td.textContent = (c.source === 'shared' ? 'S#' : '#') + c.id; }));
+      tr.appendChild(cell(T.colTrigger, 'trigger', function (td) {
+        td.textContent = c.trigger_pattern;
+        var tags = el('div', 'tags');
+        (c.matchedTokens || []).slice(0, 4).forEach(function (tk) { tags.appendChild(el('span', 'tag hi', tk)); });
+        (c.matchedBigrams || []).slice(0, 4).forEach(function (bg) { tags.appendChild(el('span', 'tag', bg)); });
+        if (tags.childNodes.length > 0) td.appendChild(tags);
+      }));
+      tr.appendChild(cell(T.colDo, 'text', function (td) { td.textContent = c.prescription; }));
+      tr.appendChild(cell(T.explainScore, 'counts', function (td) {
+        var b = c.breakdown || {};
+        td.appendChild(el('b', '', String(b.finalScore || 0)));
+        td.appendChild(el('div', 'tags', '').appendChild(
+          el('span', 'tag', 'bm25=' + b.baseRelevance + ' lex×' + b.lexicalMultiplier + ' rub×' + b.rubricMultiplier + ' hit×' + b.hitMultiplier),
+        ).parentNode);
+      }));
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    bodyEl.appendChild(table);
+  }
+
+  function loadExplain(queryText) {
+    var trimmed = (queryText || '').trim();
+    if (!trimmed) {
+      renderExplainView('', null);
+      return;
+    }
+    var mine = ++seq;
+    renderSkeleton();
+    fetch(api('/api/explain?q=' + encodeURIComponent(trimmed)), { headers: { 'accept': 'application/json' } })
+      .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+      .then(function (data) {
+        if (mine !== seq) return;
+        renderExplainView(trimmed, data);
+      })
+      .catch(function (err) {
+        if (mine !== seq) return;
+        bodyEl.textContent = '';
+        renderEmpty(T.loadFailed, String((err && err.message) || err));
+      });
   }
 
   function renderRows(list) {
@@ -267,14 +382,38 @@ export function renderClientScript(token, t, budget) {
       tr.appendChild(cell(T.colTrigger, 'trigger', function (td) {
         td.textContent = a.trigger_pattern;
         var tags = el('div', 'tags');
+        if ((a.ignored_count || 0) >= 2) {
+          tags.appendChild(el('span', 'tag crit', 'CRITICAL · ignored ' + a.ignored_count + '×'));
+        }
+        if (a.tool_name) {
+          tags.appendChild(el('span', 'tag', a.tool_name));
+        }
+        if (a.quality_grade && a.quality_grade !== 'quarantined') {
+          tags.appendChild(el('span', 'tag ' + (a.quality_grade === 'advice' ? 'hi' : ''), a.quality_grade));
+        }
         if (a.project_scope && a.project_scope !== '*') {
-          tags.appendChild(el('span', 'tag', 'scope:' + a.project_scope));
+          var sc = el('span', 'tag link', 'scope:' + a.project_scope);
+          sc.onclick = function () {
+            qEl.value = 'scope:' + a.project_scope;
+            syncClear();
+            load();
+          };
+          tags.appendChild(sc);
         }
         if (typeof a.rubric_score === 'number' && a.rubric_score > 0) {
           tags.appendChild(el('span', 'tag ' + (a.rubric_score >= 60 ? 'hi' : 'low'), 'rubric:' + a.rubric_score));
         }
-        if (a.root_cause && a.root_cause !== 'unknown') {
+        if (a.root_cause && a.root_cause !== 'unknown' && a.root_cause !== 'other') {
           tags.appendChild(el('span', 'tag', a.root_cause));
+        }
+        if (a.prescription_source && a.prescription_source !== 'rule') {
+          tags.appendChild(el('span', 'tag', 'src:' + a.prescription_source));
+        }
+        if ((a.probation_at || 0) > 0 && a.status === 'active') {
+          tags.appendChild(el('span', 'tag low', 'probation'));
+        }
+        if ((a.parent_id || 0) > 0) {
+          tags.appendChild(el('span', 'tag', 'from #' + a.parent_id));
         }
         if (tags.childNodes.length > 0) td.appendChild(tags);
       }));
@@ -322,8 +461,106 @@ export function renderClientScript(token, t, budget) {
     bodyEl.appendChild(table);
   }
 
+  function renderExplainView(initialQuery, data) {
+    bodyEl.textContent = '';
+    var box = el('div', 'explain-box');
+    var row = el('div', 'explain-row');
+    var inp = document.createElement('input');
+    inp.type = 'text';
+    inp.value = initialQuery;
+    inp.placeholder = T.explainPrompt;
+    var btn = el('button', 'act', T.explainButton);
+    btn.type = 'button';
+    var runSim = function () {
+      var val = inp.value.trim();
+      qEl.value = val;
+      syncClear();
+      loadExplain(val);
+    };
+    btn.onclick = runSim;
+    inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') runSim(); });
+    row.appendChild(inp);
+    row.appendChild(btn);
+    box.appendChild(row);
+    if (data && data.addedConcepts && data.addedConcepts.length > 0) {
+      var cLine = el('div', 'tags');
+      cLine.appendChild(el('span', 'tag hi', T.explainConcepts + data.addedConcepts.join(' ')));
+      box.appendChild(cLine);
+    }
+    if (data && data.renderedBlock) {
+      box.appendChild(el('div', 'tags').appendChild(el('span', 'tag', T.explainPreview)).parentNode);
+      box.appendChild(el('pre', 'explain-preview', data.renderedBlock));
+    }
+    bodyEl.appendChild(box);
+    if (!data || !initialQuery.trim()) {
+      countEl.textContent = '0 ' + T.results;
+      renderEmpty(T.tabsExplain, T.explainHint);
+      return;
+    }
+    var list = data.candidates || [];
+    countEl.textContent = list.length + ' ' + T.results;
+    if (list.length === 0) {
+      renderEmpty(T.explainNoMatch, T.explainHint);
+      return;
+    }
+    var table = el('table');
+    var thead = el('thead');
+    var hr = el('tr');
+    ['#', T.colTrigger, T.colDo, T.explainScore].forEach(function (lbl) { hr.appendChild(el('th', '', lbl)); });
+    thead.appendChild(hr);
+    table.appendChild(thead);
+    var tbody = el('tbody');
+    list.forEach(function (c) {
+      var tr = el('tr');
+      tr.appendChild(cell('#', 'id', function (td) { td.textContent = (c.source === 'shared' ? 'S#' : '#') + c.id; }));
+      tr.appendChild(cell(T.colTrigger, 'trigger', function (td) {
+        td.textContent = c.trigger_pattern;
+        var tags = el('div', 'tags');
+        (c.matchedTokens || []).slice(0, 4).forEach(function (tk) { tags.appendChild(el('span', 'tag hi', tk)); });
+        (c.matchedBigrams || []).slice(0, 4).forEach(function (bg) { tags.appendChild(el('span', 'tag', bg)); });
+        if (tags.childNodes.length > 0) td.appendChild(tags);
+      }));
+      tr.appendChild(cell(T.colDo, 'text', function (td) { td.textContent = c.prescription; }));
+      tr.appendChild(cell(T.explainScore, 'counts', function (td) {
+        var b = c.breakdown || {};
+        td.appendChild(el('b', '', String(b.finalScore || 0)));
+        td.appendChild(el('div', 'tags', '').appendChild(
+          el('span', 'tag', 'bm25=' + b.baseRelevance + ' lex×' + b.lexicalMultiplier + ' rub×' + b.rubricMultiplier + ' hit×' + b.hitMultiplier),
+        ).parentNode);
+      }));
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    bodyEl.appendChild(table);
+  }
+
+  function loadExplain(queryText) {
+    var trimmed = (queryText || '').trim();
+    if (!trimmed) {
+      renderExplainView('', null);
+      return;
+    }
+    var mine = ++seq;
+    renderSkeleton();
+    fetch(api('/api/explain?q=' + encodeURIComponent(trimmed)), { headers: { 'accept': 'application/json' } })
+      .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+      .then(function (data) {
+        if (mine !== seq) return;
+        renderExplainView(trimmed, data);
+      })
+      .catch(function (err) {
+        if (mine !== seq) return;
+        bodyEl.textContent = '';
+        renderEmpty(T.loadFailed, String((err && err.message) || err));
+      });
+  }
+
   function load() {
     var q = qEl.value.trim();
+    if (tab === 'explain') {
+      loadExplain(q);
+      return;
+    }
     var mine = ++seq;
     renderSkeleton();
     if (tab === 'workspaces') {
@@ -456,6 +693,7 @@ export function renderClientScript(token, t, budget) {
       [tabShared, 'shared'],
       [tabQuarantined, 'quarantined'],
       [tabWorkspaces, 'workspaces'],
+      [tabExplain, 'explain'],
     ].forEach(function (pair) {
       if (!pair[0]) return;
       pair[0].className = next === pair[1] ? 'on' : '';
@@ -467,6 +705,7 @@ export function renderClientScript(token, t, budget) {
   tabShared.onclick = function () { selectTab('shared'); };
   if (tabQuarantined) tabQuarantined.onclick = function () { selectTab('quarantined'); };
   if (tabWorkspaces) tabWorkspaces.onclick = function () { selectTab('workspaces'); };
+  if (tabExplain) tabExplain.onclick = function () { selectTab('explain'); };
 
   syncClear();
   load();

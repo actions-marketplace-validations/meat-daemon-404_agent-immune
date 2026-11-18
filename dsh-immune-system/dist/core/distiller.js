@@ -5,8 +5,9 @@ import { normalizeKeyword, meaningfulTokens } from './keywords.js';
 import { matchGenericLesson } from './lessons.js';
 import { abstractMachinePaths, canonicalizeSymptom, classifyRuleQuality } from './hygiene.js';
 import { inferRootCause } from './rubric.js';
-/** Failures with no reuse value: the retry usually just works. */
+/** Failures with no reuse value: the retry usually just works, or a permission gate refused it (#12). */
 const TRANSIENT = /ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|EPIPE|socket hang up|rate.?limit|\b429\b|\b503\b|temporarily unavailable|network error|timed out|超时|网络|限流|请稍后/i;
+const PERMISSION_DENIED = /\[sandbox:\s*file access denied|\bUPLOAD_NEEDS_PERMISSION\b|permission denied by user|rejected by user|tool call denied by pre-tool hook/i;
 const FILE_RE = /[\w@./\\-]+\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|py|go|rs|java|kt|yml|yaml|toml|css|scss|html|vue|svelte)\b/g;
 const ENV_RE = /\b[A-Z][A-Z0-9_]{2,}\b/g;
 const ARG_RE = /"(?:command|file_path|path|notebook_path|pattern|query|url|script|cmd|CommandLine|TargetFile|AbsolutePath|Path)"\s*:\s*"((?:[^"\\]|\\.){2,200})"/g;
@@ -106,6 +107,9 @@ export function isSubstantiveHint(text) {
 export function ruleDistill(toolName, failureTrace, successTrace, humanHint = '', repairs = [], opts = {}) {
     if (TRANSIENT.test(failureTrace)) {
         return { ok: false, reason: 'skip', detail: 'transient failure' };
+    }
+    if (PERMISSION_DENIED.test(failureTrace)) {
+        return { ok: false, reason: 'skip', detail: 'permission negotiation (#12)' };
     }
     // Defensive pin for AGENTS.md #24: retirement is not repair evidence.
     if (/^previous rule \(retired\b/i.test(successTrace.trim())) {
@@ -259,10 +263,11 @@ export async function distillEpisode(toolName, failureTrace, successTrace, opts 
             source: 'llm',
             antibody: {
                 ...candidate,
+                prescription_source: 'llm',
                 quality_grade: verdict.grade,
                 rubric_score: verdict.score,
                 root_cause: candidate.root_cause || inferRootCause(candidate.symptom, candidate.prescription, opts.repairs),
-                project_scope: verdict.universalEligible ? '*' : (candidate.project_scope ?? opts.projectScope ?? '*'),
+                project_scope: verdict.universalEligible ? '*' : (opts.projectScope ?? candidate.project_scope ?? '*'),
                 ...(verdict.grade === 'quarantined' ? { status: 'quarantined' } : {}),
             },
         };
@@ -273,22 +278,45 @@ export async function distillEpisode(toolName, failureTrace, successTrace, opts 
         return fallback(error instanceof Error ? error.message.slice(0, 160) : String(error).slice(0, 160));
     }
 }
-/** Apply the curated generic table to a model-produced rule. */
-function normaliseLesson(result, toolName) {
-    if (!result.ok)
-        return result;
-    const lesson = matchGenericLesson(result.antibody.symptom);
-    if (!lesson)
-        return result;
+/** Apply the curated generic table + v2 hygiene/rubric gate to a batch-distilled rule. */
+function finalizeBatchAntibody(rawAntibody, toolName, opts) {
+    const lesson = matchGenericLesson(rawAntibody.symptom);
+    if (lesson) {
+        return {
+            ok: true,
+            source: 'llm',
+            antibody: {
+                trigger_pattern: lesson.trigger,
+                symptom: lesson.symptom,
+                prescription: lesson.prescription,
+                tool_name: toolName,
+                prescription_source: 'llm',
+                project_scope: '*',
+                quality_grade: 'advice',
+                rubric_score: 95,
+                root_cause: inferRootCause(lesson.symptom, lesson.prescription, opts.repairs),
+            },
+        };
+    }
+    const candidate = {
+        ...rawAntibody,
+        tool_name: toolName,
+        prescription_source: 'llm',
+        trigger_pattern: abstractMachinePaths(rawAntibody.trigger_pattern, opts.workspaceRoot),
+        symptom: canonicalizeSymptom(rawAntibody.symptom, opts.workspaceRoot),
+        prescription: abstractMachinePaths(rawAntibody.prescription, opts.workspaceRoot),
+    };
+    const verdict = classifyRuleQuality(candidate);
     return {
         ok: true,
-        // Provenance of the ORIGINAL answer survives the curated-table rewrite.
-        ...(result.source ? { source: result.source } : {}),
+        source: 'llm',
         antibody: {
-            trigger_pattern: lesson.trigger,
-            symptom: lesson.symptom,
-            prescription: lesson.prescription,
-            tool_name: toolName,
+            ...candidate,
+            quality_grade: verdict.grade,
+            rubric_score: verdict.score,
+            root_cause: candidate.root_cause || inferRootCause(candidate.symptom, candidate.prescription, opts.repairs),
+            project_scope: verdict.universalEligible ? '*' : (opts.projectScope ?? candidate.project_scope ?? '*'),
+            ...(verdict.grade === 'quarantined' ? { status: 'quarantined' } : {}),
         },
     };
 }
@@ -335,16 +363,13 @@ export async function distillBatch(episodes, opts = {}) {
                 continue;
             }
             if (answer?.ok) {
-                // The batch response carries ids, not tool names — re-stamp it, and let
-                // the curated generic table normalise it exactly as the single path does.
-                // `source` must travel too: the runtime counter is the only evidence an
-                // operator has that the model path actually ran.
-                const stamped = {
-                    ok: true,
-                    source: 'llm',
-                    antibody: { ...answer.antibody, tool_name: episode.toolName },
-                };
-                results.set(episode.id, normaliseLesson(stamped, episode.toolName));
+                // The batch response carries ids, not tool names — re-stamp it and pass
+                // through the exact same generic-lesson + hygiene/rubric gate as single episodes.
+                results.set(episode.id, finalizeBatchAntibody(answer.antibody, episode.toolName, {
+                    repairs: episode.repairs ?? [],
+                    projectScope: episode.projectScope,
+                    workspaceRoot: episode.workspaceRoot,
+                }));
                 continue;
             }
             // Missing or malformed for this id: the deterministic rule fills the gap

@@ -7,9 +7,15 @@ body:
     attributes:
       label: Host
       options:
+        - Claude Code
+        - Codex CLI
+        - Cursor
+        - Google Antigravity
+        - Gemini CLI
+        - Windsurf
         - ZCode
         - DeepSeek Harness (DSH)
-        - MCP client
+        - MCP client (Claude Desktop / Cline / other)
         - other
     validations:
       required: true

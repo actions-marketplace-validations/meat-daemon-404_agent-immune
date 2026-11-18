@@ -55,6 +55,9 @@ export function auditHistory(store: ImmuneStore, opts: AuditOptions = {}): Audit
     if (present) {
       const report = runSource('codex', sessions, store, { cap, dryRun, selfMarkers });
       if (note) report.note = note;
+      const median = medianOf(sessions.flatMap((session) => session.tokenSamples));
+      report.medianRequestTokens = median?.median ?? null;
+      report.medianSamples = median?.samples ?? 0;
       sources.push(report);
     } else {
       sources.push(emptySource('codex', note));

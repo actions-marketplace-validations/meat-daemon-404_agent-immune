@@ -48,9 +48,10 @@ export interface ConsolidationResult {
   merged: ConsolidationCandidate[];
 }
 
-/** Normalized grouping key: wording case/whitespace must not split one lesson. */
-export function lessonKey(rule: Pick<Antibody, 'symptom' | 'tool_name'>): string {
-  return `${(rule.tool_name ?? '').trim().toLowerCase()}::${rule.symptom
+/** Normalized grouping key: wording case/whitespace must not split one lesson, nor merge across distinct workspaces. */
+export function lessonKey(rule: Pick<Antibody, 'symptom' | 'tool_name' | 'project_scope'>): string {
+  const scope = (rule.project_scope ?? '*').trim() || '*';
+  return `${scope}::${(rule.tool_name ?? '').trim().toLowerCase()}::${rule.symptom
     .replace(/\s+/g, ' ')
     .trim()
     .toLowerCase()}`;

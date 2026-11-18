@@ -23,7 +23,7 @@
 1. **从证据学习，不从聊天记录学习**：一条规则存在的前提是某次调用真的失败了、某个具体动作真的修好了它——修的时候改了哪些文件也作为出处一并记录
 2. **在重复之前注入**：匹配到的规则在下一次调用前进上下文，而不是等你想起去搜索
 3. **零依赖**：只用 Node 内置 `node:sqlite`，FTS5 trigram 索引 + 中文双字回退（中文触发词实测可用）
-4. **宿主全覆盖**：Claude Code / Codex CLI 用 `npx dsh-immune-system@latest connect claude-code` 一条命令接入（装到固定路径 `~/.dsh-immune/`，npx 缓存清理不会弄断钩子，`--remove` 卸载干净）；Cursor/Cline 走 MCP；DSH/ZCode 原生插件安装
+4. **宿主全覆盖**：Claude Code / Cursor / Codex CLI / Antigravity / Gemini CLI 用 `npx dsh-immune-system@latest connect` 一条命令自动探测接入（装到固定路径 `~/.dsh-immune/`，npx 缓存清理不会弄断钩子，`--remove` 卸载干净）；Windsurf / Cline / Claude Desktop 走 20 项 MCP 工具；DSH / ZCode 原生插件安装；另有 3 行 GitHub Action 守卫 PR Diff
 5. **10 秒冷启动**：`audit --dry-run` 把你自己的历史变成一份可截图的踩坑报告 + 首批规则；`seed git-safety` 装六条手写的保命规则（卸载时，agent 已经用过的规则会保留——那已经是你的证据了）
 6. **全部本地 SQLite，无遥测**；`immune ui` 有个本地仪表盘，能看注入计数和跨模型归因
 

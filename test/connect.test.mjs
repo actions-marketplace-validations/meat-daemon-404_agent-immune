@@ -154,7 +154,7 @@ test('a codex install with the old ZCode-shaped matcher is upgraded in place', (
 test('status reports each host without touching anything', () => {
   const h = home();
   const before = connectStatus({ home: h });
-  assert.deepEqual(before.map((row) => row.state), ['no-config', 'no-config', 'no-config']);
+  assert.ok(before.length >= 8 && before.every((row) => row.state === 'no-config'));
 
   connectHost('claude-code', { home: h });
   const after = connectStatus({ home: h });
@@ -439,4 +439,67 @@ test('zero-arg auto-detect discovers ~/.gemini/antigravity and normalises Antigr
     targetSignature('Glob', { Pattern: '**/*.ts' }, '/tmp/ws'),
     { signature: 'Glob:**/*.ts', probeOnly: true },
   );
+});
+
+test('connect supports gemini-cli, cursor (hooks + sidecar MCP), MCP hosts, unquoted verifyConnectedPaths, and disconnectAllConnected', async () => {
+  const { disconnectAllConnected } = await import('../dsh-immune-system/dist/core/connect.js');
+  const { normaliseHookEvent, isCursorEvent, isGeminiCliEvent } = await import(
+    '../dsh-immune-system/dist/zcode/src/hook-io.js'
+  );
+  const h = home();
+  try {
+    // 1. Gemini CLI: grouped hooks with ms timeouts + tool aliases
+    const g = connectHost('gemini-cli', { home: h });
+    assert.equal(g.added, 5);
+    const gCfg = JSON.parse(readFileSync(join(h, '.gemini', 'settings.json'), 'utf8'));
+    assert.ok(gCfg.hooks.BeforeAgent && gCfg.hooks.BeforeTool && gCfg.hooks.AfterTool && gCfg.hooks.AfterAgent);
+    assert.equal(gCfg.hooks.BeforeTool[0].hooks[0].timeout, 4000, 'Gemini CLI timeouts are milliseconds');
+    assert.equal(normaliseToolName('run_shell_command'), 'Bash');
+    assert.equal(normaliseToolName('replace'), 'Edit');
+    assert.equal(normaliseToolName('search_file_content'), 'Grep');
+    assert.equal(isGeminiCliEvent({ hook_event_name: 'BeforeTool' }), true);
+
+    // 2. Cursor: version=1 flat hooks + sidecar ~/.cursor/mcp.json
+    const c = connectHost('cursor', { home: h });
+    assert.equal(c.added, 7);
+    const cHooks = JSON.parse(readFileSync(join(h, '.cursor', 'hooks.json'), 'utf8'));
+    assert.equal(cHooks.version, 1);
+    assert.ok(cHooks.hooks.beforeShellExecution && cHooks.hooks.afterFileEdit);
+    const cMcp = JSON.parse(readFileSync(join(h, '.cursor', 'mcp.json'), 'utf8'));
+    assert.ok(cMcp.mcpServers['dsh-immune-system']);
+
+    const curEv = normaliseHookEvent({
+      hook_event_name: 'afterShellExecution',
+      conversation_id: 'cur-1',
+      workspace_roots: ['/repo/demo'],
+      command: 'cargo test',
+      output: 'test result: ok',
+      exit_code: 0,
+    });
+    assert.equal(isCursorEvent(curEv), true);
+    assert.equal(curEv.session_id, 'cur-1');
+    assert.equal(curEv.cwd, '/repo/demo');
+    assert.equal(curEv.tool_name, 'Bash');
+
+    // 3. Windsurf / Claude Desktop / Cline MCP-only hosts
+    const w = connectHost('windsurf', { home: h });
+    assert.equal(w.added, 1);
+    assert.equal(connectHost('windsurf', { home: h }).alreadyPresent, 1, 'MCP connect is idempotent');
+
+    // 4. Antigravity unquoted hook paths are caught by verifyConnectedPaths when vendor is removed
+    connectHost('antigravity', { home: h });
+    assert.deepEqual(verifyConnectedPaths(h), []);
+    rmSync(join(h, '.dsh-immune', 'dist'), { recursive: true, force: true });
+    const issues = verifyConnectedPaths(h);
+    assert.ok(issues.some((i) => i.host === 'antigravity'), 'unquoted antigravity paths must be verified');
+    assert.ok(issues.some((i) => i.host === 'windsurf'), 'MCP script paths must be verified');
+
+    // 5. disconnectAllConnected cleans up every connected host
+    const removed = disconnectAllConnected({ home: h });
+    assert.equal(removed.length, 4);
+    assert.equal(connectStatus({ home: h }).every((r) => r.state !== 'connected'), true);
+    assert.equal(existsSync(join(h, '.dsh-immune')), false);
+  } finally {
+    rmSync(h, { recursive: true, force: true });
+  }
 });

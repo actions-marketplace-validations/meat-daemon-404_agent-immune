@@ -18,7 +18,7 @@ await runHook('PostToolUse', (event) => {
     process.env.ZCODE_PROJECT_DIR ||
     process.cwd();
 
-  const store = new ImmuneStore();
+  const store = new ImmuneStore({ cwd: workspace });
   try {
     new ImmuneRuntime(store).postToolUse({
       sessionId: sessionIdOf(event),

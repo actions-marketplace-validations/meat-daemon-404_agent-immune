@@ -213,9 +213,9 @@ dsh.profile.bundles 里的包名
 | 命令 | 实测结果 |
 | --- | --- |
 | `npm run build` | exit 0，0 错误 |
-| `npm test` | 90 条全绿（34 条 core、7 条 ZCode hook、29 条 `test/dsh.test.mjs` 假 Context 单测、4 条 `test/dsh-ui.test.mjs` tab 契约、3 条 MCP、3 条 LLM、5 条 UI 查询层、5 条 manifest 一致性（含「浏览器半按 `dsh.client` 契约可被发现」与「tab 在 shadow root 里渲染」）；其中 DSH 单测含「存储打不开时 apply 只告警不崩会话」「一步回合只注入一次」「蒸馏只在 turn-stopping 落库」「结构化成功不被自身输出里的错误字样推翻」「超时带退出码 0 仍判失败」「沙箱拒绝不入库」「读含 `Error:` 的日志不算失败」「预算查看/覆盖」「列表页脚显示队列与库路径」） |
+| `npm test` | 260 条全绿（覆盖 core 五维评分/作用域隔离/Red-3 分诊/SHA-256 回执链、共享库重复抑制、回合锁、`explain` 模拟器、`./core` SDK、多宿主 hook 与 connect、`git-hook`、`test/dsh.test.mjs`、`test/dsh-ui.test.mjs` Shadow-DOM tab 契约、21 项 MCP 工具及 6 份 manifest 一致性） |
 | 三步手验（`scripts/verify-step1.mjs`） | 15 断言全过（含 bash 非零退出必须判失败） |
-| 三步手验（`scripts/verify-steps23.mjs`） | 22 断言全过（失败→成功在 `turn-stopping` 产出 1 行 antibodies；新 session 注入 `<immune_memory>`） |
+| 三步手验（`scripts/verify-steps23.mjs`） | 24 断言全过（失败→成功在 `turn-stopping` 产出 1 行 antibodies；新 session 注入 `<immune_memory>`） |
 | 真实宿主验证（`scripts/verify-live-host.mjs`） | 20 断言全过（真 Cordis Context + 真事件总线 + 真 sqlite：`tools/post-execute` 判失败→蒸馏落库，`agent/pre-step` 跨会话注入，`agent/session-start` 预热注入，冷启动空批次仍注入） |
 | 本机安装验证（`scripts/verify-installed.mjs`，desktop / web 各 22 断言） | 全过：profile bundles 已登记、包可从 profile `node_modules` 解析、`dsh.bundle.patch` 存在且只有一行 insert、入口模块按裸包名导入且导出插件形状；**并且浏览器半三件事**（`dsh.client.platform === "web"`、`exports["./client"]` 指向存在的文件、该文件用 `window.__ModuleLoader__.load` 注册并导出 `name`/`apply`） |
 | 浏览器半可服务性（`scripts/verify-client-serve.mjs`，desktop 10 断言） | 全过：用**生产** `ClientModuleRegistry` 在进程内组装，`graph` 里出现本插件行、`url` 形如 `/plugins/dsh-immune-system/client.js?rev=<12位hash>`、`row.inject` 含 `@deepseek-ai/dsh-client-ui-settings`；再用合成 req/res 调**真实路由处理器**，返回 200 + `text/javascript` + 与磁盘文件逐字节相同 |
@@ -230,7 +230,7 @@ dsh.profile.bundles 里的包名
 - 抗体结构与 FTS5 三元组检索；
 - 「失败 → 成功」配对，未配对的失败保留 30 分钟（`PENDING_TTL_MS`）；
 - 注入记录 30 分钟内有效（`INJECTION_TTL_MS`），用于反哺失效判定；
-- 反腐烂：一条抗体注入后工具**仍然**失败满 3 次（`RETIRE_AFTER_FAILURES`）即退役并联合新证据重蒸；
+- 反腐烂与五桶分诊：经 Red-3 分诊确认规则本身失效、注入后仍失败满 3 次且失败占比 ≥ 25% 即退役（不再用纯失败文本伪造重蒸，见 `AGENTS.md` #24）；
 - 落盘前凭据脱敏；
 - `SKILL.md` 导出格式。
 

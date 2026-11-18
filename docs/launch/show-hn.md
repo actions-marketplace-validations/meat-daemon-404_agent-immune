@@ -40,10 +40,11 @@ What makes it different from a chat-memory tool:
    false negatives**. The 2.46% false positives are all probe commands where a
    nonzero exit was the intended answer — a class we quantified and accepted
    instead of patching with output heuristics.
-3. **One engine, every host.** DSH and ZCode install natively; Claude Code and
-   Codex CLI get hooked with `npx dsh-immune-system@latest connect <host>`
-   (fixed-path install, survives npx cache sweeps); Cursor/Cline reach the same
-   library over MCP; anything else reads the synced AGENTS.md block.
+3. **One engine, every host.** DSH and ZCode install natively; Claude Code,
+   Cursor, Codex CLI, Google Antigravity, and Gemini CLI wire up with
+   `npx dsh-immune-system@latest connect` (fixed-path install, survives npx
+   cache sweeps); Windsurf/Cline/Claude Desktop reach the same library over 20
+   MCP tools; and a 3-line GitHub Action scans PR diffs against `AGENTS.md`.
 4. **Your library stays yours.** Everything is a local SQLite file; removal is
    conservative (a rule the agent has since used is kept even when you uninstall
    a starter pack); a one-command backup (`immune backup`) snapshots the WAL db

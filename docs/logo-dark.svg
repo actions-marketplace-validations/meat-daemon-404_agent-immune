@@ -1,22 +1,23 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="360" height="120" viewBox="0 0 360 120">
+<svg xmlns="http://www.w3.org/2000/svg" width="420" height="120" viewBox="0 0 420 120">
   <defs>
-    <linearGradient id="shield" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#4f9cf9"/>
-      <stop offset="1" stop-color="#37c98a"/>
+    <linearGradient id="shieldD" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#60a5fa"/>
+      <stop offset="1" stop-color="#34d399"/>
     </linearGradient>
   </defs>
   <!-- shield mark -->
-  <path d="M44 14 L74 26 V54 C74 76 61 92 44 100 C27 92 14 76 14 54 V26 Z"
-        fill="none" stroke="url(#shield)" stroke-width="5" stroke-linejoin="round"/>
+  <path d="M46 14 L78 26 V55 C78 78 64 95 46 104 C28 95 14 78 14 55 V26 Z"
+        fill="#064e3b" fill-opacity="0.28" stroke="url(#shieldD)" stroke-width="4.8" stroke-linejoin="round"/>
   <!-- antibody "Y" inside the shield -->
-  <path d="M44 34 V58 M32 46 L44 58 L56 46" fill="none" stroke="#e8edf5" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
-  <circle cx="44" cy="72" r="4.5" fill="#37c98a"/>
-  <!-- episodes flowing in -->
-  <circle cx="92" cy="40" r="4" fill="#e56565"/>
-  <circle cx="104" cy="56" r="4" fill="#e3a53f"/>
-  <circle cx="116" cy="72" r="4" fill="#37c98a"/>
-  <path d="M92 40 C104 44 108 50 116 72" fill="none" stroke="#6c7a8e" stroke-width="1.6" stroke-dasharray="3 4"/>
+  <path d="M46 54 V74 M33 41 L46 54 L59 41" fill="none" stroke="#f1f5f9" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="46" cy="82" r="4.5" fill="#34d399"/>
+  <!-- causal episode trajectory: fail -> triage -> antibody -->
+  <circle cx="96" cy="38" r="4.2" fill="#f87171"/>
+  <circle cx="109" cy="56" r="4.2" fill="#fbbf24"/>
+  <circle cx="122" cy="74" r="4.2" fill="#34d399"/>
+  <path d="M96 38 C108 44 113 52 122 74" fill="none" stroke="#94a3b8" stroke-width="1.8" stroke-dasharray="3 4"/>
   <!-- wordmark -->
-  <text x="140" y="62" font-family="Segoe UI,Helvetica,Arial,sans-serif" font-size="34" font-weight="700" fill="#e8edf5">dsh-immune</text>
-  <text x="142" y="88" font-family="Segoe UI,Helvetica,Arial,sans-serif" font-size="15" fill="#94a1b5">self-evolving pitfall immunity</text>
+  <text x="142" y="58" font-family="Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="34" font-weight="800" letter-spacing="-0.6" fill="#f8fafc">agent-immune</text>
+  <text x="144" y="83" font-family="Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="14" font-weight="500" fill="#94a3b8">self-evolving pitfall immunity</text>
+  <text x="144" y="101" font-family="Consolas,Menlo,monospace" font-size="11.5" fill="#64748b">npm: dsh-immune-system · zero-dep SQLite+FTS5</text>
 </svg>

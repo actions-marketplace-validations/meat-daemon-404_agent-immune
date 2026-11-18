@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security Vulnerability Report
+    url: https://github.com/meat-daemon-404/agent-immune/security
+    about: Report injection-delimiter, guard, redaction, or loopback-UI security issues privately.

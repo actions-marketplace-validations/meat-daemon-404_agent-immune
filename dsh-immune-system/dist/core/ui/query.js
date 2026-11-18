@@ -46,22 +46,53 @@ export function dashboardStats(store) {
 }
 /** Read state for one view. Never bumps hit counts: browsing is not delivery. */
 export function readState(store, view, query = '', budgetMs = resolveBudgetMs()) {
-    const q = query.slice(0, MAX_QUERY).trim().toLowerCase();
-    const matchFilter = (a) => !q ||
-        a.trigger_pattern.toLowerCase().includes(q) ||
-        a.symptom.toLowerCase().includes(q) ||
-        a.prescription.toLowerCase().includes(q) ||
-        (a.project_scope ?? '').toLowerCase().includes(q) ||
-        (a.tool_name ?? '').toLowerCase().includes(q);
-    const antibodies = view === 'shared'
-        ? store.sharedAntibodies(MAX_QUERY).filter(matchFilter)
-        : view === 'quarantined'
-            ? store
-                .listAll(true)
-                .filter((a) => a.status === 'quarantined')
-                .filter(matchFilter)
-                .slice(0, MAX_QUERY)
-            : store.peek(query.slice(0, MAX_QUERY), MAX_QUERY);
+    const rawQuery = query.slice(0, MAX_QUERY).trim();
+    const q = rawQuery.replace(/^scope:/i, '').trim().toLowerCase();
+    const scopeOnly = /^scope:/i.test(rawQuery);
+    const matchFilter = (a) => {
+        if (!q)
+            return true;
+        if (scopeOnly)
+            return (a.project_scope ?? '').toLowerCase().includes(q);
+        return (a.trigger_pattern.toLowerCase().includes(q) ||
+            a.symptom.toLowerCase().includes(q) ||
+            a.prescription.toLowerCase().includes(q) ||
+            (a.project_scope ?? '').toLowerCase().includes(q) ||
+            (a.root_cause ?? '').toLowerCase().includes(q) ||
+            (a.tool_name ?? '').toLowerCase().includes(q));
+    };
+    let antibodies;
+    if (view === 'shared') {
+        antibodies = store.sharedAntibodies(MAX_QUERY).filter(matchFilter);
+    }
+    else if (view === 'quarantined') {
+        antibodies = store
+            .listAll(true)
+            .filter((a) => a.status === 'quarantined')
+            .filter(matchFilter)
+            .slice(0, MAX_QUERY);
+    }
+    else if (!q) {
+        antibodies = store
+            .listAll(true)
+            .filter((a) => a.status !== 'quarantined')
+            .slice(0, MAX_QUERY);
+    }
+    else if (scopeOnly) {
+        antibodies = store
+            .listAll(true)
+            .filter((a) => a.status !== 'quarantined')
+            .filter(matchFilter)
+            .slice(0, MAX_QUERY);
+    }
+    else {
+        const ftsHits = store.peek(rawQuery, MAX_QUERY).filter((a) => a.status !== 'quarantined');
+        const seen = new Set(ftsHits.map((a) => a.id));
+        const substrHits = store
+            .listAll(true)
+            .filter((a) => a.status !== 'quarantined' && !seen.has(a.id) && matchFilter(a));
+        antibodies = [...ftsHits, ...substrHits].slice(0, MAX_QUERY);
+    }
     return { stats: dashboardStats(store), antibodies, budgetMs };
 }
 export function readWorkspaces(store) {

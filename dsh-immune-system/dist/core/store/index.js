@@ -22,7 +22,7 @@ export const SUPPRESSED_REPEATS_KEY = 'suppressed_repeats';
 /** Runtime truth for the optional model path: rules it produced / times it degraded. */
 export const LLM_SUCCESS_KEY = 'llm_distilled';
 export const LLM_FALLBACK_KEY = 'llm_fallbacks';
-import { bumpTurn, clearTurnState, readTurnState, recordTurnInjection, shouldSuppress, } from './turn-state.js';
+import { bumpTurn, claimPromptTurn, clearPromptTurn, clearTurnState, readTurnState, recordTurnInjection, shouldSuppress, } from './turn-state.js';
 import { bumpHits, exportableAntibodies, findMatches, getAntibodyById, insertAntibody, listAntibodies, mutateRule, penalizeAntibodies, removeAntibody, setAntibodyStatus, setPrescription as setAntibodyPrescription, consolidateAntibodies, newestActiveId, pruneZombieAntibodies, retireZombieAntibodies, } from './antibodies.js';
 import { installSeedPack, removeSeedPack, seededPackCounts } from './seeds.js';
 import { crossModelRuleCount, modelBreakdown, recordModelFails, recordModelHits, resolveModel, } from './models.js';
@@ -42,7 +42,10 @@ export class ImmuneStore {
     globalStore;
     constructor(opts = {}) {
         this.dbPath =
-            opts.dbPath ?? (opts.dataDir ? resolve(opts.dataDir, 'immune.sqlite') : resolveDbPath());
+            opts.dbPath ??
+                (opts.dataDir
+                    ? resolve(opts.dataDir, 'immune.sqlite')
+                    : resolveDbPath(process.env, opts.cwd));
         this.db = openDatabase(this.dbPath);
     }
     insert(ab) {
@@ -135,7 +138,11 @@ export class ImmuneStore {
                 }
             }
         }
-        const merged = [...own, ...shared];
+        let merged = [...own, ...shared];
+        if (opts.strictToolMatch && opts.toolName) {
+            const targetTool = opts.toolName.toLowerCase();
+            merged = merged.filter((r) => !r.tool_name || r.tool_name.toLowerCase() === targetTool);
+        }
         // Tool affinity is a TIE-BREAKER inside the retrieval order, not a
         // post-multiplier: two rules with near-identical text get near-arbitrary
         // bm25 positions, and a same-tool rule should win that tie. The stable
@@ -149,13 +156,14 @@ export class ImmuneStore {
         const ranked = rerank(merged, { query: queryText, cwd: opts.cwd, sharedSet, relevanceByRule }).slice(0, limit);
         const rankedOwn = ranked.filter((r) => !sharedSet.has(r));
         const rankedShared = ranked.filter((r) => sharedSet.has(r));
+        const sharedPrescriptions = rankedShared.map((r) => r.prescription);
         // ---- Repeat suppression (per turn) -------------------------------------
         // Same set as last turn and fewer than SUPPRESS_WINDOW turns since: say
         // nothing and do not count a hit. Re-injecting an identical block costs
         // context, and inflating hit_count corrupts promotion and anti-rot.
         if (opts.suppressRepeats && opts.sessionId) {
             const state = readTurnState(this.db, opts.sessionId);
-            if (shouldSuppress(state, rankedOwn.map((r) => r.id))) {
+            if (shouldSuppress(state, rankedOwn.map((r) => r.id), sharedPrescriptions)) {
                 bumpTurn(this.db, opts.sessionId);
                 bumpMeta(this.db, SUPPRESSED_REPEATS_KEY);
                 return [];
@@ -200,8 +208,9 @@ export class ImmuneStore {
         }
         if (opts.sessionId && (rankedOwn.length > 0 || rankedShared.length > 0)) {
             recordInjection(this.db, opts.sessionId, rankedOwn.map((r) => r.id), ranked.map((r) => r.prescription));
-            if (opts.suppressRepeats)
-                recordTurnInjection(this.db, opts.sessionId, rankedOwn.map((r) => r.id));
+            if (opts.suppressRepeats) {
+                recordTurnInjection(this.db, opts.sessionId, rankedOwn.map((r) => r.id), sharedPrescriptions);
+            }
             // Attribute the delivery to whichever model is driving this session.
             // Shared-library ids do not live in this database, so only own rules are
             // counted here; the shared library keeps its own totals.
@@ -297,6 +306,14 @@ export class ImmuneStore {
      */
     resetTurnState(sessionId) {
         clearTurnState(this.db, sessionId);
+    }
+    /** Claim a prompt once for the active turn; returns false on duplicate mid-turn PreInvocation steps. */
+    claimPromptTurn(sessionId, prompt) {
+        return claimPromptTurn(this.db, sessionId, prompt);
+    }
+    /** Release the active-turn prompt lock at `Stop`. */
+    clearPromptTurn(sessionId) {
+        clearPromptTurn(this.db, sessionId);
     }
     listAll(includeRetired = true) {
         return listAntibodies(this.db, includeRetired);
@@ -439,8 +456,8 @@ export class ImmuneStore {
         }
         return counts;
     }
-    exportable(minHits = 3) {
-        return exportableAntibodies(this.db, minHits);
+    exportable(minHits = 3, projectScope = '*') {
+        return exportableAntibodies(this.db, minHits, projectScope);
     }
     /**
      * Row counts by table plus the on-disk size of the database file. Feeds

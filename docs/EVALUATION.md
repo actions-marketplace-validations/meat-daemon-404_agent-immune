@@ -1,6 +1,6 @@
-# Evaluation & Competition Benchmarks (`dsh-immune-system@2.0.0`)
+# Evaluation & Real-World Benchmarks (`dsh-immune-system@2.3.0`)
 
-All metrics below are directly measured on the `dsh-immune-system@2.0.0` codebase using built-in test suites and reproducible scripts under `scripts/`. None of the numbers are fabricated or extrapolated.
+All metrics below are directly measured on the `dsh-immune-system@2.3.0` codebase using built-in test suites and reproducible scripts under `scripts/`. None of the numbers are fabricated or extrapolated.
 
 ---
 
@@ -22,13 +22,13 @@ All metrics below are directly measured on the `dsh-immune-system@2.0.0` codebas
 
 | Suite / Script | Command | Result | Scope |
 | --- | --- | --- | --- |
-| Unit & Integration Suite | `npm test` | **245 / 245 passed (`0` failed, `0` skipped)** | Core store, hygiene, rubric, Red-3 triage, SHA-256 receipts, Magpie telemetry, LLM reflection critique, relevance tail/slug matching, UI `/api/models`, MCP (`18` tools), manifests |
-| Version Sync Guard | `node scripts/check-versions.mjs` | **7/7 fields aligned at `2.0.0`** | Root/plugin/DSH/ZCode/marketplace/Claude manifests |
-| Dist Graph Integrity | `node scripts/verify-dist-integrity.mjs` (+ `--self-test`) | **Passed (0 failed)** | 1:1 `src -> dist` mapping & relative import resolution |
+| Unit & Integration Suite | `npm test` | **260 / 260 passed (`0` failed, `0` skipped)** | Core store, hygiene, rubric, Red-3 triage, SHA-256 receipts, shared-rule suppression, turn locks, `explain` simulator, `./core` SDK, `git-hook`, completions, MCP (`21` tools), manifests |
+| Version Sync Guard | `node scripts/check-versions.mjs` | **8/8 fields aligned at `2.3.0`** | All 6 root/plugin/DSH/ZCode/marketplace/Claude manifests |
+| Dist Graph Integrity | `node scripts/verify-dist-integrity.mjs` (+ `--self-test`) | **Passed (0 failed)** | 1:1 `src -> dist` mapping & relative import resolution (`279` imports, `97` files) |
 | DSH Outcome & Adapters | `node scripts/verify-step1.mjs` & `verify-steps23.mjs` | **15/15** & **24/24 passed** | Outcome judge, fail→success pair, inject, probes |
 | Live Cordis Host Replay | `node scripts/verify-live-host.mjs` | **20/20 passed (`0` failed)** | Event bus, `turn-stopping`, priming, cold resume |
 | DSH Web Bundle Serving | `node scripts/verify-client-serve.mjs` | **10/10 passed (`profile=desktop`)** | `ClientModuleRegistry` `/plugins/dsh-immune-system/client.js` |
-| Cross-Host Hook E2E | `node scripts/verify-connected-runtime.mjs` | **34/34 passed (`0` failed)** | Claude Code + Codex + Antigravity hooks & guard deny |
+| Cross-Host Hook E2E | `node scripts/verify-connected-runtime.mjs` | **42/42 passed (`0` failed)** | Claude Code + Codex + Antigravity + Gemini CLI + Cursor hooks, workspace routing & guard deny |
 | ZCode Manifest Validation | `node "D:\zcode\resources\glm\zcode.cjs" plugins validate dsh-immune-system` | **Valid** | Official ZCode plugin validator |
 
 ---
@@ -38,12 +38,12 @@ All metrics below are directly measured on the `dsh-immune-system@2.0.0` codebas
 ### 3.1 Retrieval Precision & Zero False Positives
 
 - **`node scripts/bench-recall.mjs`** (bilingual paraphrase matrix):
-  - **`R@1: 100%`**, **`R@3: 100%`**, **`FP: 0% (0/6)`** (`8` positives, `6` negatives)
-- **`node scripts/bench-seed-recall.mjs`** (all 7 builtin packs, `42` paraphrased queries):
-  - After `lexicalTriggerAffinity` + un-truncated `cjkGrams` / `cjkBigrams` + bilingual concept graph (`core/retrieval.ts`, `core/store/tokenize.ts`, `core/store/rerank.ts`):
-    - **`R@1: 69% -> 95%` (+26 percentage points)**
-    - **`R@3: 100%` (`42 / 42`)**
-    - **`FP: 0% (0 / 6)`**
+  - **`R@1: 100%`**, **`R@3: 100%`**, **`FP: 0% (0/8)`** (`8` positives, `8` negatives including conversational CJK traps)
+- **`node scripts/bench-seed-recall.mjs`** (all 9 builtin packs, `54` paraphrased queries):
+  - After `lexicalTriggerAffinity` + disambiguated concept graph + CJK conversational stop-filtering (`core/retrieval.ts`, `core/store/tokenize.ts`, `core/store/rerank.ts`):
+    - **`R@1: 69% -> 100%` (`54 / 54`, +31 percentage points)**
+    - **`R@3: 100%` (`54 / 54`)**
+    - **`FP: 0% (0 / 9)`**
 
 ### 3.2 Indexing & Query Tail Latency (`node scripts/bench-scale.mjs`)
 
@@ -102,21 +102,18 @@ Scanning all host histories took **`1,507 ms`** across **`28,961` real tool call
 
 ---
 
-## 5. Reproduction & Submission Checklist
+## 5. One-Command Reproduction
 
 ```bash
 npm run build
 npm test
 node scripts/check-versions.mjs
 node scripts/verify-dist-integrity.mjs --self-test
+node scripts/verify-dist-integrity.mjs
 node scripts/bench-recall.mjs
 node scripts/bench-seed-recall.mjs
 node scripts/bench-scale.mjs
 node scripts/bench-tool-latency.mjs
+node scripts/verify-connected-runtime.mjs
 node scripts/bench-ablation.mjs
 ```
-
-- **Submission checklist (第 9 届传智杯 AI 大模型创新应用挑战赛 · 个人赛)**:
-  - 参赛选手姓名 / 学校 / 组别：`[待提交前填写]`
-  - 源码仓库：`https://github.com/meat-daemon-404/agent-immune`（包名 `dsh-immune-system@2.0.0`）
-  - 交付物核对：完整可运行源码、零依赖构建产物、`README.md` / `README.zh-CN.md`、`docs/ARCHITECTURE-V2.md`、本评测报告 `docs/EVALUATION.md`。

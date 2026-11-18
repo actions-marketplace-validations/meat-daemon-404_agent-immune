@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { SCHEMA_STATEMENTS } from './schema.js';
+import { repairLibraryHygiene } from '../hygiene.js';
 /**
  * Open (and initialise) the immune database.
  *
@@ -63,17 +64,30 @@ const COLUMNS = [
     { table: 'antibodies', column: 'ignored_count', ddl: 'INTEGER NOT NULL DEFAULT 0' },
     { table: 'distill_jobs', column: 'project_scope', ddl: "TEXT NOT NULL DEFAULT '*'" },
     { table: 'distill_jobs', column: 'cwd', ddl: "TEXT NOT NULL DEFAULT ''" },
+    { table: 'session_turns', column: 'last_prompt_sig', ddl: "TEXT NOT NULL DEFAULT ''" },
+    { table: 'session_turns', column: 'prompt_at', ddl: 'INTEGER NOT NULL DEFAULT 0' },
 ];
 function migrate(db) {
+    let addedV2Quality = false;
     for (const { table, column, ddl } of COLUMNS) {
         try {
             const info = db.prepare(`PRAGMA table_info(${table})`).all();
             if (info.some((row) => row.name === column))
                 continue;
             db.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`).run();
+            if (table === 'antibodies' && column === 'quality_grade')
+                addedV2Quality = true;
         }
         catch {
             // A migration must never prevent the host from starting.
+        }
+    }
+    if (addedV2Quality) {
+        try {
+            repairLibraryHygiene(db);
+        }
+        catch {
+            // Best-effort v1 -> v2 hygiene heal on first schema upgrade.
         }
     }
 }

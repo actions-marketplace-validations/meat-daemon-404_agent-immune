@@ -30,11 +30,10 @@ So I built an immune system for coding agents:
   to use
 - **zero dependencies**: Node's built-in `node:sqlite` only; FTS5 trigram index
   with a measured CJK bigram fallback (Chinese triggers work)
-- **host coverage**: Claude Code & Codex CLI via
-  `npx dsh-immune-system@latest connect claude-code` (fixed-path install in
-  `~/.dsh-immune/`, survives npx cache sweeps, `--remove` is clean);
-  Cursor/Cline over MCP (`immune_audit` preview, `immune_seed_packs`);
-  DSH/ZCode install natively
+- **host coverage**: Claude Code, Cursor, Codex CLI, Antigravity & Gemini CLI via
+  `npx dsh-immune-system@latest connect` (fixed-path install in `~/.dsh-immune/`,
+  survives npx cache sweeps, `--remove` is clean); Windsurf/Cline/Claude Desktop
+  over 20 MCP tools; DSH/ZCode install natively; plus a 3-line PR GitHub Action
 - **cold start in 10 seconds**: `audit --dry-run` turns your own session
   history into a shareable pitfall report + first rules;
   `seed git-safety` installs six hand-authored starter rules (removal keeps

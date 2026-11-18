@@ -162,10 +162,12 @@ export class ImmuneRuntime {
         ' / Third consecutive probe of the same target — one precise command usually lands it.';
     }
 
+    const isPassiveReadTool = /^(?:read|glob|grep)$/i.test(opts.toolName);
     const recallRows = this.store.match(input, {
       limit: 2,
       sessionId: opts.sessionId,
       toolName: opts.toolName,
+      strictToolMatch: isPassiveReadTool,
       cwd: opts.workspace,
     });
 
@@ -335,7 +337,7 @@ export class ImmuneRuntime {
       extraFallbackReason?: string,
     ): boolean =>
       applyDistillResult(this.store, job, result, {
-        fingerprint: currentFingerprint().key,
+        fingerprint: currentFingerprint(job.cwd || undefined).key,
         ...(extraFallbackReason ? { extraFallbackReason } : {}),
       });
 

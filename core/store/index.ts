@@ -33,6 +33,8 @@ export const LLM_SUCCESS_KEY = 'llm_distilled';
 export const LLM_FALLBACK_KEY = 'llm_fallbacks';
 import {
   bumpTurn,
+  claimPromptTurn,
+  clearPromptTurn,
   clearTurnState,
   readTurnState,
   recordTurnInjection,
@@ -118,6 +120,8 @@ export interface StoreOptions {
   dbPath?: string;
   /** Directory the database lives in when `dbPath` is not given. */
   dataDir?: string;
+  /** Workspace directory for resolving `.dsh/immune.sqlite` when `process.cwd()` is a daemon dir. */
+  cwd?: string;
 }
 
 export interface MatchOptions {
@@ -142,6 +146,8 @@ export interface MatchOptions {
    * same-tool affinity to the ranking.
    */
   toolName?: string;
+  /** When true, only rules with no tool_name or matching `toolName` are eligible (e.g. passive Read/Glob/Grep). */
+  strictToolMatch?: boolean;
   /** Workspace directory for path affinity + project_scope isolation. */
   cwd?: string;
   /** Explicit project_scope override ('*' matches universal + all when unbounded). */
@@ -156,7 +162,10 @@ export class ImmuneStore {
 
   constructor(opts: StoreOptions = {}) {
     this.dbPath =
-      opts.dbPath ?? (opts.dataDir ? resolve(opts.dataDir, 'immune.sqlite') : resolveDbPath());
+      opts.dbPath ??
+      (opts.dataDir
+        ? resolve(opts.dataDir, 'immune.sqlite')
+        : resolveDbPath(process.env, opts.cwd));
     this.db = openDatabase(this.dbPath);
   }
 
@@ -253,7 +262,11 @@ export class ImmuneStore {
       }
     }
 
-    const merged = [...own, ...shared];
+    let merged = [...own, ...shared];
+    if (opts.strictToolMatch && opts.toolName) {
+      const targetTool = opts.toolName.toLowerCase();
+      merged = merged.filter((r) => !r.tool_name || r.tool_name.toLowerCase() === targetTool);
+    }
     // Tool affinity is a TIE-BREAKER inside the retrieval order, not a
     // post-multiplier: two rules with near-identical text get near-arbitrary
     // bm25 positions, and a same-tool rule should win that tie. The stable
@@ -268,6 +281,7 @@ export class ImmuneStore {
     const ranked = rerank(merged, { query: queryText, cwd: opts.cwd, sharedSet, relevanceByRule }).slice(0, limit);
     const rankedOwn = ranked.filter((r) => !sharedSet.has(r));
     const rankedShared = ranked.filter((r) => sharedSet.has(r));
+    const sharedPrescriptions = rankedShared.map((r) => r.prescription);
 
     // ---- Repeat suppression (per turn) -------------------------------------
     // Same set as last turn and fewer than SUPPRESS_WINDOW turns since: say
@@ -275,7 +289,7 @@ export class ImmuneStore {
     // context, and inflating hit_count corrupts promotion and anti-rot.
     if (opts.suppressRepeats && opts.sessionId) {
       const state = readTurnState(this.db, opts.sessionId);
-      if (shouldSuppress(state, rankedOwn.map((r) => r.id))) {
+      if (shouldSuppress(state, rankedOwn.map((r) => r.id), sharedPrescriptions)) {
         bumpTurn(this.db, opts.sessionId);
         bumpMeta(this.db, SUPPRESSED_REPEATS_KEY);
         return [];
@@ -329,7 +343,9 @@ export class ImmuneStore {
         rankedOwn.map((r) => r.id),
         ranked.map((r) => r.prescription),
       );
-      if (opts.suppressRepeats) recordTurnInjection(this.db, opts.sessionId, rankedOwn.map((r) => r.id));
+      if (opts.suppressRepeats) {
+        recordTurnInjection(this.db, opts.sessionId, rankedOwn.map((r) => r.id), sharedPrescriptions);
+      }
       // Attribute the delivery to whichever model is driving this session.
       // Shared-library ids do not live in this database, so only own rules are
       // counted here; the shared library keeps its own totals.
@@ -443,6 +459,16 @@ export class ImmuneStore {
    */
   resetTurnState(sessionId: string): void {
     clearTurnState(this.db, sessionId);
+  }
+
+  /** Claim a prompt once for the active turn; returns false on duplicate mid-turn PreInvocation steps. */
+  claimPromptTurn(sessionId: string, prompt: string): boolean {
+    return claimPromptTurn(this.db, sessionId, prompt);
+  }
+
+  /** Release the active-turn prompt lock at `Stop`. */
+  clearPromptTurn(sessionId: string): void {
+    clearPromptTurn(this.db, sessionId);
   }
 
   listAll(includeRetired = true): Antibody[] {
@@ -621,8 +647,8 @@ export class ImmuneStore {
     return counts;
   }
 
-  exportable(minHits = 3): Antibody[] {
-    return exportableAntibodies(this.db, minHits);
+  exportable(minHits = 3, projectScope = '*'): Antibody[] {
+    return exportableAntibodies(this.db, minHits, projectScope);
   }
 
   /**

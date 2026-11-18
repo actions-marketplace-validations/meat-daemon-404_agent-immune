@@ -24,3 +24,11 @@ node_modules/
 # host-side plan/session scratch from the ZCode runtime
 .zcode/
 .git-commit-msg
+
+# environment files and OS/temp artifacts
+.env
+.env.*
+!.env.example
+*.tmp
+.DS_Store
+Thumbs.db

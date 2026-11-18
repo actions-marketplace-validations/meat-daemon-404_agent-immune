@@ -297,9 +297,10 @@ export function insertAntibody(
           SET status = 'retired', retire_reason = 'superseded_by_env_upgrade', updated_at = ?
         WHERE status = 'active' AND probation_at > 0
           AND id != ?
+          AND (project_scope = ? OR project_scope = '*')
           AND tool_name IS ?
           AND symptom = ?`,
-    ).run(now, newId, ab.tool_name ?? null, ab.symptom.trim());
+    ).run(now, newId, effectiveScope, ab.tool_name ?? null, ab.symptom.trim());
   }
   return newId;
 }
@@ -372,10 +373,13 @@ export function findMatches(
     const scored = candidates
       .filter((row) => !seen.has(row.id))
       .map((row) => {
-        const haystack = `${row.trigger_pattern} ${row.symptom} ${row.prescription}`;
-        const score = bigrams.filter((gram) => haystack.includes(gram)).length;
-        return { row, score };
+        const triggerHits = bigrams.filter((gram) => row.trigger_pattern.includes(gram)).length;
+        const bodyHits = bigrams.filter((gram) =>
+          `${row.symptom} ${row.prescription}`.includes(gram),
+        ).length;
+        return { row, score: triggerHits * 2 + bodyHits };
       })
+      .filter((entry) => entry.score >= 1)
       .sort((a, b) => b.score - a.score || b.row.hit_count - a.row.hit_count);
 
     for (const entry of scored) {
@@ -408,7 +412,9 @@ export function removeAntibody(db: DatabaseSync, id: number): boolean {
   db.exec('BEGIN');
   try {
     db.prepare('DELETE FROM model_hits WHERE rule_id = ?').run(id);
-    db.prepare('DELETE FROM delivery_receipts WHERE rule_id = ?').run(id);
+    db.prepare('DELETE FROM seed_packs WHERE rule_id = ?').run(id);
+    // Keep delivery_receipts append-only so deleting an old antibody never
+    // invalidates middle links of the SHA-256 verification chain.
     removed = Number(db.prepare('DELETE FROM antibodies WHERE id = ?').run(id).changes) > 0;
     db.exec('COMMIT');
   } catch (error) {
@@ -526,14 +532,20 @@ export function penalizeAntibodies(
 }
 
 /** Antibodies worth sharing: proven by repeated successful injection. */
-export function exportableAntibodies(db: DatabaseSync, minHits: number): Antibody[] {
+export function exportableAntibodies(
+  db: DatabaseSync,
+  minHits: number,
+  projectScope = '*',
+): Antibody[] {
   const raw = db
     .prepare(
       `SELECT * FROM antibodies
-        WHERE status = 'active' AND hit_count >= ?
+        WHERE status = 'active'
+          AND hit_count >= ?
+          AND (project_scope = '*' OR project_scope = ? OR ? = '*')
         ORDER BY hit_count DESC, created_at DESC`,
     )
-    .all(minHits) as unknown as Array<Record<string, unknown>>;
+    .all(minHits, projectScope, projectScope) as unknown as Array<Record<string, unknown>>;
   return raw
     .map(rowToAntibody)
     .filter((ab) => !looksEchoPrescription(ab.prescription));
@@ -550,6 +562,7 @@ export function setPrescription(
   const nextGrade = existing
     ? classifyRuleQuality({ ...existing, prescription: clean, prescription_source: source })
     : null;
+  const grade = nextGrade?.grade ?? 'advice';
   const info = db
     .prepare(
       `UPDATE antibodies
@@ -557,15 +570,16 @@ export function setPrescription(
               prescription_source = ?,
               quality_grade = ?,
               rubric_score = ?,
-              status = CASE WHEN status = 'quarantined' THEN 'active' ELSE status END,
+              status = CASE WHEN status = 'quarantined' AND ? != 'quarantined' THEN 'active' ELSE status END,
               updated_at = ?
         WHERE id = ?`,
     )
     .run(
       clean,
       source,
-      nextGrade?.grade ?? 'advice',
+      grade,
       nextGrade?.score ?? 85,
+      grade,
       Date.now(),
       id,
     );

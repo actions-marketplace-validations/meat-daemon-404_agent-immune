@@ -109,7 +109,18 @@ export function vendorDist(home: string, opts: { force?: boolean } = {}): Vendor
   return { dir: vendorRoot, distDir, version, refreshed };
 }
 
-export type ConnectHostId = 'claude-code' | 'codex' | 'antigravity';
+export type ConnectHostId =
+  | 'claude-code'
+  | 'codex'
+  | 'antigravity'
+  | 'gemini-cli'
+  | 'cursor'
+  | 'vscode'
+  | 'windsurf'
+  | 'zed'
+  | 'roo-code'
+  | 'claude-desktop'
+  | 'cline';
 
 /** One hook script wired into a host event, in the shared `command` dialect. */
 interface HookHandler {
@@ -131,22 +142,26 @@ export interface HostDefinition {
   label: string;
   /** Config file, relative to the user's home directory. */
   relativeConfigPath: string;
+  /** Optional sidecar MCP config file (relative to home) wired alongside hooks (e.g. Cursor). */
+  sidecarMcpConfigPath?: string;
   /**
    * Key inside the config JSON that holds the event table. Claude Code keeps
    * hooks under `hooks` in settings.json; a Codex hooks.json IS the table;
-   * Antigravity nests named hook packs under `"dsh-immune-system"`.
+   * Antigravity nests named hook packs under `"dsh-immune-system"`; MCP-only
+   * hosts store servers under `"mcpServers"`.
    */
   eventsKey: string | null;
-  /** Codex and Antigravity have no PostToolUseFailure event; failures arrive via PostToolUse. */
+  /** Codex, Antigravity, Gemini CLI, and Cursor have no PostToolUseFailure event. */
   includesFailureHook: boolean;
-  /**
-   * Antigravity uses flat handler arrays for SessionStart/PreInvocation/Stop
-   * and matcher groups for PreToolUse/PostToolUse, plus PreInvocation instead
-   * of UserPromptSubmit.
-   */
-  dialect?: 'standard' | 'antigravity';
+  dialect?: 'standard' | 'antigravity' | 'gemini-cli' | 'cursor' | 'mcp';
   /** Extra steps the user must take after connecting. */
   notes: string[];
+}
+
+function platformAppDataRel(...segments: string[]): string {
+  if (process.platform === 'win32') return join('AppData', 'Roaming', ...segments);
+  if (process.platform === 'darwin') return join('Library', 'Application Support', ...segments);
+  return join('.config', ...segments);
 }
 
 export const HOSTS: Record<ConnectHostId, HostDefinition> = {
@@ -180,29 +195,126 @@ export const HOSTS: Record<ConnectHostId, HostDefinition> = {
       'takes effect from the next Antigravity session or invocation (重启或新开对话后生效)',
     ],
   },
+  'gemini-cli': {
+    id: 'gemini-cli',
+    label: 'Gemini CLI',
+    relativeConfigPath: join('.gemini', 'settings.json'),
+    eventsKey: 'hooks',
+    includesFailureHook: false,
+    dialect: 'gemini-cli',
+    notes: ['takes effect from the next Gemini CLI session (重启 Gemini CLI 会话后生效)'],
+  },
+  cursor: {
+    id: 'cursor',
+    label: 'Cursor',
+    relativeConfigPath: join('.cursor', 'hooks.json'),
+    sidecarMcpConfigPath: join('.cursor', 'mcp.json'),
+    eventsKey: 'hooks',
+    includesFailureHook: false,
+    dialect: 'cursor',
+    notes: [
+      'wires both ~/.cursor/hooks.json (lifecycle hooks) and ~/.cursor/mcp.json (MCP tools)',
+      'reload Cursor window or start a new Agent chat to activate (重载窗口或新开对话生效)',
+    ],
+  },
+  windsurf: {
+    id: 'windsurf',
+    label: 'Windsurf',
+    relativeConfigPath: join('.codeium', 'windsurf', 'mcp_config.json'),
+    eventsKey: 'mcpServers',
+    includesFailureHook: false,
+    dialect: 'mcp',
+    notes: ['wires MCP server in Windsurf Cascade; reload Windsurf to activate'],
+  },
+  vscode: {
+    id: 'vscode',
+    label: 'VS Code',
+    relativeConfigPath: platformAppDataRel('Code', 'User', 'mcp.json'),
+    eventsKey: 'servers',
+    includesFailureHook: false,
+    dialect: 'mcp',
+    notes: ['wires MCP server in VS Code GitHub Copilot Agent Mode (Code/User/mcp.json)'],
+  },
+  zed: {
+    id: 'zed',
+    label: 'Zed',
+    relativeConfigPath:
+      process.platform === 'win32'
+        ? join('AppData', 'Roaming', 'Zed', 'settings.json')
+        : join('.config', 'zed', 'settings.json'),
+    eventsKey: 'context_servers',
+    includesFailureHook: false,
+    dialect: 'mcp',
+    notes: ['wires context_servers entry in Zed Editor settings.json'],
+  },
+  'roo-code': {
+    id: 'roo-code',
+    label: 'Roo Code',
+    relativeConfigPath: platformAppDataRel(
+      'Code',
+      'User',
+      'globalStorage',
+      'rooveterinaryinc.roo-cline',
+      'settings',
+      'mcp_settings.json',
+    ),
+    eventsKey: 'mcpServers',
+    includesFailureHook: false,
+    dialect: 'mcp',
+    notes: ['wires MCP server in Roo Code VS Code extension'],
+  },
+  'claude-desktop': {
+    id: 'claude-desktop',
+    label: 'Claude Desktop',
+    relativeConfigPath: platformAppDataRel('Claude', 'claude_desktop_config.json'),
+    eventsKey: 'mcpServers',
+    includesFailureHook: false,
+    dialect: 'mcp',
+    notes: ['wires MCP server in Claude Desktop; restart Claude Desktop to activate'],
+  },
+  cline: {
+    id: 'cline',
+    label: 'Cline',
+    relativeConfigPath: platformAppDataRel(
+      'Code',
+      'User',
+      'globalStorage',
+      'saoudrizwan.claude-dev',
+      'settings',
+      'cline_mcp_settings.json',
+    ),
+    eventsKey: 'mcpServers',
+    includesFailureHook: false,
+    dialect: 'mcp',
+    notes: ['wires MCP server in Cline VS Code extension'],
+  },
 };
 
-/** Events in wiring order; timeouts in seconds (ZCode's manifest uses ms). */
+/** Events in wiring order; timeouts in seconds (Gemini CLI converts to ms). */
 const HOOK_SPECS: Array<{
   event: string;
   antigravityEvent?: string;
+  geminiCliEvent?: string;
   script: string;
   timeout: number;
   matcher?: string;
   codexMatcher?: string;
   antigravityMatcher?: string;
+  geminiCliMatcher?: string;
   antigravityFlat?: boolean;
 }> = [
-  { event: 'SessionStart', script: 'session-start.js', timeout: 20, antigravityFlat: true },
+  { event: 'SessionStart', geminiCliEvent: 'SessionStart', script: 'session-start.js', timeout: 20, antigravityFlat: true },
   {
     event: 'UserPromptSubmit',
     antigravityEvent: 'PreInvocation',
+    geminiCliEvent: 'BeforeAgent',
     script: 'user-prompt-submit.js',
     timeout: 5,
     antigravityFlat: true,
   },
   {
     event: 'PreToolUse',
+    geminiCliEvent: 'BeforeTool',
     script: 'pre-tool-use.js',
     timeout: 4,
     // Codex names its tools differently: shell_command / apply_patch. A
@@ -211,11 +323,22 @@ const HOOK_SPECS: Array<{
     matcher: 'Bash|Edit|Write|MultiEdit|Read|Grep|Glob',
     codexMatcher: 'shell_command|exec_command|shell|local_shell|apply_patch',
     antigravityMatcher:
-      'run_command|edit_file|write_file|read_file|replace_file_content|multi_replace_file_content|write_to_file|view_file|grep_search|find_by_name|list_dir',
+      'run_command|edit_file|write_file|read_file|replace_file_content|multi_replace_file_content|write_to_file|view_file|grep_search|find_by_name|list_dir|webview_browser',
+    geminiCliMatcher: 'run_shell_command|replace|write_file|read_file|search_file_content|glob',
   },
-  { event: 'PostToolUse', script: 'post-tool-use.js', timeout: 5, antigravityMatcher: '*' },
+  { event: 'PostToolUse', geminiCliEvent: 'AfterTool', script: 'post-tool-use.js', timeout: 5, antigravityMatcher: '*', geminiCliMatcher: '*' },
   { event: 'PostToolUseFailure', script: 'post-tool-use-failure.js', timeout: 5 },
-  { event: 'Stop', script: 'stop.js', timeout: 30, antigravityFlat: true },
+  { event: 'Stop', geminiCliEvent: 'AfterAgent', script: 'stop.js', timeout: 30, antigravityFlat: true },
+];
+
+const CURSOR_HOOK_SPECS: ReadonlyArray<{ event: string; script: string; timeout: number }> = [
+  { event: 'beforeSubmitPrompt', script: 'user-prompt-submit.js', timeout: 5 },
+  { event: 'beforeShellExecution', script: 'pre-tool-use.js', timeout: 4 },
+  { event: 'beforeMCPExecution', script: 'pre-tool-use.js', timeout: 4 },
+  { event: 'afterShellExecution', script: 'post-tool-use.js', timeout: 5 },
+  { event: 'afterFileEdit', script: 'post-tool-use.js', timeout: 5 },
+  { event: 'afterMCPExecution', script: 'post-tool-use.js', timeout: 5 },
+  { event: 'stop', script: 'stop.js', timeout: 30 },
 ];
 
 /**
@@ -224,7 +347,8 @@ const HOOK_SPECS: Array<{
  * (`~/.dsh-immune/dist/zcode/src/hooks/…`). `--remove` uninstalls every
  * match, so an upgrade never leaves stragglers behind.
  */
-const IMMUNE_COMMAND = /(\.dsh-immune|dsh-immune-system)[\\/]dist[\\/]zcode[\\/]src[\\/]hooks[\\/]/;
+const IMMUNE_COMMAND = /(\.dsh-immune|dsh-immune-system)[\\/]dist[\\/]zcode[\\/]src[\\/](?:hooks[\\/]|mcp-server\.js)/;
+const MCP_SERVER_ID = 'dsh-immune-system';
 
 export interface ConnectOptions {
   /** Override the user's home directory (tests). */
@@ -306,15 +430,48 @@ function entryHandlers(entry: HookEventEntry): HookHandler[] {
   return Array.isArray((entry as HookGroup)?.hooks) ? (entry as HookGroup).hooks : [];
 }
 
+function mcpServerPathOf(scriptDir: string): string {
+  // scriptDir is `.../dist/zcode/src/hooks`, sibling is `mcp-server.js`.
+  return join(scriptDir, '..', 'mcp-server.js').replace(/\\/g, '/');
+}
+
+export function extractScriptPath(command: string): string {
+  const quoted = command.match(/"([^"]+)"/)?.[1];
+  if (quoted) return quoted;
+  const unquoted = command.trim().match(/^node\s+(\S+)/)?.[1];
+  return unquoted ?? '';
+}
+
 /** Build the event table this module would write — exported for tests. */
 export function buildEventTable(host: HostDefinition, scriptDir: string): Record<string, HookEventEntry[]> {
+  if (host.dialect === 'mcp') return {};
+  if (host.dialect === 'cursor') {
+    const table: Record<string, HookEventEntry[]> = {};
+    for (const spec of CURSOR_HOOK_SPECS) {
+      table[spec.event] = [
+        {
+          type: 'command',
+          command: commandFor(scriptDir, spec.script, false),
+          timeout: spec.timeout,
+        },
+      ];
+    }
+    return table;
+  }
+
   const table: Record<string, HookEventEntry[]> = {};
   for (const spec of specsFor(host)) {
-    const eventName = host.dialect === 'antigravity' ? (spec.antigravityEvent ?? spec.event) : spec.event;
+    const eventName =
+      host.dialect === 'antigravity'
+        ? (spec.antigravityEvent ?? spec.event)
+        : host.dialect === 'gemini-cli'
+          ? (spec.geminiCliEvent ?? spec.event)
+          : spec.event;
+    const timeout = host.dialect === 'gemini-cli' ? spec.timeout * 1000 : spec.timeout;
     const handler: HookHandler = {
       type: 'command',
       command: commandFor(scriptDir, spec.script, host.dialect === 'antigravity'),
-      timeout: spec.timeout,
+      timeout,
     };
     if (host.dialect === 'antigravity' && spec.antigravityFlat) {
       table[eventName] = [handler];
@@ -325,7 +482,9 @@ export function buildEventTable(host: HostDefinition, scriptDir: string): Record
         ? (spec.codexMatcher ?? spec.matcher)
         : host.dialect === 'antigravity'
           ? (spec.antigravityMatcher ?? spec.matcher)
-          : spec.matcher;
+          : host.dialect === 'gemini-cli'
+            ? (spec.geminiCliMatcher ?? spec.matcher)
+            : spec.matcher;
     table[eventName] = [
       {
         ...(matcher ? { matcher } : {}),
@@ -388,19 +547,106 @@ function resolveSetup(
 }
 
 function assertScriptsExist(host: HostDefinition, scriptDir: string): void {
-  const missing = specsFor(host)
-    .map((spec) => spec.script)
-    .filter((script) => !existsSync(join(scriptDir, script)));
+  if (host.dialect === 'mcp') {
+    const mcpPath = mcpServerPathOf(scriptDir);
+    if (!existsSync(mcpPath)) {
+      throw new Error(`MCP server script missing at ${mcpPath} — the install looks broken`);
+    }
+    return;
+  }
+  const scripts =
+    host.dialect === 'cursor'
+      ? [...new Set(CURSOR_HOOK_SPECS.map((s) => s.script))]
+      : specsFor(host).map((spec) => spec.script);
+  const missing = scripts.filter((script) => !existsSync(join(scriptDir, script)));
   if (missing.length > 0) {
     throw new Error(`hook scripts missing under ${scriptDir}: ${missing.join(', ')} — the install looks broken`);
   }
 }
 
-/** Add the immune hooks to the host's config. Idempotent; upgrades stale paths. */
+function wireMcpConfigFile(
+  mcpConfigPath: string,
+  mcpScriptPath: string,
+  serversKey = 'mcpServers',
+): { added: number; upgraded: number; alreadyPresent: number; backupPath: string | null } {
+  const { existed, config } = readConfig(mcpConfigPath);
+  const serversRaw = config[serversKey];
+  if (serversRaw !== undefined && (typeof serversRaw !== 'object' || serversRaw === null || Array.isArray(serversRaw))) {
+    throw new Error(`${mcpConfigPath}: "${serversKey}" is not an object`);
+  }
+  const servers = (serversRaw as Record<string, unknown> | undefined) ?? {};
+  config[serversKey] = servers;
+
+  const existing = servers[MCP_SERVER_ID] as { command?: unknown; args?: unknown } | undefined;
+  const wantedEntry = { command: 'node', args: [mcpScriptPath] };
+  const isSame =
+    existing &&
+    existing.command === 'node' &&
+    Array.isArray(existing.args) &&
+    existing.args.length === 1 &&
+    existing.args[0] === mcpScriptPath;
+
+  if (isSame) {
+    return { added: 0, upgraded: 0, alreadyPresent: 1, backupPath: null };
+  }
+  const wasPresent = existing !== undefined;
+  servers[MCP_SERVER_ID] = wantedEntry;
+  const backupPath = writeConfig(mcpConfigPath, config, existed);
+  return {
+    added: wasPresent ? 0 : 1,
+    upgraded: wasPresent ? 1 : 0,
+    alreadyPresent: 0,
+    backupPath,
+  };
+}
+
+function unwireMcpConfigFile(
+  mcpConfigPath: string,
+  serversKey = 'mcpServers',
+): { removed: number; backupPath: string | null } {
+  if (!existsSync(mcpConfigPath)) return { removed: 0, backupPath: null };
+  const { existed, config } = readConfig(mcpConfigPath);
+  const servers = config[serversKey];
+  if (!servers || typeof servers !== 'object' || Array.isArray(servers)) return { removed: 0, backupPath: null };
+  const map = servers as Record<string, unknown>;
+  if (!(MCP_SERVER_ID in map)) return { removed: 0, backupPath: null };
+  delete map[MCP_SERVER_ID];
+  const backupPath = writeConfig(mcpConfigPath, config, existed);
+  return { removed: 1, backupPath };
+}
+
+/** Add the immune hooks (and/or MCP server) to the host's config. Idempotent; upgrades stale paths. */
 export function connectHost(hostId: ConnectHostId, options?: ConnectOptions): ConnectReport {
   const { host, configPath, scriptDir, vendor } = resolveSetup(hostId, options);
+  const home = options?.home ?? homedir();
   assertScriptsExist(host, scriptDir);
+
+  if (host.dialect === 'mcp') {
+    const serversKey = host.eventsKey ?? 'mcpServers';
+    const mcpPath = mcpServerPathOf(scriptDir);
+    const mcpRes = wireMcpConfigFile(configPath, mcpPath, serversKey);
+    return {
+      host: host.id,
+      label: host.label,
+      configPath,
+      scriptDir,
+      eventsWired: [`${serversKey}.${MCP_SERVER_ID}`],
+      added: mcpRes.added,
+      alreadyPresent: mcpRes.alreadyPresent,
+      upgraded: mcpRes.upgraded,
+      removed: 0,
+      backupPath: mcpRes.backupPath,
+      notes: host.notes,
+      vendorDir: vendor?.dir ?? null,
+      vendorVersion: vendor?.version ?? null,
+      vendorRefreshed: vendor?.refreshed ?? false,
+    };
+  }
+
   const { existed, config } = readConfig(configPath);
+  if (host.dialect === 'cursor' && config.version === undefined) {
+    config.version = 1;
+  }
   const table = eventTableOf(host, config);
 
   let added = 0;
@@ -414,11 +660,6 @@ export function connectHost(hostId: ConnectHostId, options?: ConnectOptions): Co
     const wantedCommand = entryHandlers(wantedEntry)[0]?.command ?? '';
     const wantedMatcher = isFlatHandler(wantedEntry) ? undefined : wantedEntry.matcher;
     const wantFlat = isFlatHandler(wantedEntry);
-    // Stale means the command, matcher, or handler layout (flat vs grouped)
-    // no longer matches what this connect would write: an npx cache path, an
-    // old vendor root, a dev checkout, or a dialect whose tool-name matcher
-    // was wrong (the Codex PreToolUse matcher fix). Upgrading in place is what
-    // actually reaches users who connected with the broken layout.
     const matchesWanted = (entry: HookEventEntry): boolean =>
       isImmuneEntry(entry) &&
       isFlatHandler(entry) === wantFlat &&
@@ -432,7 +673,6 @@ export function connectHost(hostId: ConnectHostId, options?: ConnectOptions): Co
       alreadyPresent += 1;
       table[event] = kept.length > 0 ? kept : current;
     } else if (stale.length > 0) {
-      // A stale install on this event is an upgrade, not a new wiring.
       upgraded += stale.length;
       table[event] = [...kept, ...entries];
     } else {
@@ -443,6 +683,13 @@ export function connectHost(hostId: ConnectHostId, options?: ConnectOptions): Co
   }
 
   const backupPath = added > 0 || upgraded > 0 ? writeConfig(configPath, config, existed) : null;
+  if (host.sidecarMcpConfigPath) {
+    const mcpPath = mcpServerPathOf(scriptDir);
+    if (existsSync(mcpPath)) {
+      wireMcpConfigFile(join(home, host.sidecarMcpConfigPath), mcpPath);
+    }
+  }
+
   return {
     host: host.id,
     label: host.label,
@@ -470,16 +717,35 @@ export function vendorInfoOf(home: string): { dir: string; version: string | nul
 /** Immune command strings currently wired into a host's config. */
 export function listImmuneCommands(hostId: ConnectHostId, home?: string): string[] {
   const host = HOSTS[hostId];
-  const configPath = configPathOf(host, home ?? homedir());
+  const resolvedHome = home ?? homedir();
+  const configPath = configPathOf(host, resolvedHome);
   if (!existsSync(configPath)) return [];
   try {
-    const table = eventTableOf(host, readConfig(configPath).config);
+    const config = readConfig(configPath).config;
+    if (host.dialect === 'mcp') {
+      const serversKey = host.eventsKey ?? 'mcpServers';
+      const servers = config[serversKey] as Record<string, { command?: unknown; args?: unknown }> | undefined;
+      const entry = servers?.[MCP_SERVER_ID];
+      const arg0 = Array.isArray(entry?.args) && typeof entry.args[0] === 'string' ? entry.args[0] : '';
+      return arg0 ? [`node "${arg0}"`] : [];
+    }
+    const table = eventTableOf(host, config);
     const commands: string[] = [];
     for (const entries of Object.values(table)) {
       if (!Array.isArray(entries)) continue;
       for (const entry of entries) {
         if (!isImmuneEntry(entry)) continue;
         for (const hook of entryHandlers(entry)) commands.push(hook.command);
+      }
+    }
+    if (host.sidecarMcpConfigPath) {
+      const sidecar = join(resolvedHome, host.sidecarMcpConfigPath);
+      if (existsSync(sidecar)) {
+        const sc = readConfig(sidecar).config;
+        const servers = sc.mcpServers as Record<string, { args?: unknown }> | undefined;
+        const entry = servers?.[MCP_SERVER_ID];
+        const arg0 = Array.isArray(entry?.args) && typeof entry.args[0] === 'string' ? entry.args[0] : '';
+        if (arg0) commands.push(`node "${arg0}"`);
       }
     }
     return commands;
@@ -491,22 +757,23 @@ export function listImmuneCommands(hostId: ConnectHostId, home?: string): string
 export interface ConnectPathIssue {
   host: string;
   label: string;
-  /** Command strings whose quoted script file no longer exists. */
+  /** Command strings whose target script file no longer exists. */
   broken: string[];
 }
 
 /**
- * The npx-cache failure mode, made visible: a connected host whose hook
+ * The npx-cache failure mode, made visible: a connected host whose hook/MCP
  * commands point at files that no longer exist. `immune doctor` reports it;
  * the fix is one `connect <host>` re-run.
  */
 export function verifyConnectedPaths(home?: string): ConnectPathIssue[] {
   const issues: ConnectPathIssue[] = [];
+  const statuses = connectStatus({ home });
   for (const hostId of Object.keys(HOSTS) as ConnectHostId[]) {
-    if (connectStatus({ home }).find((row) => row.host === hostId)?.state !== 'connected') continue;
+    if (statuses.find((row) => row.host === hostId)?.state !== 'connected') continue;
     const host = HOSTS[hostId];
     const broken = listImmuneCommands(hostId, home)
-      .map((command) => command.match(/"(.+)"/)?.[1] ?? '')
+      .map(extractScriptPath)
       .filter((path) => path.length > 0 && !existsSync(path));
     if (broken.length > 0) issues.push({ host: hostId, label: host.label, broken });
   }
@@ -527,16 +794,17 @@ function maybeCleanupVendor(home: string): boolean {
   return true;
 }
 
-/** Remove every immune hook entry from the host's config. */
+/** Remove every immune hook/MCP entry from the host's config. */
 export function disconnectHost(hostId: ConnectHostId, options?: ConnectOptions): ConnectReport {
   const home = options?.home ?? homedir();
   const vendor = vendorInfoOf(home);
-  // Disconnect must not CREATE a vendored install; it only reports where the
-  // scripts would live (the vendor copy when present, else the package dist).
   const host = HOSTS[hostId];
   const configPath = configPathOf(host, home);
   const scriptDir = options?.scriptDir ?? join(vendorRootOf(home), 'dist', 'zcode', 'src', 'hooks');
-  if (!existsSync(configPath)) {
+
+  if (host.dialect === 'mcp') {
+    const mcpRemoved = unwireMcpConfigFile(configPath, host.eventsKey ?? 'mcpServers');
+    const vendorRemoved = mcpRemoved.removed > 0 ? maybeCleanupVendor(home) : false;
     return {
       host: host.id,
       label: host.label,
@@ -546,10 +814,35 @@ export function disconnectHost(hostId: ConnectHostId, options?: ConnectOptions):
       added: 0,
       alreadyPresent: 0,
       upgraded: 0,
-      removed: 0,
+      removed: mcpRemoved.removed,
+      backupPath: mcpRemoved.backupPath,
+      notes: host.notes,
+      vendorDir: vendorRemoved ? vendor.dir : null,
+      vendorVersion: null,
+      vendorRefreshed: false,
+    };
+  }
+
+  let sidecarRemoved = 0;
+  if (host.sidecarMcpConfigPath) {
+    sidecarRemoved = unwireMcpConfigFile(join(home, host.sidecarMcpConfigPath)).removed;
+  }
+
+  if (!existsSync(configPath)) {
+    const vendorRemoved = sidecarRemoved > 0 ? maybeCleanupVendor(home) : false;
+    return {
+      host: host.id,
+      label: host.label,
+      configPath,
+      scriptDir,
+      eventsWired: [],
+      added: 0,
+      alreadyPresent: 0,
+      upgraded: 0,
+      removed: sidecarRemoved,
       backupPath: null,
       notes: host.notes,
-      vendorDir: null,
+      vendorDir: vendorRemoved ? vendor.dir : null,
       vendorVersion: null,
       vendorRefreshed: false,
     };
@@ -579,7 +872,8 @@ export function disconnectHost(hostId: ConnectHostId, options?: ConnectOptions):
     delete config[host.eventsKey];
   }
   const backupPath = removed > 0 ? writeConfig(configPath, config, existed) : null;
-  const vendorRemoved = removed > 0 ? maybeCleanupVendor(home) : false;
+  const totalRemoved = removed + sidecarRemoved;
+  const vendorRemoved = totalRemoved > 0 ? maybeCleanupVendor(home) : false;
   return {
     host: host.id,
     label: host.label,
@@ -589,13 +883,19 @@ export function disconnectHost(hostId: ConnectHostId, options?: ConnectOptions):
     added: 0,
     alreadyPresent: 0,
     upgraded: 0,
-    removed,
+    removed: removed > 0 ? removed : sidecarRemoved,
     backupPath,
     notes: host.notes,
     vendorDir: vendorRemoved ? vendor.dir : null,
     vendorVersion: null,
     vendorRefreshed: false,
   };
+}
+
+/** Disconnect every host that currently carries immune hooks or MCP entries. */
+export function disconnectAllConnected(options?: ConnectOptions): ConnectReport[] {
+  const connected = connectStatus(options).filter((row) => row.state === 'connected');
+  return connected.map((row) => disconnectHost(row.host as ConnectHostId, options));
 }
 
 export type ConnectionState = 'connected' | 'not-connected' | 'no-config';
@@ -608,15 +908,29 @@ export interface ConnectStatusRow {
   events: string[];
 }
 
-/** Which hosts already carry immune hooks, without writing anything. */
+/** Which hosts already carry immune hooks or MCP entries, without writing anything. */
 export function connectStatus(options?: ConnectOptions): ConnectStatusRow[] {
+  const home = options?.home ?? homedir();
   return Object.values(HOSTS).map((host) => {
-    const configPath = configPathOf(host, options?.home ?? homedir());
+    const configPath = configPathOf(host, home);
     if (!existsSync(configPath)) {
       return { host: host.id, label: host.label, configPath, state: 'no-config' as const, events: [] };
     }
     try {
-      const table = eventTableOf(host, readConfig(configPath).config);
+      const config = readConfig(configPath).config;
+      if (host.dialect === 'mcp') {
+        const serversKey = host.eventsKey ?? 'mcpServers';
+        const servers = config[serversKey] as Record<string, unknown> | undefined;
+        const present = Boolean(servers && typeof servers === 'object' && MCP_SERVER_ID in servers);
+        return {
+          host: host.id,
+          label: host.label,
+          configPath,
+          state: present ? ('connected' as const) : ('not-connected' as const),
+          events: present ? [`${serversKey}.${MCP_SERVER_ID}`] : [],
+        };
+      }
+      const table = eventTableOf(host, config);
       const events = Object.entries(table)
         .filter(([, entries]) => Array.isArray(entries) && entries.some(isImmuneEntry))
         .map(([event]) => event);
@@ -666,6 +980,35 @@ export function detectHosts(home: string): DetectedHost[] {
       marker: existsSync(join(home, '.gemini', 'antigravity')) ? '~/.gemini/antigravity' : '~/.gemini/config',
       wired: true,
     });
+  }
+  if (existsSync(join(home, '.gemini', 'settings.json'))) {
+    detected.push({ host: 'gemini-cli', label: 'Gemini CLI', marker: '~/.gemini/settings.json', wired: true });
+  }
+  if (existsSync(join(home, '.cursor'))) {
+    detected.push({ host: 'cursor', label: 'Cursor', marker: '~/.cursor', wired: true });
+  }
+  if (existsSync(join(home, '.codeium', 'windsurf'))) {
+    detected.push({ host: 'windsurf', label: 'Windsurf', marker: '~/.codeium/windsurf', wired: true });
+  }
+  const claudeDesktopDir = dirname(join(home, HOSTS['claude-desktop'].relativeConfigPath));
+  if (existsSync(claudeDesktopDir)) {
+    detected.push({ host: 'claude-desktop', label: 'Claude Desktop', marker: claudeDesktopDir, wired: true });
+  }
+  const clineDir = dirname(join(home, HOSTS.cline.relativeConfigPath));
+  if (existsSync(clineDir)) {
+    detected.push({ host: 'cline', label: 'Cline', marker: clineDir, wired: true });
+  }
+  const rooDir = dirname(join(home, HOSTS['roo-code'].relativeConfigPath));
+  if (existsSync(rooDir)) {
+    detected.push({ host: 'roo-code', label: 'Roo Code', marker: rooDir, wired: true });
+  }
+  const vscodeMcp = join(home, HOSTS.vscode.relativeConfigPath);
+  if (existsSync(vscodeMcp)) {
+    detected.push({ host: 'vscode', label: 'VS Code', marker: vscodeMcp, wired: true });
+  }
+  const zedSettings = join(home, HOSTS.zed.relativeConfigPath);
+  if (existsSync(zedSettings)) {
+    detected.push({ host: 'zed', label: 'Zed', marker: zedSettings, wired: true });
   }
   if (existsSync(join(home, '.zcode'))) {
     detected.push({

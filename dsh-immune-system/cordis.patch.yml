@@ -1,7 +1,7 @@
 # Bundle patch layer. One row loads this package's main entry as the host half
-# (the DSH adapter: recall injection, failure sensing, and the two /immune
-# commands). No client bundle: the plugin ships no browser UI, so nothing is
-# injected into the web app and nothing is added to the harness persona.
+# (the DSH adapter: recall injection, failure sensing, UI route, and the two
+# /immune commands). Do NOT add a browser bundle row here: the Settings web tab
+# is discovered via package.json's `dsh` declaration and `exports` map (#15).
 - insert:
     - id: dsh-immune-system
       name: dsh-immune-system

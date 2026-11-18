@@ -16,6 +16,8 @@ const MARKERS = [
     { stack: 'git-safety', files: ['.git'] },
     { stack: 'node-ts', files: ['package.json'] },
     { stack: 'python-uv', files: ['pyproject.toml', 'requirements.txt', 'uv.lock'] },
+    { stack: 'rust-cargo', files: ['Cargo.toml'] },
+    { stack: 'go-mod', files: ['go.mod'] },
     { stack: 'docker', files: ['Dockerfile', 'docker-compose.yml', 'docker-compose.yaml', 'compose.yaml'] },
     { stack: 'dsh-ecosystem', files: ['cordis.patch.yml'] },
 ];

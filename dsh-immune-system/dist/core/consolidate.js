@@ -12,9 +12,10 @@ export const CONSOLIDATE_SIMILARITY = 0.7;
  * unaffected.
  */
 export const MAX_SIMILARITY_SAMPLE = 20;
-/** Normalized grouping key: wording case/whitespace must not split one lesson. */
+/** Normalized grouping key: wording case/whitespace must not split one lesson, nor merge across distinct workspaces. */
 export function lessonKey(rule) {
-    return `${(rule.tool_name ?? '').trim().toLowerCase()}::${rule.symptom
+    const scope = (rule.project_scope ?? '*').trim() || '*';
+    return `${scope}::${(rule.tool_name ?? '').trim().toLowerCase()}::${rule.symptom
         .replace(/\s+/g, ' ')
         .trim()
         .toLowerCase()}`;
