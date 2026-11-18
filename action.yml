@@ -38,17 +38,19 @@ runs:
         INPUT_BASE_REF: ${{ inputs.base-ref }}
         INPUT_FAIL: ${{ inputs.fail-on-findings }}
         PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        PR_BASE_REF: ${{ github.base_ref }}
       run: |
         set -euo pipefail
         BASE="${INPUT_BASE_REF:-${PR_BASE_SHA:-HEAD~1}}"
         DIFF_FILE="$(mktemp)"
-        if ! git rev-parse --verify "$BASE" >/dev/null 2>&1; then
-          git fetch --no-tags --depth=1 origin "$BASE" >/dev/null 2>&1 || true
+        if ! git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
+          git fetch --no-tags --depth=1 origin "$BASE" >/dev/null 2>&1 || \
+            { [ -n "${PR_BASE_REF:-}" ] && git fetch --no-tags --depth=1 origin "$PR_BASE_REF" >/dev/null 2>&1 && BASE="FETCH_HEAD"; } || true
         fi
-        if git rev-parse --verify "$BASE" >/dev/null 2>&1; then
-          git diff "$BASE"...HEAD > "$DIFF_FILE" 2>/dev/null || git diff "$BASE" HEAD > "$DIFF_FILE"
+        if git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
+          git diff "$BASE"...HEAD > "$DIFF_FILE" 2>/dev/null || git diff "$BASE" HEAD > "$DIFF_FILE" 2>/dev/null || true
         else
-          git diff HEAD > "$DIFF_FILE" || true
+          git diff HEAD~1 HEAD > "$DIFF_FILE" 2>/dev/null || git diff HEAD > "$DIFF_FILE" 2>/dev/null || true
         fi
         EXTRA_ARGS=("--diff" "$DIFF_FILE" "--github")
         if [ -n "$INPUT_DOC" ]; then
