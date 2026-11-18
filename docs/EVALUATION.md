@@ -22,7 +22,7 @@ All metrics below are directly measured on the `dsh-immune-system@2.3.0` codebas
 
 | Suite / Script | Command | Result | Scope |
 | --- | --- | --- | --- |
-| Unit & Integration Suite | `npm test` | **260 / 260 passed (`0` failed, `0` skipped)** | Core store, hygiene, rubric, Red-3 triage, SHA-256 receipts, shared-rule suppression, turn locks, `explain` simulator, `./core` SDK, `git-hook`, completions, MCP (`21` tools), manifests |
+| Unit & Integration Suite | `npm test` | **261 / 261 passed (`0` failed, `0` skipped)** | Core store, hygiene, rubric, Red-3 triage, SHA-256 receipts, shared-rule suppression, turn locks, `explain` simulator, `./core` SDK, `git-hook`, completions, MCP (`21` tools), manifests |
 | Version Sync Guard | `node scripts/check-versions.mjs` | **8/8 fields aligned at `2.3.0`** | All 6 root/plugin/DSH/ZCode/marketplace/Claude manifests |
 | Dist Graph Integrity | `node scripts/verify-dist-integrity.mjs` (+ `--self-test`) | **Passed (0 failed)** | 1:1 `src -> dist` mapping & relative import resolution (`279` imports, `97` files) |
 | DSH Outcome & Adapters | `node scripts/verify-step1.mjs` & `verify-steps23.mjs` | **15/15** & **24/24 passed** | Outcome judge, fail→success pair, inject, probes |

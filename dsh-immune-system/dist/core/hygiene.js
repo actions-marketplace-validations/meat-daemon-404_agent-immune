@@ -14,7 +14,7 @@
  */
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, posix, resolve, win32 } from 'node:path';
 import { matchGenericLesson } from './lessons.js';
 import { redact, redactOutbound } from './redact.js';
 import { looksEchoPrescription } from './rewrite.js';
@@ -37,11 +37,45 @@ const URL_TOOL_DUMP_RE = /^[A-Za-z][\w-]*:\s*https?:\/\/\S+\s*$/i;
 const INLINE_CODE_DUMP_RE = /\b(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*=|\bawait\s+[A-Za-z_$][\w$.]*\(|\bfunction\s+[A-Za-z_$]|\bdef\s+[A-Za-z_]\w*\s*\(|;\s*(?:const|let|var|await|return)\b/;
 const AD_HOC_PROBE_CMD_RE = /^(?:(?:bash|pwsh|powershell|cmd):\s*)?(?:grep|rg|sed|awk|head|tail|cat|ls|dir|find|tasklist|Get-ChildItem|Get-NetTCPConnection|Get-Process|Get-Content|Select-String|Write-Output|\$[A-Za-z_]+\s*=|set\s+-[a-z]\s+[A-Z_]+=)/i;
 const SCRIPT_DUMP_OR_CHAT_RE = /^(?:(?:pwsh|powershell):\s*.*(?:\$[A-Za-z_]+=|nWrite-Out|\$pids\s*=\s*\d+)|还有[，,]|\$env:USERPROFILE)/i;
+const WIN_DRIVE_PATH_RE = /^[A-Za-z]:(?:[\\/]|$)/;
 /** Walk up from `cwd` to the nearest repo/workspace root (stopping before drive/home root). */
 export function resolveWorkspaceRoot(cwd) {
-    if (!cwd || !cwd.trim())
+    const trimmed = cwd?.trim();
+    if (!trimmed)
         return '';
-    let current = resolve(cwd.trim());
+    if (WIN_DRIVE_PATH_RE.test(trimmed)) {
+        const resolved = win32.resolve(trimmed);
+        if (process.platform !== 'win32')
+            return resolved;
+        let current = resolved;
+        for (let depth = 0; depth < 8; depth += 1) {
+            if (ROOT_MARKERS.some((marker) => existsSync(win32.join(current, marker)))) {
+                return current;
+            }
+            const parent = win32.dirname(current);
+            if (parent === current)
+                break;
+            current = parent;
+        }
+        return resolved;
+    }
+    if (trimmed.startsWith('/')) {
+        const resolved = posix.resolve(trimmed);
+        if (process.platform === 'win32')
+            return resolved;
+        let current = resolved;
+        for (let depth = 0; depth < 8; depth += 1) {
+            if (ROOT_MARKERS.some((marker) => existsSync(posix.join(current, marker)))) {
+                return current;
+            }
+            const parent = posix.dirname(current);
+            if (parent === current)
+                break;
+            current = parent;
+        }
+        return resolved;
+    }
+    let current = resolve(trimmed);
     for (let depth = 0; depth < 8; depth += 1) {
         if (ROOT_MARKERS.some((marker) => existsSync(join(current, marker)))) {
             return current;
@@ -51,7 +85,7 @@ export function resolveWorkspaceRoot(cwd) {
             break;
         current = parent;
     }
-    return resolve(cwd.trim());
+    return resolve(trimmed);
 }
 /**
  * Stable workspace scope identifier (`proj:<slug>:<hash8>`), or `'*'` when no
@@ -63,7 +97,8 @@ export function deriveProjectScope(cwd) {
         return '*';
     const root = resolveWorkspaceRoot(trimmed);
     const norm = root.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
-    const slug = basename(root)
+    const base = WIN_DRIVE_PATH_RE.test(root) ? win32.basename(root) : basename(norm);
+    const slug = base
         .toLowerCase()
         .replace(/[^a-z0-9\u4e00-\u9fff_-]+/g, '-')
         .replace(/^-+|-+$/g, '')
@@ -104,7 +139,13 @@ export function inferScopeFromRuleText(text) {
 export function abstractMachinePaths(input, workspaceRoot) {
     let out = input;
     if (workspaceRoot) {
-        const normRoot = resolve(workspaceRoot).replace(/\\/g, '/').replace(/\/+$/, '');
+        const trimmedRoot = workspaceRoot.trim();
+        const resolvedRoot = WIN_DRIVE_PATH_RE.test(trimmedRoot)
+            ? win32.resolve(trimmedRoot)
+            : trimmedRoot.startsWith('/')
+                ? posix.resolve(trimmedRoot)
+                : resolve(trimmedRoot);
+        const normRoot = resolvedRoot.replace(/\\/g, '/').replace(/\/+$/, '');
         const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         const escapedFwd = escapeRe(normRoot);
         const escapedBack = escapedFwd.replace(/\//g, '\\\\');

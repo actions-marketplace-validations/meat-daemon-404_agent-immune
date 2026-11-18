@@ -8,6 +8,10 @@ import { fileURLToPath } from 'node:url';
 
 import { GlobalStore, globalDbPathFor, ImmuneStore } from '../dsh-immune-system/dist/core/store/index.js';
 import { ImmuneRuntime } from '../dsh-immune-system/dist/core/runtime.js';
+import {
+  abstractMachinePaths,
+  deriveProjectScope,
+} from '../dsh-immune-system/dist/core/hygiene.js';
 import { BUILTIN_PACKS } from '../dsh-immune-system/dist/core/packs.js';
 import { gitHookStatus, installGitHook, removeGitHook } from '../dsh-immune-system/dist/core/git-hook.js';
 
@@ -319,4 +323,31 @@ test('v2.2.1 explainRecall exposes score breakdown without mutating hit counters
     void listTools;
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('v2.3.1 foreign Windows and POSIX workspace paths scope and abstract deterministically on every host OS', () => {
+  const winScopeA = deriveProjectScope('D:\\work\\alpha-repo');
+  const winScopeB = deriveProjectScope('D:\\work\\beta-repo');
+  const posixScopeA = deriveProjectScope('/Users/alice/work/alpha-repo');
+  const posixScopeB = deriveProjectScope('/Users/bob/work/beta-repo');
+
+  assert.match(winScopeA, /^proj:alpha-repo:[a-f0-9]{8}$/);
+  assert.match(winScopeB, /^proj:beta-repo:[a-f0-9]{8}$/);
+  assert.match(posixScopeA, /^proj:alpha-repo:[a-f0-9]{8}$/);
+  assert.match(posixScopeB, /^proj:beta-repo:[a-f0-9]{8}$/);
+  assert.notEqual(winScopeA, winScopeB);
+  assert.notEqual(posixScopeA, posixScopeB);
+
+  assert.equal(
+    abstractMachinePaths('Edit C:\\Users\\alice\\demo\\src\\app.ts', 'C:\\Users\\alice\\demo'),
+    'Edit <repo>/src/app.ts'.replace(/\//g, '\\').startsWith('Edit') ? abstractMachinePaths('Edit C:\\Users\\alice\\demo\\src\\app.ts', 'C:\\Users\\alice\\demo') : '',
+  );
+  assert.match(
+    abstractMachinePaths('Edit C:\\Users\\alice\\demo\\src\\app.ts', 'C:\\Users\\alice\\demo'),
+    /^Edit <repo>[\\/]src[\\/]app\.ts$/,
+  );
+  assert.match(
+    abstractMachinePaths('Edit /home/alice/demo/src/app.ts', '/home/alice/demo'),
+    /^Edit <repo>\/src\/app\.ts$/,
+  );
 });

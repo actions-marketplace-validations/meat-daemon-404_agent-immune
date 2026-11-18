@@ -213,7 +213,7 @@ dsh.profile.bundles 里的包名
 | 命令 | 实测结果 |
 | --- | --- |
 | `npm run build` | exit 0，0 错误 |
-| `npm test` | 260 条全绿（覆盖 core 五维评分/作用域隔离/Red-3 分诊/SHA-256 回执链、共享库重复抑制、回合锁、`explain` 模拟器、`./core` SDK、多宿主 hook 与 connect、`git-hook`、`test/dsh.test.mjs`、`test/dsh-ui.test.mjs` Shadow-DOM tab 契约、21 项 MCP 工具及 6 份 manifest 一致性） |
+| `npm test` | 261 条全绿（覆盖 core 五维评分/作用域隔离/Red-3 分诊/SHA-256 回执链、共享库重复抑制、回合锁、`explain` 模拟器、`./core` SDK、多宿主 hook 与 connect、`git-hook`、`test/dsh.test.mjs`、`test/dsh-ui.test.mjs` Shadow-DOM tab 契约、21 项 MCP 工具及 6 份 manifest 一致性） |
 | 三步手验（`scripts/verify-step1.mjs`） | 15 断言全过（含 bash 非零退出必须判失败） |
 | 三步手验（`scripts/verify-steps23.mjs`） | 24 断言全过（失败→成功在 `turn-stopping` 产出 1 行 antibodies；新 session 注入 `<immune_memory>`） |
 | 真实宿主验证（`scripts/verify-live-host.mjs`） | 20 断言全过（真 Cordis Context + 真事件总线 + 真 sqlite：`tools/post-execute` 判失败→蒸馏落库，`agent/pre-step` 跨会话注入，`agent/session-start` 预热注入，冷启动空批次仍注入） |

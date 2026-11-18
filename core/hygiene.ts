@@ -14,7 +14,7 @@
  */
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, posix, resolve, win32 } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import type { Antibody, AntibodyStatus, NewAntibody, RuleQualityGrade } from './types.js';
 import { matchGenericLesson } from './lessons.js';
@@ -46,10 +46,41 @@ const AD_HOC_PROBE_CMD_RE =
 const SCRIPT_DUMP_OR_CHAT_RE =
   /^(?:(?:pwsh|powershell):\s*.*(?:\$[A-Za-z_]+=|nWrite-Out|\$pids\s*=\s*\d+)|还有[，,]|\$env:USERPROFILE)/i;
 
+const WIN_DRIVE_PATH_RE = /^[A-Za-z]:(?:[\\/]|$)/;
+
 /** Walk up from `cwd` to the nearest repo/workspace root (stopping before drive/home root). */
 export function resolveWorkspaceRoot(cwd?: string): string {
-  if (!cwd || !cwd.trim()) return '';
-  let current = resolve(cwd.trim());
+  const trimmed = cwd?.trim();
+  if (!trimmed) return '';
+  if (WIN_DRIVE_PATH_RE.test(trimmed)) {
+    const resolved = win32.resolve(trimmed);
+    if (process.platform !== 'win32') return resolved;
+    let current = resolved;
+    for (let depth = 0; depth < 8; depth += 1) {
+      if (ROOT_MARKERS.some((marker) => existsSync(win32.join(current, marker)))) {
+        return current;
+      }
+      const parent = win32.dirname(current);
+      if (parent === current) break;
+      current = parent;
+    }
+    return resolved;
+  }
+  if (trimmed.startsWith('/')) {
+    const resolved = posix.resolve(trimmed);
+    if (process.platform === 'win32') return resolved;
+    let current = resolved;
+    for (let depth = 0; depth < 8; depth += 1) {
+      if (ROOT_MARKERS.some((marker) => existsSync(posix.join(current, marker)))) {
+        return current;
+      }
+      const parent = posix.dirname(current);
+      if (parent === current) break;
+      current = parent;
+    }
+    return resolved;
+  }
+  let current = resolve(trimmed);
   for (let depth = 0; depth < 8; depth += 1) {
     if (ROOT_MARKERS.some((marker) => existsSync(join(current, marker)))) {
       return current;
@@ -58,7 +89,7 @@ export function resolveWorkspaceRoot(cwd?: string): string {
     if (parent === current) break;
     current = parent;
   }
-  return resolve(cwd.trim());
+  return resolve(trimmed);
 }
 
 /**
@@ -70,8 +101,9 @@ export function deriveProjectScope(cwd?: string): string {
   if (!trimmed || trimmed === '*') return '*';
   const root = resolveWorkspaceRoot(trimmed);
   const norm = root.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+  const base = WIN_DRIVE_PATH_RE.test(root) ? win32.basename(root) : basename(norm);
   const slug =
-    basename(root)
+    base
       .toLowerCase()
       .replace(/[^a-z0-9\u4e00-\u9fff_-]+/g, '-')
       .replace(/^-+|-+$/g, '')
@@ -111,7 +143,13 @@ export function inferScopeFromRuleText(text: string): string | null {
 export function abstractMachinePaths(input: string, workspaceRoot?: string): string {
   let out = input;
   if (workspaceRoot) {
-    const normRoot = resolve(workspaceRoot).replace(/\\/g, '/').replace(/\/+$/, '');
+    const trimmedRoot = workspaceRoot.trim();
+    const resolvedRoot = WIN_DRIVE_PATH_RE.test(trimmedRoot)
+      ? win32.resolve(trimmedRoot)
+      : trimmedRoot.startsWith('/')
+        ? posix.resolve(trimmedRoot)
+        : resolve(trimmedRoot);
+    const normRoot = resolvedRoot.replace(/\\/g, '/').replace(/\/+$/, '');
     const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const escapedFwd = escapeRe(normRoot);
     const escapedBack = escapedFwd.replace(/\//g, '\\\\');
