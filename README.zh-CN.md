@@ -9,11 +9,12 @@
   <p>
     <a href="https://www.npmjs.com/package/dsh-immune-system"><img src="https://img.shields.io/npm/v/dsh-immune-system?label=npm%20%7C%20dsh-immune-system" alt="npm 版本"></a>
     <a href="https://github.com/meat-daemon-404/agent-immune/actions/workflows/ci.yml"><img src="https://github.com/meat-daemon-404/agent-immune/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-    <img src="https://img.shields.io/badge/单测-266%20通过-16a34a" alt="266 单测通过">
+    <img src="https://img.shields.io/badge/单测-283%20通过-16a34a" alt="283 单测通过">
     <img src="https://img.shields.io/badge/运行时依赖-0-2563eb" alt="零运行时依赖">
     <img src="https://img.shields.io/badge/node-%5E22.19%20%7C%7C%20%3E%3D24-0ea5e9" alt="node ^22.19 || >=24">
     <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT">
     <a href="https://dsh-plugin.org/plugins/meat-daemon-404/agent-immune"><img src="https://dsh-plugin.org/badges/listed.svg" alt="已收录于 DSH 插件市场"></a>
+    <img src="assets/immunity-badge.svg" alt="Immunity Score 87/100">
   </p>
 
   <p>
@@ -38,9 +39,27 @@
   <p><sub>本地回环仪表盘（`immune ui`）、可分享 SVG 避坑成绩单（`immune wrapped`）与 DSH Shadow-DOM 原生设置页 —— 100% 离线运行、零遥测，上图为演示数据。</sub></p>
 </div>
 
+## 为什么写这个工具（一个凌晨两点的崩溃瞬间）
+
+上周二凌晨两点，我看着 Claude Code 在一个根目录明明摆着 `pnpm-lock.yaml` 的项目里自信地敲下 `npm install`，报错、道歉、改成 `pnpm install` 跑通；结果二十分钟后新开一个会话，它又一模一样地敲了一遍 `npm install`。再往后，它在非交互终端里跑 `prisma migrate dev` 卡死、在没 `Read` 文件的情况下直接盲改 `Edit` 把缩进搞崩……每一轮都在烧我真金白银买的 Token，去重新发现一个二十分钟前刚交过学费的教训。
+
+你可能会问：**“把这些写进 `CLAUDE.md` 或 `.cursorrules` 不就行了吗？”**
+真正重度用过的人都知道有两个死穴：
+1. **没人有精力手动维护它**：凌晨两点刚修完一个诡异的 Vite `loadEnv` 或 Rust `E0502` 借用冲突，你只想合代码睡觉，根本不会再去打开 Markdown 手写一条规范。而且你今天用 Claude Code，明天换 Cursor，后天队友用 Copilot，五套规则文件永远同步不过来。
+2. **静态规则越写越失效**：当你真把 150 条避坑指南全塞进 `CLAUDE.md` 时，每一次对话都在白白烧掉几千个上下文 Token；更糟的是，当整篇文档都在用加粗大写喊 `CRITICAL: NEVER DO X` 时，大模型的注意力会被严重稀释，最后把所有规则都当成耳旁风。
+
+这就是 **agent-immune** 想解决的事。它的工作方式就像人的**生物免疫系统**：
+- **平时完全隐形**：不预塞几百条静态教条污染你的 System Prompt。
+- **摔一跤，长一颗抗体**：每当 Agent 调用工具失败、随后自己换了正确姿势修好，引擎就在本地安静地把这次「踩坑 → 修复」提炼成一条结构化抗体（`触发场景 → 别干什么 → 该干什么`），存进零依赖的本地 SQLite FTS5 全文库。
+- **只在伸手犯错前的那一刻拍拍它**：下次它再遇到相似的文件、报错或命令意图时，检索器在 **`0.008 ms`** 内精准召回最相关的 1～3 条抗体，通过 `<immune_memory>` 在工具执行前塞给它一句简短耳语：*“嘿，上次你在这儿摔过一跤，直接用 `pnpm`。”*
+
+---
+
 ## 目录
 
+- [为什么写这个工具（一个凌晨两点的崩溃瞬间）](#为什么写这个工具一个凌晨两点的崩溃瞬间)
 - [30 秒快速体验](#30-秒快速体验)
+- [四个好玩又顺手的创意玩法（`diagnose` / `autopsy` / `compile-rules` / `wrapped`）](#四个好玩又顺手的创意玩法diagnose--autopsy--compile-rules--wrapped)
 - [支持的 Agent 与宿主矩阵](#支持的-agent-与宿主矩阵)
 - [GitHub Action：3 行接入 PR 避坑门禁](#github-action3-行接入-pr-避坑门禁)
 - [避坑免疫成绩单（`wrapped`）与 Git 原生团队共享（`team-sync`）](#避坑免疫成绩单wrapped与-git-原生团队共享team-sync)
@@ -80,6 +99,37 @@ npx dsh-immune-system@latest ui                # 启动本机 127.0.0.1 仪表�
 
 > **全局短命令别名**：执行 `npm install -g dsh-immune-system` 后可直接使用 `immune <命令>`。
 > *（Windows 源码目录提示：若在本仓库根目录下直接运行 `cmd`，同名子目录 `dsh-immune-system/` 会抢先匹配；在仓库内调试请直接运行 `node dsh-immune-system/dist/zcode/src/cli.js <命令>`，用户在自己的项目目录中不受影响。）*
+
+---
+
+## 四个好玩又顺手的创意玩法（`diagnose` / `autopsy` / `compile-rules` / `wrapped`）
+
+除了在后台默默替你省 Token，我们还做了四个让你一眼看清 Agent 到底在干什么的趣味工具：
+
+### 1. 🧬 给你的 Agent 做一次“踩坑人格 MBTI 与五维雷达体检”（`immune diagnose`）
+想知道你的 Agent 平时最爱犯哪类低级错误？运行 `immune diagnose`（或 `npx dsh-immune-system diagnose`），它会扫描你的本地抗体库，给出五维免疫雷达图，并把你的 Agent 归入 **6 种生动的技术故障人格**（比如 *`⚡ The Blind Surgeon 盲盒外科医生`*、*`🐚 The Interactive Shell Trapper 非 TTY 赌徒`*、*`🔀 The Lockfile Rebel 锁文件叛军`*、*`🦀 The Borrow & Type Gladiator 编译器角斗士`*），最后直接开出对应的 **`immune seed` 加强针** 和 **3 行 System-Prompt 疫苗**：
+
+```bash
+immune diagnose                                # 终端打印五维 ASCII 免疫雷达与人格诊断单
+immune diagnose --svg ./immune-radar.svg       # 导出 880x440 暗黑主题五维免疫雷达 SVG 卡片
+immune diagnose --markdown                     # 生成可直接贴进周报或 Issue 的 Markdown 诊断卡
+```
+
+### 2. 🔬 踩坑尸检报告与“省钱省命账本”（`immune autopsy`）
+到底帮你省了多少钱和多少时间？`immune autopsy` 会对所有被拦截的重复错误做一次法医级尸检：按每次少跑一轮无效重试平均节省 `2,400 tokens` 与 `45 秒` 等待时间，折算出**累计拦截的死循环次数、救回的 Token 数、折合 Frontier 模型 API 美金账单**，以及**少盯着终端 Spinner 发呆的分钟数**；同时揪出那些“明明已经注入提醒、模型却依然头铁犯错”的**脆弱伤疤（Fragile Scars）**：
+
+```bash
+immune autopsy                                 # 查看终端尸检账本与脆弱规则处方
+immune autopsy --markdown                      # 输出 Markdown 格式的 ROI 与根因分布表
+```
+
+### 3. 💉 跨 IDE 规则“罗塞塔编译器”（`immune compile-rules`）
+在 Claude Code 里踩过一次坑，为什么换到 Cursor 或 GitHub Copilot 还要再踩一遍？`immune compile-rules` 可以把本地 SQLite 里经过实战验证且通过隐私安全门禁（自动剔除含 `/Users/`、邮箱和 Token 的规则）的抗体，**一键转译成 5 大主流 IDE 的原生规则格式**——包括带自动文件后缀推导（`globs: **/*.rs, **/Cargo.toml`）的 Cursor `.mdc` 文件，且通过 `<!-- immune:generated -->` 围栏完美保留你原本手写的指令：
+
+```bash
+immune compile-rules --target all              # 一键编译至 Cursor (.mdc)、Copilot、Windsurf、Cline 与 CLAUDE.md
+immune compile-rules --target cursor           # 仅生成 .cursor/rules/immune-pitfalls.mdc（自动推导 globs）
+```
 
 ---
 
@@ -163,7 +213,8 @@ jobs:
 
 ```bash
 immune wrapped                                 # 默认输出 ./immune-wrapped.svg
-immune wrapped ./assets/scorecard.svg          # 指定输出路径
+immune wrapped --badge                         # 生成 shields.io 风格的扁平免疫分徽章 ./immune-badge.svg
+immune wrapped --markdown                      # 输出可直接粘贴进 PR 或 README 的 Markdown 成绩单表格
 immune wrapped --json                          # 以 JSON 格式输出免疫分与统计详情
 ```
 
@@ -174,6 +225,8 @@ immune wrapped --json                          # 以 JSON 格式输出免疫分�
 immune team-sync                               # 导出本仓安全规则至 .immune/rules.jsonl
 immune team-sync --min-hits 3                  # 仅导出命中 >= 3 次的高置信度规则
 immune team-sync --import                      # 将仓库已提交的 .immune/rules.jsonl 合并进本地 SQLite
+immune team-sync --check                       # CI 门禁：校验哈希排序、重复项、隐私门禁与 Git 冲突标记
+immune team-sync --dedupe                      # 自动剥离 Git <<<<<<< 冲突行并重新归并排序
 ```
 
 ---
@@ -254,7 +307,7 @@ immune sync-doc                    # 将成熟规则同步写入 AGENTS.md（或
 随时可运行 `immune --help` 或 `immune <子命令> --help` 查看详细参数（只读与巡检命令均支持 `--json` 机器可读输出）。
 
 <details>
-<summary><b>展开查看全部 29 个 CLI 子命令</b></summary>
+<summary><b>展开查看全部 32 个 CLI 子命令</b></summary>
 
 | 分类 | 命令 | 作用 |
 | --- | --- | --- |
@@ -270,8 +323,11 @@ immune sync-doc                    # 将成熟规则同步写入 AGENTS.md（或
 | | `immune learn <trigger> [symptom] <prescription>` | 直接写入人工确认的经验规则（`prescription_source = 'human'`） |
 | | `immune forget <id> \| --last \| --prune [days]` | 删除指定规则（完整保留只追加 SHA-256 回执链）或清理长期零命中僵尸规则 |
 | | `immune stats [--json]` | 查看规则分布、抑制重复带来的可省 Token 估算、模型归因与睡眠评审簇 |
-| | `immune wrapped [out.svg] [--hosts H] [--stdout] [--json]` | 生成 1200×630 暗黑主题 SVG 避坑免疫成绩单与 `0–100` 免疫分 |
-| | `immune team-sync [file] [--import] [--min-hits N] [--json]` | 导出或导入 Git 原生按哈希确定性排序的 `.immune/rules.jsonl` 团队共享规则 |
+| | `immune diagnose [--svg [out.svg]] [--markdown] [--json]` | 诊断 Agent 踩坑故障人格（6 类）、五维免疫雷达图与专属疫苗处方 |
+| | `immune autopsy [--markdown] [--json]` | 法医级踩坑尸检账本：统计救回的 Token、API 美金、等待分钟数与脆弱伤疤 |
+| | `immune compile-rules [--target all\|cursor\|copilot\|windsurf\|cline\|claude]` | 将安全规则一键转译为 Cursor `.mdc`（自动推导 globs）、Copilot、Windsurf 等 5 种格式 |
+| | `immune wrapped [out.svg] [--badge] [--markdown] [--hosts H] [--stdout] [--json]` | 生成 1200×630 暗黑主题 SVG 避坑免疫成绩单、扁平徽章或 Markdown 表 |
+| | `immune team-sync [file] [--import\|--check\|--dedupe] [--min-hits N] [--json]` | 导出、导入、校验或冲突自愈 Git 原生 `.immune/rules.jsonl` 团队共享规则 |
 | | `immune export [min_hits] [out.md]` | 将验证过的抗体经隐私闸门导出为 `SKILL.md` |
 | | `immune export-json [out.json]` / `import-json <in.json>` | 导出或导入可迁移 JSON 规则快照（强制执行 `shareSanityCheck`） |
 | | `immune sync-doc [--out FILE] [--min-hits N]` | 将成熟规则同步至 `AGENTS.md`（若仅存在 `CLAUDE.md` 则自动对齐） |
@@ -325,11 +381,11 @@ immune sync-doc                    # 将成熟规则同步写入 AGENTS.md（或
 每次提交与 PR 均在 **Linux（Node 22 & 24）** 与 **Windows（Node 24）** 双平台矩阵运行门禁：
 
 - **失败判定真值回放**（`scripts/eval-judge.mjs`）：回放 **21,034 次带宿主标注的真实工具调用**，判定一致率 **97.81%**，**0 假阴性**；`2.19%`（`461` 次）假阳性全部为「非零退出即预期答案」的只读探针命令，由探针免疫与 Red-3 分诊在下游安全隔离（详见 [AGENTS.md](AGENTS.md) 决策 #25）。
-- **自动化单测与多宿主契约验证**：**`266 / 266` 项单测与集成测试全绿**（`npm test`）、**`42 / 42` 项多宿主真实子进程 Hook 端到端断言**（覆盖 Claude Code、Codex、Antigravity、Gemini CLI 与 Cursor，`scripts/verify-connected-runtime.mjs`）、**`20 / 20` 项真实 Cordis 事件总线断言**（`scripts/verify-live-host.mjs`）、**`7` 份清单 `10` 个版本字段一致性门禁**（`scripts/check-versions.mjs`），以及 **`100%` 源码与构建产物 1:1 静态导入图校验**（`scripts/verify-dist-integrity.mjs`）。
+- **自动化单测与多宿主契约验证**：**`283 / 283` 项单测与集成测试全绿**（`npm test`）、**`42 / 42` 项多宿主真实子进程 Hook 端到端断言**（覆盖 Claude Code、Codex、Antigravity、Gemini CLI 与 Cursor，`scripts/verify-connected-runtime.mjs`）、**`20 / 20` 项真实 Cordis 事件总线断言**（`scripts/verify-live-host.mjs`）、**`7` 份清单 `10` 个版本字段一致性门禁**（`scripts/check-versions.mjs`），以及 **`100%` 源码与构建产物 1:1 静态导入图校验**（`scripts/verify-dist-integrity.mjs`）。
 - **中英双语召回与 9 包内容门禁**：`scripts/bench-recall.mjs` 达 **R@1 100%、R@3 100%、误报 0%**；覆盖全部 **54 条内置种子规则**的 `scripts/bench-seed-recall.mjs` 达 **R@1 100%（54/54）、R@3 100%（54/54）、误报 0%（0/9）**。
 - **索引规模与热路径延迟**（`scripts/bench-scale.mjs`、`scripts/bench-tool-latency.mjs`）：300 条规则入库仅需 `60 ms`（`0.20 ms/条`），检索延迟 `p50 = 0.60 ms`、`p95 = 1.20 ms`；工具执行路径零模型调用（中位延迟 `1.8 ms`），蒸馏统一在回合末 `1–60 s` 预算钳位内批量排空。
 - **严格因果反事实拦截回放**（`scripts/bench-ablation.mjs`）：在 **28,961 次真实多宿主调用**上按时间顺序严格前向重放，零先验 **Cold-Start 提前拦截 88.5%（115/130）** 的重复错误；预热内置包与本地资产后 **Warm-Start 拦截率达 96.9%（126/130）**，全错误覆盖率 **94.3%**。
-- **端到端 A/B 多轮模拟对比基准**（`node scripts/bench-ab-simulation.mjs`）：在 **10 类真实高频踩坑场景 × 3 轮会话（共 30 轮）** 上对比无免疫与启用 `agent-immune` 的端到端表现：
+- **端到端 A/B 多轮模拟对比基准**（`npm run bench:ab`）：在 **10 类真实高频踩坑场景 × 3 轮会话（共 30 轮）** 上对比无免疫与启用 `agent-immune` 的端到端表现：
 
 | 评测指标（10 类场景 × 3 轮 = 30 轮会话） | 对照组 Control（无免疫记忆） | 实验组 Treatment（启用 `agent-immune`） | 实测提升幅度 |
 | --- | --- | --- | --- |
@@ -348,6 +404,15 @@ immune sync-doc                    # 将成熟规则同步写入 AGENTS.md（或
 | **团队 Git 同步** | 哈希确定性排序 `.immune/rules.jsonl` + `AGENTS.md` | 仅本机 | 云端/向量库 | 本地文件 |
 | **运行时依赖** | **零依赖**（Node 内置 `node:sqlite` FTS5） | Go 二进制 | Python + 向量库 | Node 第三方依赖 |
 | **覆盖环境** | Claude Code、Cursor、Codex、Antigravity、Gemini CLI、VS Code、Zed、Windsurf、Roo Code、Cline、DSH、ZCode、GitHub Actions、TS SDK | Claude Code、Codex、Cursor 等 | 自定义 SDK 应用 | Claude Code |
+
+---
+
+### 诚实的边界：它是什么，不是什么
+
+作为一个自己每天都在用的开源工具，我想坦诚地交代它的能力边界：
+- **它不是云端 SaaS，也不需要 Docker**：没有账号注册、没有遥测上报、不需要为了存几十条经验去跑一个吃 2GB 内存的向量数据库容器。它只依赖 Node 内置的 `node:sqlite`，单次检索中位耗时 `0.008 ms`。
+- **它治的是“重复踩同一块石头”，不是“帮你写业务逻辑”**：如果一个全新的业务 Bug 你的 Agent 从来没见过，且不在 9 套内置种子包里，第一次它依然会摔跤——但只要它修好一次，`agent-immune` 就能保证它**绝不在同一个坑里摔第二次**。
+- **团队共享绝不夹带私货**：不论是 `immune team-sync` 导出的 `.immune/rules.jsonl`（支持 `immune team-sync --dedupe` 自动消解 Git 合并冲突标记），还是 `immune compile-rules`，都会先过一遍 `isTeamShareSafe` 隐私门禁，把带有本机绝对路径、邮箱或密钥特征的规则拦在本地。
 
 ---
 
