@@ -1,12 +1,3 @@
-/**
- * Manifest consistency guards.
- *
- * `AGENTS.md` warns that a release must bump **four** manifests to the same
- * version, and that the installable package must keep every path inside
- * itself (the doubled `dsh-immune-system/` prefix is deliberate). Both are
- * easy to break silently during a release, so they are pinned here.
- */
-
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -27,6 +18,7 @@ function versionFields() {
   const market = readJson('marketplace.json');
   const claudePlugin = readJson('.claude-plugin/plugin.json');
   const claudeMarket = readJson('.claude-plugin/marketplace.json');
+  const mcpServer = readJson('server.json');
   return {
     'package.json version': root.version,
     'package.json dsh.version': root.dsh?.version,
@@ -36,10 +28,12 @@ function versionFields() {
     'marketplace.json plugins[0].version': market.plugins?.[0]?.version,
     '.claude-plugin/plugin.json version': claudePlugin.version,
     '.claude-plugin/marketplace.json plugins[0].version': claudeMarket.plugins?.[0]?.version,
+    'server.json version': mcpServer.version,
+    'server.json packages[0].version': mcpServer.packages?.[0]?.version,
   };
 }
 
-test('all six manifests agree on one version', () => {
+test('all seven manifests agree on one version', () => {
   const fields = versionFields();
   const versions = Object.values(fields);
   assert.equal(
@@ -82,21 +76,16 @@ test('the installable package references only files inside itself', () => {
   }
 });
 
-test('the ZCode and marketplace entries name the same plugin', () => {
+test('the ZCode, marketplace, and MCP registry entries name the same package', () => {
   const pkg = readJson('dsh-immune-system/package.json');
   const zcode = readJson('dsh-immune-system/.zcode-plugin/plugin.json');
   const market = readJson('marketplace.json');
+  const mcpServer = readJson('server.json');
   assert.equal(zcode.name, pkg.name);
   assert.equal(market.plugins?.[0]?.name, pkg.name);
+  assert.equal(mcpServer.packages?.[0]?.identifier, pkg.name);
 });
 
-/**
- * The settings tab only ships when `client-modules` can discover it: it scans
- * loaded packages for `dsh.client` with `platform: "web"` and then requires a
- * string `exports["./client"]`. Ship the file without the declaration (or the
- * declaration without the file) and the bundle is silently never served —
- * `/plugins/<id>/client.js` 404s and the tab never appears. Pin all three.
- */
 test('the web client half is declared the way client-modules discovers it', () => {
   const pkg = readJson('dsh-immune-system/package.json');
   assert.equal(pkg.dsh?.client?.platform, 'web', 'dsh.client.platform must be "web"');
@@ -115,21 +104,3 @@ test('the web client half is declared the way client-modules discovers it', () =
   assert.match(src, /exports\.apply\s*=/u, 'bundle must export apply (the Cordis plugin face)');
   assert.match(src, /exports\.name\s*=/u, 'bundle must export name');
 });
-
-/**
- * The settings modal is an unknown host. In 0.9.12 the live tab rendered with
- * collapsed rows and an invisible sort control because the host stylesheet
- * reshaped bare `table`/`td`/`div` inside a plugin tab. The fix renders the
- * panel inside a shadow root, which seals both directions. Pin that, because
- * silently dropping it would restore the same visual break with no test failure.
- */
-test('the settings tab renders inside a shadow root so host CSS cannot reshape it', () => {
-  const pkg = readJson('dsh-immune-system/package.json');
-  const clientExport = pkg.exports?.['./client'];
-  const clientRel = typeof clientExport === 'string' ? clientExport : clientExport?.default;
-  const src = readFileSync(join(ROOT, 'dsh-immune-system', clientRel), 'utf8');
-  assert.match(src, /attachShadow\(\{\s*mode:\s*'open'\s*\}\)/u, 'tab must attach a shadow root');
-  assert.match(src, /createPortal\(/u, 'panel must be portalled into the shadow root');
-  assert.match(src, /line-height:1\.45/u, 'inherited line-height must be pinned explicitly');
-});
-

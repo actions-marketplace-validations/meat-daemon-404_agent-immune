@@ -1,10 +1,3 @@
-/**
- * Public programmatic SDK barrel (`import { ... } from 'dsh-immune-system/core'`).
- *
- * Exposes the zero-dependency SQLite+FTS5 pitfall immunity engine for custom
- * Node.js / TypeScript coding agents, frameworks (Vercel AI SDK, LangChain.js,
- * Mastra, OpenCode), and CI tooling.
- */
 export type { Antibody, AntibodyStatus, DeliveryReceipt, DistillResult, FailureSnapshot, NewAntibody, RootCauseType, RuleQualityGrade, TriageBucket, TriageEvent, WorkspaceProfile, } from './types.js';
 export type { ReceiptOutcome } from './receipts.js';
 export { ImmuneStore, GlobalStore, globalDbPathFor, isPromotable, type DistillJob, type MatchOptions, type StoreOptions, } from './store/index.js';
@@ -22,4 +15,4 @@ export { HOSTS, connectAllDetected, connectHost, connectStatus, disconnectAllCon
 export { gitHookStatus, installGitHook, removeGitHook, type GitHookStatus } from './git-hook.js';
 export { redact, redactAndClamp, redactOutbound } from './redact.js';
 export { computeImmunityScore, escapeSvgText, formatCompactNumber, renderWrappedSvg, type WrappedInput, type WrappedNemesis, } from './wrapped.js';
-export { canonicalRuleHash, isTeamShareSafe, parseTeamRulesJsonl, serializeTeamRulesJsonl, writeTeamRulesFile, type TeamRuleRecord, type TeamSyncCandidate, } from './team-sync.js';
+export { canonicalRuleHash, hydrateTeamRules, isTeamShareSafe, maybeSyncTeamRulesAfterDrain, parseTeamRulesJsonl, serializeTeamRulesJsonl, writeTeamRulesFile, type TeamRuleImportStore, type TeamRuleRecord, type TeamSyncCandidate, } from './team-sync.js';

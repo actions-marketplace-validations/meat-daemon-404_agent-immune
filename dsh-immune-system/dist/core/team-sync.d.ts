@@ -13,6 +13,16 @@ export interface TeamSyncCandidate {
     readonly hit_count?: number;
     readonly status?: string;
 }
+export interface TeamRuleImportStore {
+    insert(input: {
+        trigger_pattern: string;
+        symptom: string;
+        prescription: string;
+        tool_name?: string | null;
+        prescription_source?: 'llm' | 'heuristic' | 'human';
+        origin?: string;
+    }): unknown;
+}
 /** Deterministic 16-hex-char SHA-256 fingerprint of a rule's prescription. */
 export declare function canonicalRuleHash(prescription: string): string;
 /**
@@ -38,3 +48,25 @@ export declare function writeTeamRulesFile(filePath: string, candidates: Readonl
     exported: number;
     skippedUnsafe: number;
 };
+/**
+ * Zero-config SessionStart/Stop hydration: if `.immune/rules.jsonl` exists in
+ * the workspace and `IMMUNE_TEAM_SYNC !== 'off'`, idempotently import team rules
+ * into the active project store.
+ */
+export declare function hydrateTeamRules(store: TeamRuleImportStore, workspace?: string, env?: NodeJS.ProcessEnv): {
+    imported: number;
+    total: number;
+    path: string | null;
+};
+/**
+ * Zero-config turn-end auto-export: if `.immune/rules.jsonl` already exists in
+ * the workspace (or `IMMUNE_TEAM_SYNC === '1'`) and `IMMUNE_TEAM_SYNC !== 'off'`,
+ * merge and export proven share-safe rules back to `.immune/rules.jsonl`.
+ */
+export declare function maybeSyncTeamRulesAfterDrain(store: {
+    listAll(includeQuarantined?: boolean): ReadonlyArray<TeamSyncCandidate>;
+}, workspace?: string, env?: NodeJS.ProcessEnv): {
+    exported: number;
+    skippedUnsafe: number;
+    path: string;
+} | null;

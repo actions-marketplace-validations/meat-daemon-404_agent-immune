@@ -9,7 +9,7 @@
  */
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 /** Deterministic 16-hex-char SHA-256 fingerprint of a rule's prescription. */
 export function canonicalRuleHash(prescription) {
     const normalized = prescription.replace(/\s+/g, ' ').trim().toLowerCase();
@@ -108,4 +108,48 @@ export function writeTeamRulesFile(filePath, candidates, opts = {}) {
     mkdirSync(dirname(filePath), { recursive: true });
     writeFileSync(filePath, result.jsonl, 'utf8');
     return { exported: result.exported, skippedUnsafe: result.skippedUnsafe };
+}
+/**
+ * Zero-config SessionStart/Stop hydration: if `.immune/rules.jsonl` exists in
+ * the workspace and `IMMUNE_TEAM_SYNC !== 'off'`, idempotently import team rules
+ * into the active project store.
+ */
+export function hydrateTeamRules(store, workspace = process.cwd(), env = process.env) {
+    if (env.IMMUNE_TEAM_SYNC === 'off') {
+        return { imported: 0, total: 0, path: null };
+    }
+    const filePath = join(workspace, '.immune', 'rules.jsonl');
+    if (!existsSync(filePath)) {
+        return { imported: 0, total: 0, path: null };
+    }
+    const records = parseTeamRulesJsonl(readFileSync(filePath, 'utf8'));
+    let imported = 0;
+    for (const rec of records) {
+        store.insert({
+            trigger_pattern: rec.trigger_pattern,
+            symptom: rec.symptom || '(team rule)',
+            prescription: rec.prescription,
+            tool_name: rec.tool_name,
+            prescription_source: 'human',
+            origin: 'team_sync',
+        });
+        imported += 1;
+    }
+    return { imported, total: records.length, path: filePath };
+}
+/**
+ * Zero-config turn-end auto-export: if `.immune/rules.jsonl` already exists in
+ * the workspace (or `IMMUNE_TEAM_SYNC === '1'`) and `IMMUNE_TEAM_SYNC !== 'off'`,
+ * merge and export proven share-safe rules back to `.immune/rules.jsonl`.
+ */
+export function maybeSyncTeamRulesAfterDrain(store, workspace = process.cwd(), env = process.env) {
+    if (env.IMMUNE_TEAM_SYNC === 'off')
+        return null;
+    const filePath = join(workspace, '.immune', 'rules.jsonl');
+    if (!existsSync(filePath) && env.IMMUNE_TEAM_SYNC !== '1')
+        return null;
+    const minHitsRaw = Number(env.IMMUNE_TEAM_SYNC_MIN_HITS ?? '3');
+    const minHits = Number.isFinite(minHitsRaw) && minHitsRaw >= 1 ? Math.floor(minHitsRaw) : 3;
+    const res = writeTeamRulesFile(filePath, store.listAll(false), { minHits });
+    return { exported: res.exported, skippedUnsafe: res.skippedUnsafe, path: filePath };
 }

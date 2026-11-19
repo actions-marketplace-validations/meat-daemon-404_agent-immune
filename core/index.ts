@@ -86,10 +86,13 @@ export {
 } from './wrapped.js';
 export {
   canonicalRuleHash,
+  hydrateTeamRules,
   isTeamShareSafe,
+  maybeSyncTeamRulesAfterDrain,
   parseTeamRulesJsonl,
   serializeTeamRulesJsonl,
   writeTeamRulesFile,
+  type TeamRuleImportStore,
   type TeamRuleRecord,
   type TeamSyncCandidate,
 } from './team-sync.js';

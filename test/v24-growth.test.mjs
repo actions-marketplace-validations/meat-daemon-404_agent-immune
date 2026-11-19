@@ -14,7 +14,9 @@ import {
 } from '../dsh-immune-system/dist/core/wrapped.js';
 import {
   canonicalRuleHash,
+  hydrateTeamRules,
   isTeamShareSafe,
+  maybeSyncTeamRulesAfterDrain,
   parseTeamRulesJsonl,
   serializeTeamRulesJsonl,
   writeTeamRulesFile,
@@ -133,6 +135,99 @@ test('v2.4 team-sync serializes deterministically sorted JSONL and filters unsaf
   }
 });
 
+test('v2.4 hydrateTeamRules automatically imports .immune/rules.jsonl and respects IMMUNE_TEAM_SYNC=off', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'immune-hydrate-'));
+  try {
+    const file = join(dir, '.immune', 'rules.jsonl');
+    writeTeamRulesFile(file, [
+      {
+        trigger_pattern: 'prisma migrate dev',
+        symptom: 'non-interactive shell error',
+        prescription: 'Use npx prisma migrate deploy or prisma db push in CI/non-TTY shells',
+        tool_name: 'Bash',
+        hit_count: 4,
+      },
+      {
+        trigger_pattern: 'next/router App Router',
+        symptom: 'NextRouter was not mounted',
+        prescription: 'Import useRouter from next/navigation in Next.js App Router components',
+        tool_name: 'Edit',
+        hit_count: 6,
+      },
+    ]);
+
+    const inserted = [];
+    const mockStore = {
+      insert(row) {
+        inserted.push(row);
+        return row;
+      },
+    };
+
+    const offResult = hydrateTeamRules(mockStore, dir, { IMMUNE_TEAM_SYNC: 'off' });
+    assert.equal(offResult.imported, 0);
+    assert.equal(offResult.path, null);
+    assert.equal(inserted.length, 0);
+
+    const onResult = hydrateTeamRules(mockStore, dir, {});
+    assert.equal(onResult.imported, 2);
+    assert.equal(onResult.total, 2);
+    assert.equal(onResult.path, file);
+    assert.equal(inserted.length, 2);
+    assert.equal(inserted[0].origin, 'team_sync');
+    assert.equal(inserted[0].prescription_source, 'human');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('v2.4 maybeSyncTeamRulesAfterDrain auto-exports proven share-safe rules when .immune/rules.jsonl exists or IMMUNE_TEAM_SYNC=1', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'immune-autodrain-'));
+  try {
+    const mockStore = {
+      listAll() {
+        return [
+          {
+            trigger_pattern: 'pytest asyncio fixture',
+            symptom: 'ScopeMismatch or unawaited coroutine',
+            prescription: 'Decorate async pytest fixtures with @pytest_asyncio.fixture',
+            tool_name: 'Bash',
+            hit_count: 4,
+            status: 'active',
+          },
+          {
+            trigger_pattern: 'low hit candidate',
+            symptom: 'minor typo',
+            prescription: 'Fix typo',
+            tool_name: 'Edit',
+            hit_count: 1,
+            status: 'active',
+          },
+        ];
+      },
+    };
+
+    // When .immune/rules.jsonl does not exist and IMMUNE_TEAM_SYNC is not '1', no-op
+    assert.equal(maybeSyncTeamRulesAfterDrain(mockStore, dir, {}), null);
+
+    // When IMMUNE_TEAM_SYNC='1', creates .immune/rules.jsonl automatically
+    const synced = maybeSyncTeamRulesAfterDrain(mockStore, dir, { IMMUNE_TEAM_SYNC: '1' });
+    assert.ok(synced);
+    assert.equal(synced.exported, 1);
+    assert.equal(existsSync(join(dir, '.immune', 'rules.jsonl')), true);
+
+    // Subsequent drain without IMMUNE_TEAM_SYNC='1' still syncs because .immune/rules.jsonl now exists
+    const syncedAgain = maybeSyncTeamRulesAfterDrain(mockStore, dir, {});
+    assert.ok(syncedAgain);
+    assert.equal(syncedAgain.exported, 1);
+
+    // Opt-out via IMMUNE_TEAM_SYNC='off'
+    assert.equal(maybeSyncTeamRulesAfterDrain(mockStore, dir, { IMMUNE_TEAM_SYNC: 'off' }), null);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('v2.4 CLI help surfaces wrapped and team-sync commands and serializeTeamRulesJsonl is exported', () => {
   const mainHelp = renderMainHelp('2.3.0');
   assert.match(mainHelp, /wrapped \[out\.svg\]/);
@@ -157,6 +252,15 @@ test('v2.4 CLI help surfaces wrapped and team-sync commands and serializeTeamRul
     { minHits: 3 },
   );
   assert.equal(serialized.exported, 1);
+});
+
+test('v2.4 package.json exposes npm run bench:ab and includes server.json in files list', () => {
+  const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
+  assert.equal(pkg.scripts?.['bench:ab'], 'node scripts/bench-ab-simulation.mjs');
+  assert.ok(pkg.scripts?.bench?.includes('bench-ab-simulation.mjs'));
+  assert.ok(Array.isArray(pkg.files) && pkg.files.includes('server.json'));
+  assert.ok(Array.isArray(pkg.files) && pkg.files.includes('smithery.yaml'));
+  assert.ok(Array.isArray(pkg.files) && pkg.files.includes('glama.json'));
 });
 
 test('v2.4 end-to-end A/B multi-turn simulation benchmark achieves >=90% repeat pitfall reduction', () => {
