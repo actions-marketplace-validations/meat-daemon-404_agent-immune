@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -10,6 +10,8 @@ import {
   computeImmunityScore,
   escapeSvgText,
   formatCompactNumber,
+  renderImmunityBadgeSvg,
+  renderWrappedMarkdown,
   renderWrappedSvg,
 } from '../dsh-immune-system/dist/core/wrapped.js';
 import {
@@ -19,6 +21,7 @@ import {
   maybeSyncTeamRulesAfterDrain,
   parseTeamRulesJsonl,
   serializeTeamRulesJsonl,
+  verifyTeamRulesJsonl,
   writeTeamRulesFile,
 } from '../dsh-immune-system/dist/core/team-sync.js';
 import {
@@ -270,4 +273,100 @@ test('v2.4 end-to-end A/B multi-turn simulation benchmark achieves >=90% repeat 
   assert.equal(run.status, 0, run.stderr);
   assert.match(run.stdout, /-95\.0%/);
   assert.match(run.stdout, /-63\.3%/);
+});
+
+test('v2.4 renderImmunityBadgeSvg and renderWrappedMarkdown generate viral README badge & PR summary', () => {
+  const input = {
+    totalCalls: 20100,
+    repeatFailures: 495,
+    avoidableTokens: 1420000,
+    activeRules: 54,
+    totalInjections: 6694,
+    topNemeses: [{ label: 'Edit: Target file not read', count: 42 }],
+  };
+
+  const badge = renderImmunityBadgeSvg(input);
+  assert.ok(badge.startsWith('<svg') && badge.endsWith('</svg>'));
+  assert.ok(badge.includes('agent-immune'));
+  assert.ok(badge.includes('/100 · 54 rules'));
+
+  const md = renderWrappedMarkdown(input);
+  assert.match(md, /Agent Pitfall Immunity Scorecard/);
+  assert.match(md, /\*\*54\*\* rules/);
+  assert.match(md, /meat-daemon-404\/agent-immune/);
+});
+
+test('v2.4 verifyTeamRulesJsonl detects git conflict markers, unsorted hashes, and auto-heals via writeTeamRulesFile', () => {
+  const conflicted = [
+    '<<<<<<< HEAD',
+    '{"hash":"ffff000011112222","trigger_pattern":"vite env","symptom":"undef","prescription":"Use loadEnv","tool_name":"Edit"}',
+    '=======',
+    '{"hash":"0000111122223333","trigger_pattern":"pnpm lock","symptom":"npm fail","prescription":"Use pnpm install","tool_name":"Bash"}',
+    '>>>>>>> feature-branch',
+  ].join('\n');
+
+  const checkBefore = verifyTeamRulesJsonl(conflicted);
+  assert.equal(checkBefore.valid, false);
+  assert.equal(checkBefore.conflictMarkers, true);
+  assert.equal(checkBefore.unsorted, true);
+  assert.equal(checkBefore.total, 2);
+
+  const dir = mkdtempSync(join(tmpdir(), 'immune-conflict-heal-'));
+  try {
+    const file = join(dir, '.immune', 'rules.jsonl');
+    mkdirSync(join(dir, '.immune'), { recursive: true });
+    writeFileSync(file, conflicted, 'utf8');
+
+    const healed = writeTeamRulesFile(file, [], { minHits: 0 });
+    assert.equal(healed.exported, 2);
+
+    const checkAfter = verifyTeamRulesJsonl(readFileSync(file, 'utf8'));
+    assert.equal(checkAfter.valid, true);
+    assert.equal(checkAfter.conflictMarkers, false);
+    assert.equal(checkAfter.unsorted, false);
+    assert.equal(checkAfter.duplicates, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('v2.4 root action.yml GitHub Marketplace Action exists and defines composite steps', () => {
+  const actionPath = join(ROOT, 'action.yml');
+  assert.equal(existsSync(actionPath), true, 'action.yml exists at repository root');
+  const raw = readFileSync(actionPath, 'utf8');
+  assert.match(raw, /name:\s*'Agent Immune/);
+  assert.match(raw, /using:\s*'composite'/);
+  assert.match(raw, /dsh-immune-system ci-check/);
+  assert.match(raw, /dsh-immune-system team-sync --check/);
+  assert.match(raw, /dsh-immune-system wrapped/);
+});
+
+test('v2.4 dsh-immune-system/core barrel exports badge, markdown, and team-sync verification helpers', () => {
+  const indexJs = readFileSync(join(ROOT, 'dsh-immune-system', 'dist', 'core', 'index.js'), 'utf8');
+  const indexDts = readFileSync(join(ROOT, 'dsh-immune-system', 'dist', 'core', 'index.d.ts'), 'utf8');
+  for (const sym of [
+    'renderImmunityBadgeSvg',
+    'renderWrappedMarkdown',
+    'hydrateTeamRules',
+    'maybeSyncTeamRulesAfterDrain',
+    'verifyTeamRulesJsonl',
+  ]) {
+    assert.ok(indexJs.includes(sym), `dist/core/index.js exports ${sym}`);
+    assert.ok(indexDts.includes(sym), `dist/core/index.d.ts declares ${sym}`);
+  }
+  assert.equal(typeof renderImmunityBadgeSvg, 'function');
+  assert.equal(typeof renderWrappedMarkdown, 'function');
+  assert.equal(typeof hydrateTeamRules, 'function');
+  assert.equal(typeof maybeSyncTeamRulesAfterDrain, 'function');
+  assert.equal(typeof verifyTeamRulesJsonl, 'function');
+});
+
+test('v2.4 assets/immunity-badge.svg and shell completions include --badge, --markdown, --check, and --dedupe', () => {
+  const badgePath = join(ROOT, 'assets', 'immunity-badge.svg');
+  assert.equal(existsSync(badgePath), true, 'assets/immunity-badge.svg exists');
+  const badgeRaw = readFileSync(badgePath, 'utf8');
+  assert.ok(badgeRaw.startsWith('<svg') && badgeRaw.includes('agent-immune'));
+
+  const compJs = readFileSync(join(ROOT, 'dsh-immune-system', 'dist', 'zcode', 'src', 'commands', 'completions.js'), 'utf8');
+  assert.ok(compJs.includes('--check') && compJs.includes('--dedupe'));
 });

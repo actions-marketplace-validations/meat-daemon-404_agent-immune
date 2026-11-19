@@ -1,63 +1,56 @@
-name: 'Agent Immune — PR Pitfall Check'
-description: 'Zero-dependency stateless PR pitfall gate: scans git diffs against repository antibodies in AGENTS.md / CLAUDE.md.'
+name: 'Agent Immune — Coding Agent Memory & CI Guard'
+description: 'Audit coding agent rules (CLAUDE.md, .cursorrules, AGENTS.md, .immune/rules.jsonl) for leaked paths/secrets and generate Pitfall Immunity Scorecards.'
 author: 'meat-daemon-404'
 branding:
   icon: 'shield'
   color: 'green'
 
 inputs:
-  doc:
-    description: 'Path to AGENTS.md or CLAUDE.md containing the <!-- immune:generated --> pitfall block (auto-detected if omitted).'
+  mode:
+    description: 'Execution mode: "ci-check" (audit agent rules & team memory), "team-sync-check" (validate .immune/rules.jsonl), or "wrapped" (generate SVG/Markdown scorecard).'
     required: false
-    default: ''
-  base-ref:
-    description: 'Base git ref to diff against (defaults to PR base SHA or HEAD~1).'
-    required: false
-    default: ''
-  fail-on-findings:
-    description: 'Set to "false" to emit GitHub PR warnings and step summary without failing the check.'
+    default: 'ci-check'
+  strict:
+    description: 'Fail the workflow step when ci-check or team-sync --check detects violations ("true" or "false").'
     required: false
     default: 'true'
-  node-version:
-    description: 'Node.js version (requires ^22.19.0 || >=24.0.0 for built-in node:sqlite).'
+  wrapped-output:
+    description: 'Output file path when mode is "wrapped" (default: "immune-wrapped.svg").'
     required: false
-    default: '24'
+    default: 'immune-wrapped.svg'
+
+outputs:
+  status:
+    description: 'Result status ("ok" or "failed").'
+    value: ${{ steps.run_immune.outputs.status }}
 
 runs:
   using: 'composite'
   steps:
-    - name: Setup Node.js
-      uses: actions/setup-node@v7
-      with:
-        node-version: ${{ inputs.node-version }}
-
-    - name: Run Agent Immune PR Pitfall Check
+    - name: Run Agent Immune Gate
+      id: run_immune
       shell: bash
       env:
-        INPUT_DOC: ${{ inputs.doc }}
-        INPUT_BASE_REF: ${{ inputs.base-ref }}
-        INPUT_FAIL: ${{ inputs.fail-on-findings }}
-        PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        PR_BASE_REF: ${{ github.base_ref }}
+        INPUT_MODE: ${{ inputs.mode }}
+        INPUT_STRICT: ${{ inputs.strict }}
+        INPUT_WRAPPED_OUT: ${{ inputs.wrapped-output }}
       run: |
         set -euo pipefail
-        BASE="${INPUT_BASE_REF:-${PR_BASE_SHA:-HEAD~1}}"
-        DIFF_FILE="$(mktemp)"
-        if ! git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
-          git fetch --no-tags --depth=1 origin "$BASE" >/dev/null 2>&1 || \
-            { [ -n "${PR_BASE_REF:-}" ] && git fetch --no-tags --depth=1 origin "$PR_BASE_REF" >/dev/null 2>&1 && BASE="FETCH_HEAD"; } || true
-        fi
-        if git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
-          git diff "$BASE"...HEAD > "$DIFF_FILE" 2>/dev/null || git diff "$BASE" HEAD > "$DIFF_FILE" 2>/dev/null || true
+        if [ "$INPUT_MODE" = "team-sync-check" ]; then
+          npx --yes dsh-immune-system team-sync --check
+        elif [ "$INPUT_MODE" = "wrapped" ]; then
+          npx --yes dsh-immune-system wrapped "$INPUT_WRAPPED_OUT"
+          if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+            npx --yes dsh-immune-system wrapped --markdown >> "$GITHUB_STEP_SUMMARY" || true
+          fi
         else
-          git diff HEAD~1 HEAD > "$DIFF_FILE" 2>/dev/null || git diff HEAD > "$DIFF_FILE" 2>/dev/null || true
+          if [ "$INPUT_STRICT" = "true" ]; then
+            npx --yes dsh-immune-system ci-check
+          else
+            npx --yes dsh-immune-system ci-check || true
+          fi
+          if [ -f ".immune/rules.jsonl" ]; then
+            npx --yes dsh-immune-system team-sync --check
+          fi
         fi
-        EXTRA_ARGS=("--diff" "$DIFF_FILE" "--github")
-        if [ -n "$INPUT_DOC" ]; then
-          EXTRA_ARGS+=("--doc" "$INPUT_DOC")
-        fi
-        if [ "$INPUT_FAIL" = "false" ]; then
-          EXTRA_ARGS+=("--warn-only")
-        fi
-        node "${{ github.action_path }}/dsh-immune-system/dist/zcode/src/cli.js" ci-check "${EXTRA_ARGS[@]}"
-        rm -f "$DIFF_FILE"
+        echo "status=ok" >> "${GITHUB_OUTPUT:-/dev/null}"

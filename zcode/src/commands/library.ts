@@ -7,8 +7,8 @@ import { strings } from '../../../core/i18n.js';
 import { SNAPSHOT_FORMAT, exportLibrary, importLibrary } from '../../../core/sync.js';
 import { syncDoc } from '../../../core/sync-doc.js';
 import { ciCheck, formatShareViolations, parseManagedBlock, shareSanityCheck } from '../../../core/share-guard.js';
-import { computeImmunityScore, renderWrappedSvg, type WrappedInput } from '../../../core/wrapped.js';
-import { parseTeamRulesJsonl, writeTeamRulesFile } from '../../../core/team-sync.js';
+import { computeImmunityScore, renderImmunityBadgeSvg, renderWrappedMarkdown, renderWrappedSvg, type WrappedInput } from '../../../core/wrapped.js';
+import { parseTeamRulesJsonl, verifyTeamRulesJsonl, writeTeamRulesFile } from '../../../core/team-sync.js';
 import { dshDirOf } from '../root-marker.js';
 import { clamp, flagValue, pad } from './shared.js';
 
@@ -361,8 +361,21 @@ export function cmdWrapped(store: ImmuneStore, args: string[]): number {
     ...(topNemeses.length > 0 ? { topNemeses } : {}),
     judgeAgreementPct: 97.81,
   };
+  const asBadge = args.includes('--badge');
+  const asMarkdown = args.includes('--markdown');
   const score = computeImmunityScore(input);
-  const svg = renderWrappedSvg(input);
+
+  if (asMarkdown) {
+    const md = renderWrappedMarkdown(input);
+    if (asJson) {
+      process.stdout.write(`${JSON.stringify({ score, markdown: md, stats: input }, null, 2)}\n`);
+    } else {
+      process.stdout.write(md);
+    }
+    return 0;
+  }
+
+  const svg = asBadge ? renderImmunityBadgeSvg(input) : renderWrappedSvg(input);
 
   if (asJson) {
     if (explicitOut) {
@@ -371,7 +384,7 @@ export function cmdWrapped(store: ImmuneStore, args: string[]): number {
       writeFileSync(outPath, svg, 'utf8');
     }
     process.stdout.write(
-      `${JSON.stringify({ score, outPath: explicitOut ? resolve(explicitOut) : null, stats: input }, null, 2)}\n`,
+      `${JSON.stringify({ score, badge: asBadge, outPath: explicitOut ? resolve(explicitOut) : null, stats: input }, null, 2)}\n`,
     );
     return 0;
   }
@@ -379,17 +392,19 @@ export function cmdWrapped(store: ImmuneStore, args: string[]): number {
     process.stdout.write(`${svg}\n`);
     return 0;
   }
-  const outPath = resolve(explicitOut ?? 'immune-wrapped.svg');
+  const outPath = resolve(explicitOut ?? (asBadge ? 'immune-badge.svg' : 'immune-wrapped.svg'));
   mkdirSync(dirname(outPath), { recursive: true });
   writeFileSync(outPath, svg, 'utf8');
   process.stdout.write(
-    `wrapped scorecard (Immunity Score: ${score}/100, ${active.length} active rule(s), ${totalInjections} deliveries) -> ${outPath}\n`,
+    `wrapped ${asBadge ? 'badge' : 'scorecard'} (Immunity Score: ${score}/100, ${active.length} active rule(s), ${totalInjections} deliveries) -> ${outPath}\n`,
   );
   return 0;
 }
 
 export function cmdTeamSync(store: ImmuneStore, args: string[]): number {
   const isImport = args.includes('--import');
+  const isCheck = args.includes('--check');
+  const isDedupe = args.includes('--dedupe');
   const asJson = args.includes('--json');
   const explicitPath = flagValue(args, '--path') ?? args.find((a) => !a.startsWith('-'));
   const rawMinHits = flagValue(args, '--min-hits');
@@ -398,6 +413,36 @@ export function cmdTeamSync(store: ImmuneStore, args: string[]): number {
       ? Math.max(0, Number(rawMinHits))
       : 1;
   const filePath = resolve(explicitPath ?? join('.immune', 'rules.jsonl'));
+
+  if (isCheck) {
+    if (!existsSync(filePath)) {
+      process.stderr.write(`team-sync check: file not found: ${filePath}\n`);
+      return 2;
+    }
+    const report = verifyTeamRulesJsonl(readFileSync(filePath, 'utf8'));
+    if (asJson) {
+      process.stdout.write(`${JSON.stringify({ mode: 'check', file: filePath, ...report }, null, 2)}\n`);
+    } else {
+      process.stdout.write(
+        `team-sync check: ${report.valid ? 'OK' : 'FAILED'} (${report.total} rule(s), unsorted=${report.unsorted}, duplicates=${report.duplicates}, unsafe=${report.unsafeCount}, conflicts=${report.conflictMarkers})\n`,
+      );
+    }
+    return report.valid ? 0 : 1;
+  }
+
+  if (isDedupe) {
+    if (!existsSync(filePath)) {
+      process.stderr.write(`team-sync dedupe: file not found: ${filePath}\n`);
+      return 2;
+    }
+    const report = writeTeamRulesFile(filePath, [], { minHits: 0 });
+    if (asJson) {
+      process.stdout.write(`${JSON.stringify({ mode: 'dedupe', file: filePath, ...report }, null, 2)}\n`);
+    } else {
+      process.stdout.write(`team-sync dedupe: healed and sorted ${report.exported} rule(s) -> ${filePath}\n`);
+    }
+    return 0;
+  }
 
   if (isImport) {
     if (!existsSync(filePath)) {

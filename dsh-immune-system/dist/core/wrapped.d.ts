@@ -3,6 +3,8 @@ export interface WrappedNemesis {
     readonly count: number;
 }
 export interface WrappedInput {
+    readonly title?: string;
+    readonly subtitle?: string;
     readonly totalCalls: number;
     readonly repeatFailures: number;
     readonly avoidableTokens: number;
@@ -10,16 +12,26 @@ export interface WrappedInput {
     readonly totalInjections: number;
     readonly hosts?: ReadonlyArray<string>;
     readonly topNemeses?: ReadonlyArray<WrappedNemesis>;
+    readonly generatedAt?: string;
     readonly judgeAgreementPct?: number;
 }
-/** Strictly escape XML special characters so user/trace text never breaks SVG. */
+/** Escape XML/SVG text nodes so user rules or paths never break SVG rendering. */
 export declare function escapeSvgText(raw: string): string;
-/** Format large integers compactly (e.g. 20100 -> "20.1k", 1420000 -> "1.42M"). */
+/** Format large numbers compactly (e.g. 20100 -> "20.1k", 1420000 -> "1.42M"). */
 export declare function formatCompactNumber(value: number): string;
 /**
- * Compute a bounded 0..100 Immunity Score from active rules, injections, and
- * observed repeat-failure coverage.
+ * Compute an overall 0-100 Immunity Score from active rules, injections, and repeat failure rate.
  */
 export declare function computeImmunityScore(input: WrappedInput): number;
-/** Render a 1200x630 OpenGraph-ready SVG scorecard. */
+/**
+ * Render a shields.io-compatible flat SVG badge showing the live Immunity Score and active antibody count.
+ */
+export declare function renderImmunityBadgeSvg(input: WrappedInput): string;
+/**
+ * Render a ready-to-paste GitHub Markdown scorecard snippet for READMEs, PR comments, and CI Step Summaries.
+ */
+export declare function renderWrappedMarkdown(input: WrappedInput): string;
+/**
+ * Render a standalone 1200x630 SVG scorecard ready for GitHub READMEs, PRs, and X/Twitter.
+ */
 export declare function renderWrappedSvg(input: WrappedInput): string;

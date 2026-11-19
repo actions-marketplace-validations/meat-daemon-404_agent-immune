@@ -68,12 +68,12 @@ export function serializeTeamRulesJsonl(candidates, opts = {}) {
         skippedUnsafe,
     };
 }
-/** Parse a `.immune/rules.jsonl` file back into validated records. */
+/** Parse a `.immune/rules.jsonl` file back into validated records (auto-stripping Git conflict markers). */
 export function parseTeamRulesJsonl(raw) {
     const out = [];
     for (const line of raw.split(/\r?\n/)) {
         const trimmed = line.trim();
-        if (!trimmed || trimmed.startsWith('#'))
+        if (!trimmed || trimmed.startsWith('#') || /^(?:<{7}|={7}|>{7})/.test(trimmed))
             continue;
         try {
             const parsed = JSON.parse(trimmed);
@@ -152,4 +152,40 @@ export function maybeSyncTeamRulesAfterDrain(store, workspace = process.cwd(), e
     const minHits = Number.isFinite(minHitsRaw) && minHitsRaw >= 1 ? Math.floor(minHitsRaw) : 3;
     const res = writeTeamRulesFile(filePath, store.listAll(false), { minHits });
     return { exported: res.exported, skippedUnsafe: res.skippedUnsafe, path: filePath };
+}
+/**
+ * Audit a `.immune/rules.jsonl` payload for CI gates (`immune team-sync --check`):
+ * detects git merge conflict markers, unsorted hashes, duplicate hashes, and unsafe paths/secrets.
+ */
+export function verifyTeamRulesJsonl(raw) {
+    const conflictMarkers = /^(?:<{7}|={7}|>{7})/m.test(raw);
+    const records = parseTeamRulesJsonl(raw);
+    const seen = new Set();
+    let duplicates = 0;
+    let unsafeCount = 0;
+    let unsorted = false;
+    let prevHash = '';
+    for (const rec of records) {
+        if (seen.has(rec.hash)) {
+            duplicates += 1;
+        }
+        else {
+            seen.add(rec.hash);
+        }
+        if (prevHash && rec.hash.localeCompare(prevHash) < 0) {
+            unsorted = true;
+        }
+        prevHash = rec.hash;
+        if (!isTeamShareSafe(rec)) {
+            unsafeCount += 1;
+        }
+    }
+    return {
+        valid: !conflictMarkers && !unsorted && duplicates === 0 && unsafeCount === 0,
+        total: records.length,
+        unsorted,
+        duplicates,
+        unsafeCount,
+        conflictMarkers,
+    };
 }

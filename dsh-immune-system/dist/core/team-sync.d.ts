@@ -39,7 +39,7 @@ export declare function serializeTeamRulesJsonl(candidates: ReadonlyArray<TeamSy
     exported: number;
     skippedUnsafe: number;
 };
-/** Parse a `.immune/rules.jsonl` file back into validated records. */
+/** Parse a `.immune/rules.jsonl` file back into validated records (auto-stripping Git conflict markers). */
 export declare function parseTeamRulesJsonl(raw: string): TeamRuleRecord[];
 /** Write sorted team rules to disk (e.g. `.immune/rules.jsonl`), merging with existing rows. */
 export declare function writeTeamRulesFile(filePath: string, candidates: ReadonlyArray<TeamSyncCandidate>, opts?: {
@@ -70,3 +70,16 @@ export declare function maybeSyncTeamRulesAfterDrain(store: {
     skippedUnsafe: number;
     path: string;
 } | null;
+export interface TeamRulesCheckReport {
+    readonly valid: boolean;
+    readonly total: number;
+    readonly unsorted: boolean;
+    readonly duplicates: number;
+    readonly unsafeCount: number;
+    readonly conflictMarkers: boolean;
+}
+/**
+ * Audit a `.immune/rules.jsonl` payload for CI gates (`immune team-sync --check`):
+ * detects git merge conflict markers, unsorted hashes, duplicate hashes, and unsafe paths/secrets.
+ */
+export declare function verifyTeamRulesJsonl(raw: string): TeamRulesCheckReport;
