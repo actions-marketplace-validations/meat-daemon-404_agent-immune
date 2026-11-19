@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -18,6 +19,10 @@ import {
   serializeTeamRulesJsonl,
   writeTeamRulesFile,
 } from '../dsh-immune-system/dist/core/team-sync.js';
+import {
+  renderCommandHelp,
+  renderMainHelp,
+} from '../dsh-immune-system/dist/zcode/src/commands/shared.js';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
@@ -126,4 +131,39 @@ test('v2.4 team-sync serializes deterministically sorted JSONL and filters unsaf
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('v2.4 CLI help surfaces wrapped and team-sync commands and serializeTeamRulesJsonl is exported', () => {
+  const mainHelp = renderMainHelp('2.3.0');
+  assert.match(mainHelp, /wrapped \[out\.svg\]/);
+  assert.match(mainHelp, /team-sync \[--import\]/);
+
+  const wrappedHelp = renderCommandHelp('wrapped');
+  assert.ok(wrappedHelp && wrappedHelp.includes('immune wrapped'));
+
+  const teamSyncHelp = renderCommandHelp('team-sync');
+  assert.ok(teamSyncHelp && teamSyncHelp.includes('immune team-sync'));
+
+  const serialized = serializeTeamRulesJsonl(
+    [
+      {
+        trigger_pattern: 'Cargo.toml E0502 borrow',
+        symptom: 'mutable borrow conflict',
+        prescription: 'Split mutable struct borrows into disjoint fields',
+        tool_name: 'Bash',
+        hit_count: 4,
+      },
+    ],
+    { minHits: 3 },
+  );
+  assert.equal(serialized.exported, 1);
+});
+
+test('v2.4 end-to-end A/B multi-turn simulation benchmark achieves >=90% repeat pitfall reduction', () => {
+  const benchScript = join(ROOT, 'scripts', 'bench-ab-simulation.mjs');
+  assert.equal(existsSync(benchScript), true);
+  const run = spawnSync(process.execPath, [benchScript], { cwd: ROOT, encoding: 'utf8' });
+  assert.equal(run.status, 0, run.stderr);
+  assert.match(run.stdout, /-95\.0%/);
+  assert.match(run.stdout, /-63\.3%/);
 });

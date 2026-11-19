@@ -17,6 +17,8 @@ import {
   cmdList,
   cmdSearch,
   cmdSyncDoc,
+  cmdTeamSync,
+  cmdWrapped,
 } from './commands/library.js';
 import {
   cmdConsolidate,
@@ -111,6 +113,10 @@ function main(argv: string[]): number {
         return cmdImportJson(store, args);
       case 'sync-doc':
         return cmdSyncDoc(store, args);
+      case 'wrapped':
+        return cmdWrapped(store, args);
+      case 'team-sync':
+        return cmdTeamSync(store, args);
       case 'stats':
         return cmdStats(store, args);
       case 'detours':

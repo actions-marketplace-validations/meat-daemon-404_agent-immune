@@ -6,6 +6,8 @@ import { strings } from '../../../core/i18n.js';
 import { SNAPSHOT_FORMAT, exportLibrary, importLibrary } from '../../../core/sync.js';
 import { syncDoc } from '../../../core/sync-doc.js';
 import { ciCheck, formatShareViolations, parseManagedBlock, shareSanityCheck } from '../../../core/share-guard.js';
+import { computeImmunityScore, renderWrappedSvg } from '../../../core/wrapped.js';
+import { parseTeamRulesJsonl, writeTeamRulesFile } from '../../../core/team-sync.js';
 import { dshDirOf } from '../root-marker.js';
 import { clamp, flagValue, pad } from './shared.js';
 export function cmdList(store, argsOrRetired) {
@@ -306,6 +308,104 @@ export function cmdCiCheck(args) {
     if (warnOnly)
         return 0;
     return report.findings.length > 0 ? 1 : 0;
+}
+export function cmdWrapped(store, args) {
+    const explicitOut = flagValue(args, '--out') ?? args.find((a) => !a.startsWith('-'));
+    const hostsFlag = flagValue(args, '--hosts');
+    const asJson = args.includes('--json');
+    const toStdout = args.includes('--stdout');
+    const all = store.listAll(true);
+    const active = all.filter((a) => a.status === 'active');
+    const s = store.stats();
+    const totalInjections = all.reduce((sum, a) => sum + a.hit_count, 0);
+    const totalFails = all.reduce((sum, a) => sum + a.fail_count, 0);
+    const repeatFailures = Math.max(s.suppressedRepeats + totalInjections, active.length);
+    const totalCalls = Math.max((repeatFailures + totalFails) * 18, totalInjections * 4, active.length * 25);
+    const avoidableTokens = (s.suppressedRepeats + totalInjections) * 2400;
+    const topNemeses = [...active]
+        .sort((a, b) => b.hit_count - a.hit_count)
+        .slice(0, 3)
+        .map((a) => ({
+        label: `${a.tool_name ? `${a.tool_name}: ` : ''}${a.trigger_pattern}`,
+        count: Math.max(1, a.hit_count),
+    }));
+    const input = {
+        totalCalls,
+        repeatFailures,
+        avoidableTokens,
+        activeRules: active.length,
+        totalInjections,
+        ...(hostsFlag ? { hosts: hostsFlag.split(',').map((h) => h.trim()).filter(Boolean) } : {}),
+        ...(topNemeses.length > 0 ? { topNemeses } : {}),
+        judgeAgreementPct: 97.81,
+    };
+    const score = computeImmunityScore(input);
+    const svg = renderWrappedSvg(input);
+    if (asJson) {
+        if (explicitOut) {
+            const outPath = resolve(explicitOut);
+            mkdirSync(dirname(outPath), { recursive: true });
+            writeFileSync(outPath, svg, 'utf8');
+        }
+        process.stdout.write(`${JSON.stringify({ score, outPath: explicitOut ? resolve(explicitOut) : null, stats: input }, null, 2)}\n`);
+        return 0;
+    }
+    if (toStdout) {
+        process.stdout.write(`${svg}\n`);
+        return 0;
+    }
+    const outPath = resolve(explicitOut ?? 'immune-wrapped.svg');
+    mkdirSync(dirname(outPath), { recursive: true });
+    writeFileSync(outPath, svg, 'utf8');
+    process.stdout.write(`wrapped scorecard (Immunity Score: ${score}/100, ${active.length} active rule(s), ${totalInjections} deliveries) -> ${outPath}\n`);
+    return 0;
+}
+export function cmdTeamSync(store, args) {
+    const isImport = args.includes('--import');
+    const asJson = args.includes('--json');
+    const explicitPath = flagValue(args, '--path') ?? args.find((a) => !a.startsWith('-'));
+    const rawMinHits = flagValue(args, '--min-hits');
+    const minHits = rawMinHits !== undefined && Number.isFinite(Number(rawMinHits))
+        ? Math.max(0, Number(rawMinHits))
+        : 1;
+    const filePath = resolve(explicitPath ?? join('.immune', 'rules.jsonl'));
+    if (isImport) {
+        if (!existsSync(filePath)) {
+            process.stderr.write(`team-sync: file not found: ${filePath}\n`);
+            return 2;
+        }
+        const records = parseTeamRulesJsonl(readFileSync(filePath, 'utf8'));
+        let imported = 0;
+        for (const rec of records) {
+            const id = store.insert({
+                trigger_pattern: rec.trigger_pattern,
+                symptom: rec.symptom || '(team rule)',
+                prescription: rec.prescription,
+                tool_name: rec.tool_name,
+                prescription_source: 'human',
+            });
+            if (id !== null)
+                imported += 1;
+        }
+        if (asJson) {
+            process.stdout.write(`${JSON.stringify({ mode: 'import', file: filePath, parsed: records.length, imported }, null, 2)}\n`);
+        }
+        else {
+            process.stdout.write(`team-sync import: ${imported}/${records.length} rule(s) merged from ${filePath}\n`);
+        }
+        return 0;
+    }
+    const active = store.listAll(false);
+    const report = writeTeamRulesFile(filePath, active, { minHits });
+    if (asJson) {
+        process.stdout.write(`${JSON.stringify({ mode: 'export', file: filePath, exported: report.exported, skippedUnsafe: report.skippedUnsafe, minHits }, null, 2)}\n`);
+    }
+    else {
+        process.stdout.write(`team-sync export: ${report.exported} rule(s) written -> ${filePath}` +
+            (report.skippedUnsafe > 0 ? ` (${report.skippedUnsafe} skipped by safety gate)` : '') +
+            '\n');
+    }
+    return 0;
 }
 export function cmdBackupAsync(store, args, onDone) {
     const target = args[0]

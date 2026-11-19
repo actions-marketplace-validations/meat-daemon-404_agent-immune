@@ -6,7 +6,7 @@
  */
 import { ImmuneStore } from '../../core/store/index.js';
 import { packageVersion } from '../../core/version.js';
-import { cmdBackupAsync, cmdCiCheck, cmdExport, cmdExportJson, cmdForget, cmdImportJson, cmdLearn, cmdList, cmdSearch, cmdSyncDoc, } from './commands/library.js';
+import { cmdBackupAsync, cmdCiCheck, cmdExport, cmdExportJson, cmdForget, cmdImportJson, cmdLearn, cmdList, cmdSearch, cmdSyncDoc, cmdTeamSync, cmdWrapped, } from './commands/library.js';
 import { cmdConsolidate, cmdCoverage, cmdDetours, cmdExplain, cmdHygiene, cmdModels, cmdReceipts, cmdRewriteSyncOrAsync, cmdStats, cmdTriage, } from './commands/intelligence.js';
 import { cmdAudit, cmdBackfillAsync, cmdIngestDisk, cmdIngestSkill, cmdSeed, cmdWorkspaces, } from './commands/ingest.js';
 import { cmdCompletions } from './commands/completions.js';
@@ -81,6 +81,10 @@ function main(argv) {
                 return cmdImportJson(store, args);
             case 'sync-doc':
                 return cmdSyncDoc(store, args);
+            case 'wrapped':
+                return cmdWrapped(store, args);
+            case 'team-sync':
+                return cmdTeamSync(store, args);
             case 'stats':
                 return cmdStats(store, args);
             case 'detours':

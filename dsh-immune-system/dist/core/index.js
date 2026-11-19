@@ -12,3 +12,5 @@ export { BUILTIN_PACKS } from './packs.js';
 export { HOSTS, connectAllDetected, connectHost, connectStatus, disconnectAllConnected, disconnectHost, } from './connect.js';
 export { gitHookStatus, installGitHook, removeGitHook } from './git-hook.js';
 export { redact, redactAndClamp, redactOutbound } from './redact.js';
+export { computeImmunityScore, escapeSvgText, formatCompactNumber, renderWrappedSvg, } from './wrapped.js';
+export { canonicalRuleHash, isTeamShareSafe, parseTeamRulesJsonl, serializeTeamRulesJsonl, writeTeamRulesFile, } from './team-sync.js';

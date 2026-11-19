@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 /**
- * Verify that all six version-carrying manifests (8 fields) agree.
+ * Verify that all seven version-carrying manifests (10 fields) agree.
  *
  * They drifted once by accident (package.json said 0.2.0 while the plugin
  * manifest said 0.3.8, and .claude-plugin/marketplace.json lagged at 1.0.58),
- * and the npm publish flow publishes from the ROOT manifest while ZCode and
- * Claude Code read their plugin manifests — a mismatch means users install one
- * version while a marketplace advertises another. This check is wired into CI
- * so drift fails the build instead of surfacing in a marketplace.
+ * and the npm publish flow publishes from the ROOT manifest while ZCode,
+ * Claude Code, and the Official MCP Registry read their respective manifests —
+ * a mismatch means users install one version while a marketplace advertises
+ * another. This check is wired into CI so drift fails the build instead of
+ * surfacing in a marketplace.
  *
  * The dsh.version field inside both package.json files must also agree, since
  * the hub displays it as the plugin's version.
@@ -25,6 +26,7 @@ const pluginManifest = read('dsh-immune-system/.zcode-plugin/plugin.json');
 const market = read('marketplace.json');
 const claudePlugin = read('.claude-plugin/plugin.json');
 const claudeMarket = read('.claude-plugin/marketplace.json');
+const mcpServer = read('server.json');
 
 const versions = {
   'package.json': rootPkg.version,
@@ -35,6 +37,8 @@ const versions = {
   'marketplace.json': market.plugins[0]?.version,
   '.claude-plugin/plugin.json': claudePlugin.version,
   '.claude-plugin/marketplace.json': claudeMarket.plugins?.[0]?.version,
+  'server.json': mcpServer.version,
+  'server.json (packages[0])': mcpServer.packages?.[0]?.version,
 };
 
 let failed = false;
@@ -46,7 +50,7 @@ for (const [where, version] of Object.entries(versions)) {
 }
 
 if (failed || seen.size > 1) {
-  console.error(`\nversion drift: ${[...seen].join(' vs ')} — bump all six manifests together`);
+  console.error(`\nversion drift: ${[...seen].join(' vs ')} — bump all seven manifests together`);
   process.exit(1);
 }
 
@@ -54,6 +58,7 @@ for (const [label, name] of [
   ['marketplace.json', market.plugins[0]?.name],
   ['.claude-plugin/plugin.json', claudePlugin.name],
   ['.claude-plugin/marketplace.json', claudeMarket.plugins?.[0]?.name],
+  ['server.json packages[0].identifier', mcpServer.packages?.[0]?.identifier],
 ]) {
   if (name && name !== rootPkg.name) {
     console.error(`${label} entry name (${name}) != root package name (${rootPkg.name})`);
@@ -61,4 +66,4 @@ for (const [label, name] of [
   }
 }
 
-console.log(`\nall 6 manifests (8 version fields) agree on ${rootPkg.version}`);
+console.log(`\nall 7 manifests (10 version fields) agree on ${rootPkg.version}`);

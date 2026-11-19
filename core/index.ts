@@ -76,3 +76,20 @@ export {
 } from './connect.js';
 export { gitHookStatus, installGitHook, removeGitHook, type GitHookStatus } from './git-hook.js';
 export { redact, redactAndClamp, redactOutbound } from './redact.js';
+export {
+  computeImmunityScore,
+  escapeSvgText,
+  formatCompactNumber,
+  renderWrappedSvg,
+  type WrappedInput,
+  type WrappedNemesis,
+} from './wrapped.js';
+export {
+  canonicalRuleHash,
+  isTeamShareSafe,
+  parseTeamRulesJsonl,
+  serializeTeamRulesJsonl,
+  writeTeamRulesFile,
+  type TeamRuleRecord,
+  type TeamSyncCandidate,
+} from './team-sync.js';
