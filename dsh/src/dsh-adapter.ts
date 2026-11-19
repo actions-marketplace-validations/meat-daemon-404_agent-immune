@@ -84,7 +84,8 @@ export interface DshAgent {
   /** `Agent.id` is typed `SessionId` — `runtime-types.ts:66`. */
   readonly id: string;
   readonly session: { readonly header: { readonly id: string } };
-  /** `runtime-types.ts:143`. Synchronous; queues onto the `next-step` inbox. */\n  inject(message: DshUserMessage): void;
+  /** `runtime-types.ts:143`. Synchronous; queues onto the `next-step` inbox. */
+  inject(message: DshUserMessage): void;
 }
 
 /** Tool failure detail. Mirrors `ToolFailure` at `packages\core\tools\src\index.ts:481`. */
