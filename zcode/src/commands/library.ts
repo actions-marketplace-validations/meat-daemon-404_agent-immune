@@ -9,6 +9,9 @@ import { syncDoc } from '../../../core/sync-doc.js';
 import { ciCheck, formatShareViolations, parseManagedBlock, shareSanityCheck } from '../../../core/share-guard.js';
 import { computeImmunityScore, renderImmunityBadgeSvg, renderWrappedMarkdown, renderWrappedSvg, type WrappedInput } from '../../../core/wrapped.js';
 import { parseTeamRulesJsonl, verifyTeamRulesJsonl, writeTeamRulesFile } from '../../../core/team-sync.js';
+import { diagnoseAgentArchetype, renderDiagnosisMarkdown, renderDiagnosisSvg, renderDiagnosisTerminal } from '../../../core/diagnose.js';
+import { IDE_TARGET_PATHS, compileIdeRules, type IdeRuleTarget } from '../../../core/compile-rules.js';
+import { renderAutopsyMarkdown, renderAutopsyTerminal, runPitfallAutopsy } from '../../../core/autopsy.js';
 import { dshDirOf } from '../root-marker.js';
 import { clamp, flagValue, pad } from './shared.js';
 
@@ -501,4 +504,101 @@ export function cmdBackupAsync(store: ImmuneStore, args: string[], onDone: () =>
       process.exitCode = 1;
     })
     .finally(onDone);
+}
+
+export function cmdDiagnose(store: ImmuneStore, args: string[]): number {
+  const asJson = args.includes('--json');
+  const asMarkdown = args.includes('--markdown');
+  const report = diagnoseAgentArchetype(store.listAll(false));
+  if (asJson) {
+    process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+    return 0;
+  }
+  if (args.includes('--svg')) {
+    const out = resolve(flagValue(args, '--out') ?? args.find((a) => !a.startsWith('-')) ?? 'immune-diagnosis.svg');
+    writeFileSync(out, renderDiagnosisSvg(report), 'utf8');
+    process.stdout.write(`diagnosis radar SVG (${report.archetype.id}, ${report.overallImmunityPct}%) -> ${out}\n`);
+    return 0;
+  }
+  if (asMarkdown) {
+    process.stdout.write(renderDiagnosisMarkdown(report));
+    return 0;
+  }
+  process.stdout.write(renderDiagnosisTerminal(report));
+  return 0;
+}
+
+export function cmdCompileRules(store: ImmuneStore, args: string[]): number {
+  const asJson = args.includes('--json');
+  const dryRun = args.includes('--dry-run');
+  const rawTarget = (flagValue(args, '--target') ?? args.find((a) => !a.startsWith('-')) ?? 'all').toLowerCase();
+  const rawMinHits = flagValue(args, '--min-hits');
+  const minHits =
+    rawMinHits !== undefined && Number.isFinite(Number(rawMinHits))
+      ? Math.max(0, Number(rawMinHits))
+      : 1;
+
+  const validTargets = Object.keys(IDE_TARGET_PATHS) as IdeRuleTarget[];
+  let targets: IdeRuleTarget[];
+  if (rawTarget === 'all') {
+    targets = validTargets;
+  } else {
+    const requested = rawTarget.split(',').map((s) => s.trim()) as IdeRuleTarget[];
+    const unknown = requested.filter((t) => !validTargets.includes(t));
+    if (unknown.length > 0) {
+      process.stderr.write(
+        `compile-rules: unknown target(s): ${unknown.join(', ')}. Supported: all, ${validTargets.join(', ')}\n`,
+      );
+      return 2;
+    }
+    targets = requested;
+  }
+
+  const compiled = compileIdeRules(process.cwd(), store.listAll(false), {
+    targets,
+    minHits,
+    dryRun,
+  });
+
+  if (asJson) {
+    process.stdout.write(
+      `${JSON.stringify(
+        {
+          dryRun,
+          minHits,
+          targets: compiled.map((c) => ({
+            target: c.target,
+            path: c.relativePath,
+            rulesCount: c.rulesCount,
+          })),
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    return 0;
+  }
+
+  for (const item of compiled) {
+    process.stdout.write(
+      `compile-rules (${item.target}): ${item.rulesCount} rule(s) ${dryRun ? 'previewed for' : 'written ->'} ${item.relativePath}\n`,
+    );
+  }
+  return 0;
+}
+
+export function cmdAutopsy(store: ImmuneStore, args: string[]): number {
+  const asJson = args.includes('--json');
+  const asMarkdown = args.includes('--markdown');
+  const report = runPitfallAutopsy(store.listAll(false));
+  if (asJson) {
+    process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+    return 0;
+  }
+  if (asMarkdown) {
+    process.stdout.write(renderAutopsyMarkdown(report));
+    return 0;
+  }
+  process.stdout.write(renderAutopsyTerminal(report));
+  return 0;
 }

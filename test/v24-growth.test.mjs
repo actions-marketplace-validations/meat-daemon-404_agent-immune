@@ -25,6 +25,23 @@ import {
   writeTeamRulesFile,
 } from '../dsh-immune-system/dist/core/team-sync.js';
 import {
+  classifyRuleDomain,
+  diagnoseAgentArchetype,
+  renderDiagnosisMarkdown,
+  renderDiagnosisSvg,
+  renderDiagnosisTerminal,
+} from '../dsh-immune-system/dist/core/diagnose.js';
+import {
+  compileIdeRules,
+  inferRuleGlobs,
+  renderCursorMdc,
+} from '../dsh-immune-system/dist/core/compile-rules.js';
+import {
+  renderAutopsyMarkdown,
+  renderAutopsyTerminal,
+  runPitfallAutopsy,
+} from '../dsh-immune-system/dist/core/autopsy.js';
+import {
   renderCommandHelp,
   renderMainHelp,
 } from '../dsh-immune-system/dist/zcode/src/commands/shared.js';
@@ -210,21 +227,17 @@ test('v2.4 maybeSyncTeamRulesAfterDrain auto-exports proven share-safe rules whe
       },
     };
 
-    // When .immune/rules.jsonl does not exist and IMMUNE_TEAM_SYNC is not '1', no-op
     assert.equal(maybeSyncTeamRulesAfterDrain(mockStore, dir, {}), null);
 
-    // When IMMUNE_TEAM_SYNC='1', creates .immune/rules.jsonl automatically
     const synced = maybeSyncTeamRulesAfterDrain(mockStore, dir, { IMMUNE_TEAM_SYNC: '1' });
     assert.ok(synced);
     assert.equal(synced.exported, 1);
     assert.equal(existsSync(join(dir, '.immune', 'rules.jsonl')), true);
 
-    // Subsequent drain without IMMUNE_TEAM_SYNC='1' still syncs because .immune/rules.jsonl now exists
     const syncedAgain = maybeSyncTeamRulesAfterDrain(mockStore, dir, {});
     assert.ok(syncedAgain);
     assert.equal(syncedAgain.exported, 1);
 
-    // Opt-out via IMMUNE_TEAM_SYNC='off'
     assert.equal(maybeSyncTeamRulesAfterDrain(mockStore, dir, { IMMUNE_TEAM_SYNC: 'off' }), null);
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -369,4 +382,211 @@ test('v2.4 assets/immunity-badge.svg and shell completions include --badge, --ma
 
   const compJs = readFileSync(join(ROOT, 'dsh-immune-system', 'dist', 'zcode', 'src', 'commands', 'completions.js'), 'utf8');
   assert.ok(compJs.includes('--check') && compJs.includes('--dedupe'));
+});
+
+test('v2.4 diagnoseAgentArchetype classifies 5 engineering domains and assigns vivid failure archetype + vaccine', () => {
+  const rules = [
+    {
+      trigger_pattern: 'Edit target file not read',
+      symptom: 'Edit failed because file was not read in session',
+      prescription: 'Read target file lines before calling Edit',
+      tool_name: 'Edit',
+      hit_count: 15,
+    },
+    {
+      trigger_pattern: 'Write path separator',
+      symptom: 'ENOENT on Windows backslash path',
+      prescription: 'Normalize paths with path.posix/win32',
+      tool_name: 'Write',
+      hit_count: 9,
+    },
+    {
+      trigger_pattern: 'Cargo.toml E0502 borrow',
+      symptom: 'mutable borrow conflict',
+      prescription: 'Split mutable struct borrows',
+      tool_name: 'Bash',
+      hit_count: 3,
+    },
+  ];
+
+  assert.equal(classifyRuleDomain(rules[0]), 'filesystem');
+  assert.equal(classifyRuleDomain(rules[2]), 'types');
+
+  const report = diagnoseAgentArchetype(rules);
+  assert.equal(report.activeRules, 3);
+  assert.equal(report.dominantDomain, 'filesystem');
+  assert.equal(report.archetype.id, 'blind-surgeon');
+  assert.equal(report.radar.length, 5);
+
+  const term = renderDiagnosisTerminal(report);
+  assert.match(term, /The Blind Surgeon/);
+  assert.match(term, /npx dsh-immune-system seed/);
+
+  const md = renderDiagnosisMarkdown(report);
+  assert.match(md, /Agent Pitfall Archetype/);
+  assert.match(md, /Prescribed System-Prompt Vaccine/);
+});
+
+test('v2.4 diagnoseAgentArchetype promotes well-rounded high-rule libraries to The Immunized Sentinel', () => {
+  const rules = [];
+  const domains = [
+    { trigger_pattern: 'Edit read file', symptom: 'not read', prescription: 'Read first', tool_name: 'Edit' },
+    { trigger_pattern: 'Bash non-tty flag', symptom: 'hang', prescription: 'Pass --yes', tool_name: 'Bash' },
+    { trigger_pattern: 'pnpm-lock.yaml npm', symptom: 'drift', prescription: 'Use pnpm', tool_name: 'Bash' },
+    { trigger_pattern: 'Cargo.toml E0502', symptom: 'borrow', prescription: 'Split struct', tool_name: 'Bash' },
+    { trigger_pattern: 'git push --force-with-lease', symptom: 'overwrite', prescription: 'Use lease', tool_name: 'Bash' },
+  ];
+  for (let i = 0; i < 20; i++) {
+    const d = domains[i % domains.length];
+    rules.push({ ...d, trigger_pattern: `${d.trigger_pattern} #${i}`, hit_count: 12, fail_count: 0 });
+  }
+  const report = diagnoseAgentArchetype(rules);
+  assert.equal(report.archetype.id, 'immunized-sentinel');
+  assert.ok(report.overallImmunityPct >= 82);
+});
+
+test('v2.4 inferRuleGlobs and renderCursorMdc generate valid Cursor .mdc frontmatter with automatic globs', () => {
+  const rustRule = {
+    trigger_pattern: 'Cargo.toml E0502',
+    symptom: 'cannot borrow as mutable',
+    prescription: 'Split mutable struct fields in Rust',
+    tool_name: 'Bash',
+    hit_count: 5,
+  };
+  const nextRule = {
+    trigger_pattern: 'next/router App Router',
+    symptom: 'NextRouter not mounted in tsx',
+    prescription: 'Import useRouter from next/navigation',
+    tool_name: 'Edit',
+    hit_count: 4,
+  };
+
+  assert.equal(inferRuleGlobs(rustRule), '**/*.rs, **/Cargo.toml');
+  assert.equal(inferRuleGlobs(nextRule), '**/*.tsx, **/*.ts, **/*.jsx');
+
+  const mdc = renderCursorMdc([rustRule, nextRule]);
+  assert.ok(mdc.startsWith('---\ndescription:'));
+  assert.ok(mdc.includes('globs: **/*.rs, **/Cargo.toml, **/*.tsx, **/*.ts, **/*.jsx'));
+  assert.ok(mdc.includes('alwaysApply: true'));
+});
+
+test('v2.4 compileIdeRules transpiles rules across all 5 IDE targets and preserves existing user content outside fenced markers', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'immune-compile-ide-'));
+  try {
+    const copilotPath = join(dir, '.github', 'copilot-instructions.md');
+    mkdirSync(join(dir, '.github'), { recursive: true });
+    writeFileSync(copilotPath, '# My Team Custom Copilot Instructions\n\nAlways write tests.\n', 'utf8');
+
+    const rules = [
+      {
+        trigger_pattern: 'pnpm-lock.yaml npm',
+        symptom: 'npm install fails in pnpm repo',
+        prescription: 'Use pnpm install instead of npm',
+        tool_name: 'Bash',
+        hit_count: 6,
+      },
+      {
+        trigger_pattern: '/Users/alice/secret.ts',
+        symptom: 'leaked home path',
+        prescription: 'Never export /Users/alice/secret.ts',
+        tool_name: 'Edit',
+        hit_count: 10,
+      },
+    ];
+
+    const results = compileIdeRules(dir, rules, { minHits: 1 });
+    assert.equal(results.length, 5);
+    for (const item of results) {
+      assert.equal(item.rulesCount, 1, 'unsafe path rule must be filtered out automatically');
+      assert.equal(existsSync(item.fullPath), true, `${item.relativePath} written`);
+    }
+
+    const copilotMerged = readFileSync(copilotPath, 'utf8');
+    assert.ok(copilotMerged.includes('# My Team Custom Copilot Instructions'), 'preserves user header');
+    assert.ok(copilotMerged.includes('<!-- immune:generated:start -->'));
+    assert.ok(copilotMerged.includes('Use pnpm install instead of npm'));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('v2.4 CLI help and SDK barrel expose diagnose and compile-rules commands and functions', () => {
+  const mainHelp = renderMainHelp('2.3.0');
+  assert.match(mainHelp, /diagnose \[--markdown\]/);
+  assert.match(mainHelp, /compile-rules \[--target\]/);
+
+  const diagHelp = renderCommandHelp('diagnose');
+  assert.ok(diagHelp && diagHelp.includes('immune diagnose'));
+
+  const compHelp = renderCommandHelp('compile-rules');
+  assert.ok(compHelp && compHelp.includes('immune compile-rules'));
+
+  const indexJs = readFileSync(join(ROOT, 'dsh-immune-system', 'dist', 'core', 'index.js'), 'utf8');
+  assert.ok(indexJs.includes('diagnoseAgentArchetype'));
+  assert.ok(indexJs.includes('compileIdeRules'));
+});
+
+test('v2.4 runPitfallAutopsy computes rescued tokens, frontier API dollar savings, spinner minutes, and fragile scars', () => {
+  const report = runPitfallAutopsy([
+    {
+      trigger_pattern: 'pnpm-lock.yaml npm install',
+      symptom: 'lockfile conflict',
+      prescription: 'Use pnpm install',
+      tool_name: 'Bash',
+      hit_count: 10,
+      fail_count: 0,
+    },
+    {
+      trigger_pattern: 'Edit target file unread',
+      symptom: 'stale slice',
+      prescription: 'Read file first',
+      tool_name: 'Edit',
+      hit_count: 8,
+      fail_count: 2,
+    },
+  ]);
+
+  assert.equal(report.activeRules, 2);
+  assert.equal(report.savedLoops, 18);
+  assert.equal(report.tokensRescued, 18 * 2400);
+  assert.ok(report.usdSaved > 0);
+  assert.ok(report.minutesReclaimed >= 13);
+  assert.equal(report.fragileScars.length, 1);
+  assert.equal(report.fragileScars[0].trigger_pattern, 'Edit target file unread');
+  assert.equal(report.fragileScars[0].survivalPct, 80);
+
+  const term = renderAutopsyTerminal(report);
+  assert.match(term, /FORENSIC PITFALL AUTOPSY/);
+  assert.match(term, /Fragile Scars/);
+
+  const md = renderAutopsyMarkdown(report);
+  assert.match(md, /Forensic Pitfall Autopsy & Token Burn Ledger/);
+  assert.match(md, /Fragile Scars Watchlist/);
+});
+
+test('v2.4 CLI help and SDK barrel expose autopsy command and functions', () => {
+  const mainHelp = renderMainHelp('2.3.0');
+  assert.match(mainHelp, /autopsy \[--markdown\]/);
+
+  const autopsyHelp = renderCommandHelp('autopsy');
+  assert.ok(autopsyHelp && autopsyHelp.includes('immune autopsy'));
+
+  const indexJs = readFileSync(join(ROOT, 'dsh-immune-system', 'dist', 'core', 'index.js'), 'utf8');
+  assert.ok(indexJs.includes('runPitfallAutopsy'));
+});
+
+test('v2.4 renderDiagnosisSvg renders valid 880x440 dark-mode radar SVG card', () => {
+  const report = diagnoseAgentArchetype([
+    {
+      trigger_pattern: 'Edit unread file <script>',
+      symptom: 'stale slice',
+      prescription: 'Read target file first & verify',
+      tool_name: 'Edit',
+      hit_count: 12,
+    },
+  ]);
+  const svg = renderDiagnosisSvg(report);
+  assert.ok(svg.startsWith('<svg') && svg.endsWith('</svg>'));
+  assert.ok(svg.includes('AGENT PITFALL ARCHETYPE'));
+  assert.ok(!svg.includes('<script>'));
 });
