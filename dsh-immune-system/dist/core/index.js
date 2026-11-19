@@ -21,3 +21,6 @@ export { gitHookStatus, installGitHook, removeGitHook } from './git-hook.js';
 export { redact, redactAndClamp, redactOutbound } from './redact.js';
 export { computeImmunityScore, escapeSvgText, formatCompactNumber, renderImmunityBadgeSvg, renderWrappedMarkdown, renderWrappedSvg, } from './wrapped.js';
 export { canonicalRuleHash, hydrateTeamRules, isTeamShareSafe, maybeSyncTeamRulesAfterDrain, parseTeamRulesJsonl, serializeTeamRulesJsonl, verifyTeamRulesJsonl, writeTeamRulesFile, } from './team-sync.js';
+export { classifyRuleDomain, diagnoseAgentArchetype, renderDiagnosisMarkdown, renderDiagnosisSvg, renderDiagnosisTerminal, } from './diagnose.js';
+export { IDE_TARGET_PATHS, compileIdeRules, inferRuleGlobs, mergeFencedContent, renderCursorMdc, renderFencedRuleBlock, selectCompilableRules, } from './compile-rules.js';
+export { renderAutopsyMarkdown, renderAutopsyTerminal, runPitfallAutopsy, } from './autopsy.js';

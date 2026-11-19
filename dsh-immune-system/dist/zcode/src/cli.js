@@ -6,7 +6,7 @@
  */
 import { ImmuneStore } from '../../core/store/index.js';
 import { packageVersion } from '../../core/version.js';
-import { cmdBackupAsync, cmdCiCheck, cmdExport, cmdExportJson, cmdForget, cmdImportJson, cmdLearn, cmdList, cmdSearch, cmdSyncDoc, cmdTeamSync, cmdWrapped, } from './commands/library.js';
+import { cmdAutopsy, cmdBackupAsync, cmdCiCheck, cmdCompileRules, cmdDiagnose, cmdExport, cmdExportJson, cmdForget, cmdImportJson, cmdLearn, cmdList, cmdSearch, cmdSyncDoc, cmdTeamSync, cmdWrapped, } from './commands/library.js';
 import { cmdConsolidate, cmdCoverage, cmdDetours, cmdExplain, cmdHygiene, cmdModels, cmdReceipts, cmdRewriteSyncOrAsync, cmdStats, cmdTriage, } from './commands/intelligence.js';
 import { cmdAudit, cmdBackfillAsync, cmdIngestDisk, cmdIngestSkill, cmdSeed, cmdWorkspaces, } from './commands/ingest.js';
 import { cmdCompletions } from './commands/completions.js';
@@ -24,7 +24,6 @@ function main(argv) {
         process.stdout.write(sub ?? renderMainHelp(packageVersion()));
         return 0;
     }
-    // Intercept `--help` / `-h` before opening SQLite or dispatching mutating commands!
     if (hasHelpFlag(args)) {
         const sub = renderCommandHelp(command);
         if (sub) {
@@ -85,6 +84,12 @@ function main(argv) {
                 return cmdWrapped(store, args);
             case 'team-sync':
                 return cmdTeamSync(store, args);
+            case 'diagnose':
+                return cmdDiagnose(store, args);
+            case 'autopsy':
+                return cmdAutopsy(store, args);
+            case 'compile-rules':
+                return cmdCompileRules(store, args);
             case 'stats':
                 return cmdStats(store, args);
             case 'detours':

@@ -7,8 +7,11 @@
 import { ImmuneStore } from '../../core/store/index.js';
 import { packageVersion } from '../../core/version.js';
 import {
+  cmdAutopsy,
   cmdBackupAsync,
   cmdCiCheck,
+  cmdCompileRules,
+  cmdDiagnose,
   cmdExport,
   cmdExportJson,
   cmdForget,
@@ -59,7 +62,6 @@ function main(argv: string[]): number {
     return 0;
   }
 
-  // Intercept `--help` / `-h` before opening SQLite or dispatching mutating commands!
   if (hasHelpFlag(args)) {
     const sub = renderCommandHelp(command);
     if (sub) {
@@ -117,6 +119,12 @@ function main(argv: string[]): number {
         return cmdWrapped(store, args);
       case 'team-sync':
         return cmdTeamSync(store, args);
+      case 'diagnose':
+        return cmdDiagnose(store, args);
+      case 'autopsy':
+        return cmdAutopsy(store, args);
+      case 'compile-rules':
+        return cmdCompileRules(store, args);
       case 'stats':
         return cmdStats(store, args);
       case 'detours':

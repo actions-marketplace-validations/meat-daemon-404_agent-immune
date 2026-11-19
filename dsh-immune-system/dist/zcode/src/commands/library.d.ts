@@ -11,3 +11,6 @@ export declare function cmdCiCheck(args: string[]): number;
 export declare function cmdWrapped(store: ImmuneStore, args: string[]): number;
 export declare function cmdTeamSync(store: ImmuneStore, args: string[]): number;
 export declare function cmdBackupAsync(store: ImmuneStore, args: string[], onDone: () => void): void;
+export declare function cmdDiagnose(store: ImmuneStore, args: string[]): number;
+export declare function cmdCompileRules(store: ImmuneStore, args: string[]): number;
+export declare function cmdAutopsy(store: ImmuneStore, args: string[]): number;

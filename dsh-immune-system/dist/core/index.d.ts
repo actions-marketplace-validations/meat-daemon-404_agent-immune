@@ -16,3 +16,6 @@ export { gitHookStatus, installGitHook, removeGitHook, type GitHookStatus } from
 export { redact, redactAndClamp, redactOutbound } from './redact.js';
 export { computeImmunityScore, escapeSvgText, formatCompactNumber, renderImmunityBadgeSvg, renderWrappedMarkdown, renderWrappedSvg, type WrappedInput, type WrappedNemesis, } from './wrapped.js';
 export { canonicalRuleHash, hydrateTeamRules, isTeamShareSafe, maybeSyncTeamRulesAfterDrain, parseTeamRulesJsonl, serializeTeamRulesJsonl, verifyTeamRulesJsonl, writeTeamRulesFile, type TeamRuleImportStore, type TeamRuleRecord, type TeamRulesCheckReport, type TeamSyncCandidate, } from './team-sync.js';
+export { classifyRuleDomain, diagnoseAgentArchetype, renderDiagnosisMarkdown, renderDiagnosisSvg, renderDiagnosisTerminal, type AgentArchetype, type AgentDiagnosisReport, type DiagnosableRule, type DomainRadarAxis, type PitfallDomainId, } from './diagnose.js';
+export { IDE_TARGET_PATHS, compileIdeRules, inferRuleGlobs, mergeFencedContent, renderCursorMdc, renderFencedRuleBlock, selectCompilableRules, type CompiledIdeFile, type IdeRuleTarget, } from './compile-rules.js';
+export { renderAutopsyMarkdown, renderAutopsyTerminal, runPitfallAutopsy, type AutopsyBucket, type AutopsyReport, type FragileScar, } from './autopsy.js';
