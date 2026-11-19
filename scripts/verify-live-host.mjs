@@ -124,7 +124,7 @@ const enterWith = (messages) => async () => ({ kind: 'enter', messages: [userMsg
 const payload = { agent: agent('sess-B'), messages: [userMsg], turn: 1, step: 1, signal: { aborted: false } };
 const decision = await ctx.waterfall('agent/pre-step', payload, enterWith([userMsg]));
 check('decision is enter', decision.kind === 'enter', decision.kind);
-const injected = decision.messages.filter((m) => m.source && m.source.kind === 'plugin');
+const injected = decision.messages.filter((m) => m.source && m.source.kind === 'plugin:dsh-immune-system');
 check('one plugin message injected', injected.length === 1, injected.length);
 const block = injected.length === 1 ? injected[0].content.map((b) => b.text || '').join('') : '';
 check('block is wrapped in <immune_memory>', block.startsWith('<immune_memory>') && block.trimEnd().endsWith('</immune_memory>'));
@@ -141,7 +141,7 @@ check('host exposes emitAgentEvent', typeof emitAgentEvent === 'function');
 emitAgentEvent(ctx, agentC, 'agent/session-start', { source: 'startup' });
 check('session-start primed exactly one message', primed.length === 1, primed.length);
 const primedText = primed.length === 1 ? primed[0].content.map((b) => b.text || '').join('') : '';
-check('primed message is a frozen plugin message', primed.length === 1 && primed[0].role === 'user' && primed[0].source.kind === 'plugin' && primed[0].source.plugin === 'dsh-immune-system');
+check('primed message is a frozen plugin message', primed.length === 1 && primed[0].role === 'user' && primed[0].source.kind === 'plugin:dsh-immune-system');
 check('primed message carries the recall block', primedText.includes('<immune_memory>') && primedText.includes('bash: npm run buidl'));
 
 // ---- 4. cold resume: no human prompt in the batch, recall still fires ----
@@ -158,14 +158,14 @@ ctx.emit('session/event', resumeSession, {
 });
 const emptyNext = async () => ({ kind: 'enter', messages: [] });
 const resumeDecision = await ctx.waterfall('agent/pre-step', { agent: agent('sess-R'), messages: [], turn: 1, step: 1, signal: { aborted: false } }, emptyNext);
-const resumeInjected = resumeDecision.messages.filter((m) => m.source && m.source.kind === 'plugin');
+const resumeInjected = resumeDecision.messages.filter((m) => m.source && m.source.kind === 'plugin:dsh-immune-system');
 check('resume batch had no human prompt but recall still injected', resumeInjected.length === 1, resumeInjected.length);
 const resumeBlock = resumeInjected.length === 1 ? resumeInjected[0].content.map((b) => b.text || '').join('') : '';
 check('resume block carries the antibody', resumeBlock.includes('bash: npm run buidl'));
 
 // A plugin-sourced user/message must NOT be mistaken for a human prompt.
 const before = await ctx.waterfall('agent/pre-step', { agent: agent('sess-X'), messages: [], turn: 1, step: 1, signal: { aborted: false } }, emptyNext);
-check('unknown session injects nothing', before.messages.filter((m) => m.source && m.source.kind === 'plugin').length === 0);
+check('unknown session injects nothing', before.messages.filter((m) => m.source && m.source.kind === 'plugin:dsh-immune-system').length === 0);
 
 console.log(`\n=== live host: ${passed} passed, ${failed} failed ===`);
 process.exit(failed === 0 ? 0 : 1);

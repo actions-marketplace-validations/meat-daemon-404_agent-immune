@@ -213,7 +213,7 @@ export function createPluginMessage(text) {
         id: randomUUID(),
         role: 'user',
         content: Object.freeze(content),
-        source: Object.freeze({ kind: 'plugin', plugin: PLUGIN_NAME }),
+        source: Object.freeze({ kind: `plugin:${PLUGIN_NAME}` }),
     });
 }
 /** Log through the host logger. */

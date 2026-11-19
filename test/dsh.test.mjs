@@ -27,6 +27,7 @@ import { test } from 'node:test';
 import {
   DSH_EVENTS,
   PLUGIN_NAME,
+  createPluginMessage,
   makeLogger,
   normaliseToolEvent,
 } from '../dsh-immune-system/dist/dsh/src/dsh-adapter.js';
@@ -295,7 +296,7 @@ test('pre-step recalls a matching antibody on the first step of a turn', async (
   assert.equal(decision.kind, 'enter');
   assert.equal(decision.messages.length, 2, 'one recalled block is spliced in');
   const injected = decision.messages.at(-1);
-  assert.equal(injected.source.kind, 'plugin');
+  assert.equal(injected.source.kind, 'plugin:dsh-immune-system');
   assert.equal(messageText(injected).includes('<immune_memory>'), true);
   assert.equal(messageText(injected).includes('</immune_memory>'), true);
 });
@@ -896,4 +897,13 @@ test('DSH /immune-export enforces the share gate when rules leak paths or emails
   assert.match(blocked.text, /export blocked by the share gate/);
 });
 
+test('createPluginMessage stamps a producer-owned source kind for DSH 0.2.2 format v4 (#4)', () => {
+  const msg = createPluginMessage('<immune_memory>test</immune_memory>');
+  assert.equal(msg.role, 'user');
+  assert.deepEqual(msg.source, { kind: 'plugin:dsh-immune-system' });
+  assert.notEqual(msg.source.kind, 'plugin', 'DSH v4 rejects generic kind "plugin"');
+  assert.equal(Object.isFrozen(msg), true);
+  assert.equal(Object.isFrozen(msg.source), true);
+  assert.equal(Object.isFrozen(msg.content), true);
+});
 

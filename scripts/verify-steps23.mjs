@@ -127,7 +127,7 @@ check('decision is enter', decision.kind, 'enter');
 check('a message was spliced in', entered.length, claimed.length + 1);
 check('block is wrapped in <immune_memory>', /<immune_memory>[\s\S]*<\/immune_memory>/.test(block), true);
 check('block carries the distilled prescription', block.includes(rows[0]?.prescription ?? '\u0000'), true);
-check('spliced message is labelled as plugin output', entered.some((m) => m.source?.kind === 'plugin'), true);
+check('spliced message is labelled as plugin output', entered.some((m) => m.source?.kind === 'plugin:dsh-immune-system'), true);
 check('human prompt still present', entered.some((m) => m.source?.kind === 'user'), true);
 
 // ---- [action diff] the repair write travels with the episode ----------------
@@ -173,7 +173,7 @@ for (const l of listeners.get(DSH_EVENTS.sessionStart)) l({ agent: a3, source: '
 const priming = injected.find((x) => x.id === 'sess-3')?.message;
 check('inject() received a message', priming !== undefined, true);
 check('role is user', priming?.role, 'user');
-check('source is plugin', priming?.source, { kind: 'plugin', plugin: 'dsh-immune-system' });
+check('source is plugin', priming?.source, { kind: 'plugin:dsh-immune-system' });
 check('has a uuid id', /^[0-9a-f-]{36}$/.test(priming?.id ?? ''), true);
 check('priming mentions immune_memory', (priming?.content?.[0]?.text ?? '').includes('<immune_memory>'), true);
 

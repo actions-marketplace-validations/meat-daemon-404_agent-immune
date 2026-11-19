@@ -23,17 +23,16 @@ export interface DshContentBlock {
 }
 /**
  * A message the plugin injects. Mirrors `createUserMessage(...)` output —
- * `packages\llm\llm\src\message.ts:192-199` — including the `kind:'plugin'`
- * source that keeps the text from rendering as a human prompt in derived
- * history (`MessageSourceMap` at `packages\llm\llm\src\message.ts:100-105`).
+ * `packages\llm\llm\src\message.ts:192-199` — using the producer-owned
+ * `kind:'plugin:dsh-immune-system'` source (DSH 0.2.2+ format v4) that keeps
+ * the text from rendering as a human prompt in derived history.
  */
 export interface DshUserMessage {
     readonly id: string;
     readonly role: 'user';
     readonly content: ReadonlyArray<DshContentBlock>;
     readonly source: {
-        readonly kind: 'plugin';
-        readonly plugin: string;
+        readonly kind: string;
     };
 }
 /** The agent handle. Mirrors `Agent` at `packages\core\agent\src\runtime-types.ts:66-143`. */
