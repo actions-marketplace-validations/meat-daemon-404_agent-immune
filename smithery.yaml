@@ -1,0 +1,22 @@
+startCommand:
+  type: stdio
+  configSchema:
+    type: object
+    properties:
+      locale:
+        type: string
+        description: "Output language preference: zh-CN, en, or both"
+        default: "both"
+      guardMode:
+        type: string
+        description: "Deterministic pre-execution safety guard: off, warn, or deny"
+        default: "off"
+  commandFunction: |-
+    (config) => ({
+      command: 'npx',
+      args: ['-y', 'dsh-immune-system@latest', 'mcp'],
+      env: {
+        IMMUNE_LOCALE: config.locale || 'both',
+        IMMUNE_GUARD: config.guardMode || 'off'
+      }
+    })

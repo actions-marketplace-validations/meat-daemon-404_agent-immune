@@ -1,0 +1,35 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-07-09/server.schema.json",
+  "name": "io.github.meat-daemon-404/agent-immune",
+  "description": "Self-evolving pitfall immunity engine for coding agents. Turns failed-then-fixed tool calls into SQLite+FTS5 antibodies. Zero runtime dependencies.",
+  "repository": {
+    "url": "https://github.com/meat-daemon-404/agent-immune",
+    "source": "github"
+  },
+  "version": "2.3.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "dsh-immune-system",
+      "version": "2.3.0",
+      "runtimeHint": "npx",
+      "runtimeArguments": [
+        {
+          "type": "positional",
+          "value": "-y"
+        },
+        {
+          "type": "positional",
+          "value": "dsh-immune-system@latest"
+        },
+        {
+          "type": "positional",
+          "value": "mcp"
+        }
+      ],
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}
