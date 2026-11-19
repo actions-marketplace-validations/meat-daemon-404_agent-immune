@@ -9,7 +9,7 @@
   <p>
     <a href="https://www.npmjs.com/package/dsh-immune-system"><img src="https://img.shields.io/npm/v/dsh-immune-system?label=npm%20%7C%20dsh-immune-system" alt="npm version"></a>
     <a href="https://github.com/meat-daemon-404/agent-immune/actions/workflows/ci.yml"><img src="https://github.com/meat-daemon-404/agent-immune/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-    <img src="https://img.shields.io/badge/tests-261%20passing-16a34a" alt="261 tests passing">
+    <img src="https://img.shields.io/badge/tests-266%20passing-16a34a" alt="266 tests passing">
     <img src="https://img.shields.io/badge/runtime%20deps-0-2563eb" alt="zero runtime dependencies">
     <img src="https://img.shields.io/badge/node-%5E22.19%20%7C%7C%20%3E%3D24-0ea5e9" alt="node ^22.19 || >=24">
     <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT">
@@ -17,7 +17,7 @@
   </p>
 
   <p>
-    <b>97.81%</b> judge agreement across <b>21,034 real tool calls</b> · <b>0</b> false negatives · counterfactual repeat-mistake prevention <b>88.5% cold / 96.9% warm</b>
+    <b>97.81%</b> judge agreement across <b>21,034 real tool calls</b> · <b>0</b> false negatives · counterfactual repeat-mistake prevention <b>88.5% cold / 96.9% warm</b> · A/B multi-turn repeat pitfall reduction <b>-95.0%</b>
     <br>
     <sub><a href="#benchmarks--ci">Measured on real multi-host session logs, not synthetic benchmarks</a></sub>
   </p>
@@ -27,13 +27,15 @@
 
 **agent-immune** (`npm: dsh-immune-system`) is a zero-dependency **self-evolving immune memory for coding agents**. Whenever a tool call fails and a subsequent call repairs it, the engine distills a scored, path-scrubbed **antibody** (`trigger → avoid → do`), stores it in local `node:sqlite` + FTS5, and injects `<immune_memory>` **before** your agent repeats the same mistake next session.
 
-One shared `core/` engine powers **13 agent & CI surfaces**: one-command `connect` for **Claude Code**, **Cursor**, **Codex CLI**, **Google Antigravity**, **Gemini CLI**, **VS Code (Copilot Agent)**, **Zed**, **Windsurf**, **Roo Code**, **Claude Desktop**, and **Cline**; native plugin bundles for **DeepSeek Harness (DSH)** and **ZCode**; plus a stateless **3-line GitHub Action**, local `.git/hooks/pre-commit` gate, and typed **`dsh-immune-system/core` SDK**.
+One shared `core/` engine powers **13 agent & CI surfaces**: one-command `connect` for **Claude Code**, **Cursor**, **Codex CLI**, **Google Antigravity**, **Gemini CLI**, **VS Code (Copilot Agent)**, **Zed**, **Windsurf**, **Roo Code**, **Claude Desktop**, and **Cline**; native plugin bundles for **DeepSeek Harness (DSH)** and **ZCode**; Official MCP Registry / Smithery / Glama manifests (`server.json`, `smithery.yaml`, `glama.json`); a stateless **3-line GitHub Action**, local `.git/hooks/pre-commit` gate, Git-native `.immune/rules.jsonl` team sync, shareable SVG Pitfall Scorecards (`immune wrapped`), and a typed **`dsh-immune-system/core` SDK**.
 
 <div align="center">
   <img src="docs/hero.svg" alt="agent-immune: failure, rubric gate, pre-tool interception" width="760">
   <br>
+  <img src="assets/wrapped-preview.svg" alt="Agent Immune Pitfall Scorecard (immune wrapped)" width="760">
+  <br>
   <img src="docs/dashboard.png" alt="the immune dashboard: KPI row, by-model attribution, rule table" width="760">
-  <p><sub>Local loopback dashboard (`immune ui`) &amp; DSH Shadow-DOM tab — 100% offline, zero telemetry, demo data shown.</sub></p>
+  <p><sub>Local loopback dashboard (`immune ui`), shareable SVG scorecard (`immune wrapped`) &amp; DSH Shadow-DOM tab — 100% offline, zero telemetry, demo data shown.</sub></p>
 </div>
 
 ## Table of Contents
@@ -41,6 +43,7 @@ One shared `core/` engine powers **13 agent & CI surfaces**: one-command `connec
 - [30-Second Quickstart](#30-second-quickstart)
 - [Supported Agents & Environments](#supported-agents--environments)
 - [GitHub Action: 3-Line PR Pitfall Gate](#github-action-3-line-pr-pitfall-gate)
+- [Pitfall Scorecard (`wrapped`) & Git-Native Team Sync (`team-sync`)](#pitfall-scorecard-wrapped--git-native-team-sync-team-sync)
 - [Starter Packs & Skill Indexing (9 Packs · 54 Rules)](#starter-packs--skill-indexing-9-packs--54-rules)
 - [Audit Existing Session History](#audit-existing-session-history)
 - [Library Hygiene, Rewrite, Consolidate & Coverage](#library-hygiene-rewrite-consolidate--coverage)
@@ -66,11 +69,12 @@ npx dsh-immune-system@latest connect
 
 `connect` auto-detects your installed agents, vendors a self-contained copy into `~/.dsh-immune/` (so hooks survive `npx` cache cleanups), backs up existing config once (`.bak-immune`), and merges idempotently. Remove cleanly anytime with `npx dsh-immune-system@latest connect --remove`.
 
-**3. Cold-start from the session history already on your disk**:
+**3. Cold-start from the session history already on your disk & generate your scorecard**:
 
 ```bash
 npx dsh-immune-system@latest audit --dry-run   # preview repeatable pitfalls & wasted tokens
 npx dsh-immune-system@latest seed git-safety   # install curated starter rules
+npx dsh-immune-system@latest wrapped           # render 1200x630 Pitfall Scorecard SVG
 npx dsh-immune-system@latest ui                # open the local 127.0.0.1 dashboard
 ```
 
@@ -90,8 +94,9 @@ npx dsh-immune-system@latest ui                # open the local 127.0.0.1 dashbo
 | **Gemini CLI** | Lifecycle Hooks (5) | `npx dsh-immune-system@latest connect gemini-cli` | `~/.gemini/settings.json` (`BeforeAgent` / `BeforeTool` / `AfterTool`) |
 | **Windsurf / Roo Code / Cline / Claude Desktop** | MCP Server (21 tools) | `npx dsh-immune-system@latest connect <host>` | Native `mcpServers` configs across Windsurf, Roo Code, Cline & Claude Desktop |
 | **VS Code / Zed** | Native MCP / Context Server (21 tools) | `npx dsh-immune-system@latest connect vscode` / `zed` | `Code/User/mcp.json` (`servers`) · `zed/settings.json` (`context_servers`) |
+| **MCP Registries (Official / Smithery / Glama)** | Verified Registry Manifests | `server.json` · `smithery.yaml` · `glama.json` | `io.github.meat-daemon-404/agent-immune` (`npx -y dsh-immune-system@latest mcp`) |
 | **Custom Node/TS Agents** | Typed Zero-Dep SDK | `import { ImmuneRuntime } from 'dsh-immune-system/core'` | Built-in `.d.ts` declarations (`./dist/core/index.d.ts`) |
-| **DeepSeek Harness (DSH)** | Native Cordis Bundle + Shadow-DOM Web Tab | `dsh plugin --profile <profile> add dsh-immune-system` | `agent/session-start`, `pre-step`, `tools/post-execute`, `turn-stopping` |
+| **DeepSeek Harness (DSH)** | Native Cordis Bundle + Shadow-DOM Web Tab | `dsh plugin --profile <profile> add dsh-immune-system` | `agent/session-start`, `pre-step`, `tools/post-execute`, `turn-stopping` (v4 `plugin:dsh-immune-system`) |
 | **ZCode** | Native Plugin Bundle + Slash Commands + MCP | `zcode plugins marketplace add meat-daemon-404/agent-immune` | `.zcode-plugin/plugin.json` + `/immune*` commands |
 
 <details>
@@ -148,6 +153,28 @@ jobs:
 - Automatically skips edits inside `<!-- immune:generated -->` so `immune sync-doc` updates never self-trigger CI.
 - Honours CLI flag boundaries (`--force` flags `git push --force`, never `git push --force-with-lease`). Pass `fail-on-findings: 'false'` for advisory-only PR comments.
 - **Want local pre-commit checks too?** Run `immune git-hook --install` (or `--warn-only`) to add a non-destructive `< 40 ms` staged-diff check into `.git/hooks/pre-commit` that coexists cleanly with Husky / lint-staged (`immune git-hook --remove` to uninstall).
+
+---
+
+## Pitfall Scorecard (`wrapped`) & Git-Native Team Sync (`team-sync`)
+
+### Shareable 1200×630 Pitfall Scorecard SVG (`immune wrapped`)
+Generate a zero-dependency, dark-mode SVG scorecard summarizing your active antibodies, lifetime deliveries, avoidable retry tokens, top recurring agent nemeses, and your `0–100` **Immunity Score**:
+
+```bash
+immune wrapped                                 # writes ./immune-wrapped.svg
+immune wrapped ./assets/scorecard.svg          # custom output path
+immune wrapped --json                          # inspect computed Immunity Score & metrics as JSON
+```
+
+### Zero-Conflict Git Team Memory (`immune team-sync` / `.immune/rules.jsonl`)
+Binary `.sqlite` files cannot be merged across Git branches. `immune team-sync` serializes proven, share-safe rules into `.immune/rules.jsonl` where every line is keyed and sorted deterministically by `sha256(prescription)` (`canonicalRuleHash`) and gated by `isTeamShareSafe()` (automatically stripping local home/drive paths, emails, and credentials):
+
+```bash
+immune team-sync                               # export active share-safe rules -> .immune/rules.jsonl
+immune team-sync --min-hits 3                  # require >= 3 deliveries before committing to Git
+immune team-sync --import                      # merge committed .immune/rules.jsonl into local SQLite
+```
 
 ---
 
@@ -227,7 +254,7 @@ immune sync-doc                    # update <!-- immune:generated --> block in A
 Run `immune --help` or `immune <command> --help` anytime (`--json` supported across read/inspection commands).
 
 <details>
-<summary><b>All CLI Commands (27 commands)</b></summary>
+<summary><b>All CLI Commands (29 commands)</b></summary>
 
 | Category | Command | Purpose |
 | --- | --- | --- |
@@ -243,6 +270,8 @@ Run `immune --help` or `immune <command> --help` anytime (`--json` supported acr
 | | `immune learn <trigger> [symptom] <prescription>` | Record a human-authored rule (`prescription_source = 'human'`) |
 | | `immune forget <id> \| --last \| --prune [days]` | Delete a rule (preserving append-only receipt chain) or prune stale 0-hit rules |
 | | `immune stats [--json]` | Counts, avoided-token estimate, per-model breakdown, sleep-review clusters |
+| | `immune wrapped [out.svg] [--hosts H] [--stdout] [--json]` | Render a 1200×630 dark-mode Pitfall Scorecard SVG & Immunity Score (`0–100`) |
+| | `immune team-sync [file] [--import] [--min-hits N] [--json]` | Export or import Git-native hash-sorted `.immune/rules.jsonl` team rules |
 | | `immune export [min_hits] [out.md]` | Export proven rules as privacy-gated `SKILL.md` |
 | | `immune export-json [out.json]` / `import-json <in.json>` | Portable library snapshot export/import behind `shareSanityCheck` |
 | | `immune sync-doc [--out FILE] [--min-hits N]` | Sync `<!-- immune:generated -->` into `AGENTS.md` (or existing `CLAUDE.md`) |
@@ -296,10 +325,18 @@ Run `immune --help` or `immune <command> --help` anytime (`--json` supported acr
 Every push and PR runs on **Linux (Node 22 & 24)** and **Windows (Node 24)**:
 
 - **Outcome Judge Ground-Truth Replay** (`scripts/eval-judge.mjs`): **97.81% agreement** across **21,034 real host-labeled tool calls**, **0 false negatives**, and `2.19%` (`461`) false positives (exclusively exit-1 read-only probes such as `grep`/`git diff`, contained downstream by probe-skipping and Red-3 triage — see [AGENTS.md](AGENTS.md) #25).
-- **Automated Test & Contract Suites**: **`261 / 261` unit & integration tests** (`npm test`), **`42 / 42` multi-host vendored hook assertions** across Claude Code, Codex, Antigravity, Gemini CLI & Cursor (`scripts/verify-connected-runtime.mjs`), **`20 / 20` live Cordis event-bus assertions** (`scripts/verify-live-host.mjs`), **`15 + 24 + 10` adapter & bundle serve assertions**, and **`100%` 1:1 dist import graph verification** (`scripts/verify-dist-integrity.mjs`).
+- **Automated Test & Contract Suites**: **`266 / 266` unit & integration tests** (`npm test`), **`42 / 42` multi-host vendored hook assertions** across Claude Code, Codex, Antigravity, Gemini CLI & Cursor (`scripts/verify-connected-runtime.mjs`), **`20 / 20` live Cordis event-bus assertions** (`scripts/verify-live-host.mjs`), **`15 + 24 + 10` adapter & bundle serve assertions**, **`7`-manifest / `10`-field version sync guard** (`scripts/check-versions.mjs`), and **`100%` 1:1 dist import graph verification** (`scripts/verify-dist-integrity.mjs`).
 - **Bilingual Recall & 9-Pack Content Gate**: `scripts/bench-recall.mjs` achieves **R@1 100%, R@3 100%, FP 0%**; `scripts/bench-seed-recall.mjs` across all **54 builtin rules** achieves **R@1 100% (54/54), R@3 100% (54/54), FP 0% (0/9)**.
 - **Scale & Hot-Path Latency** (`scripts/bench-scale.mjs`, `scripts/bench-tool-latency.mjs`): 300 rules index in `60 ms` (`0.20 ms/rule`), query `p50 = 0.60 ms` / `p95 = 1.20 ms`. Tool-execution hooks never call a model (`median 1.8 ms`); LLM distillation is batched at turn end under a strict `1–60 s` clamp.
 - **Strictly Causal Counterfactual Replay** (`scripts/bench-ablation.mjs`): Walking forward across **28,961 real multi-host tool calls** intercepts **88.5% (115/130)** of recurring repeat mistakes from zero priors (**Cold-Start**), and **96.9% (126/130)** with **94.3%** total episode coverage when pre-warmed (**Warm-Start**).
+- **End-to-End A/B Multi-Turn Simulation Benchmark** (`node scripts/bench-ab-simulation.mjs`): Replaying **30 coding sessions** across **10 recurring pitfall families × 3 turns**:
+
+| Metric (30 Sessions · 10 Scenarios × 3 Turns) | Control (No Immune Memory) | Treatment (`agent-immune` Enabled) | Measured Delta |
+| --- | --- | --- | --- |
+| **Total Failed Tool Calls** | `30` | **`11`** | **`-63.3%`** |
+| **Repeat Pitfalls (Turns 2 & 3)** | `20` | **`1`** | **`-95.0%`** |
+| **Avoidable Retry Tokens Spent** | `130,800` | **`50,520`** | **`-61.4%` (`80,280` saved)** |
+| **Pre-Tool FTS5 Recall Latency (`p50`)** | — | **`0.008 ms`** | Zero LLM calls on hot path |
 
 ### How It Compares
 
@@ -308,6 +345,7 @@ Every push and PR runs on **Linux (Node 22 & 24)** and **Windows (Node 24)**:
 | **Stores** | Scored `failure → repair` antibodies + SHA-256 receipts | Full session transcripts | Conversation facts | Compiled skill files |
 | **Delivery** | Unasked pre-tool & pre-turn hook injection + PR Action | On-demand search (MCP/TUI) | SDK-level recall | Static skill file |
 | **Quality / Anti-rot** | 5-dim rubric + workspace scope + Red-3 5-bucket triage | None (raw history) | Vector overwrite | Manual recompile |
+| **Team Git Sync** | Deterministic hash-sorted `.immune/rules.jsonl` + `AGENTS.md` | Local only | Cloud/DB | Local files |
 | **Runtime Deps** | **Zero** (`node:sqlite` FTS5 built-in) | Go binary | Python + vector store | Node packages |
 | **Surfaces** | Claude Code, Cursor, Codex, Antigravity, Gemini CLI, VS Code, Zed, Windsurf, Roo Code, Cline, DSH, ZCode, GitHub Actions, TS SDK | Claude Code, Codex, Cursor, 36+ | Custom SDK apps | Claude Code |
 

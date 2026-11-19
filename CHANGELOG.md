@@ -2,12 +2,20 @@
 
 All notable changes to **agent-immune** (`dsh-immune-system`) are documented in this file.
 
-## [2.3.0] - 2026-11-18
+## [2.3.0] - 2026-11-19
 
 ### Added
+- **Shareable Pitfall Scorecard SVG (`immune wrapped`, `core/wrapped.ts`, `assets/wrapped-preview.svg`)**: Zero-dependency 1200×630 dark-mode SVG generator computing a `0–100` Immunity Score, audited call/failure/token KPIs, and top recurring agent nemeses with strict XML entity escaping.
+- **Git-Native Zero-Conflict Team Sync (`immune team-sync`, `core/team-sync.ts`)**: Deterministic SHA-256 hash-sorted `.immune/rules.jsonl` serializer and importer with built-in path, email, and credential filtering (`isTeamShareSafe`) for conflict-free multi-branch Git collaboration.
+- **MCP Ecosystem Registry Manifests (`server.json`, `smithery.yaml`, `glama.json`)**: Official MCP Registry (`io.github.meat-daemon-404/agent-immune`), Smithery one-click configuration, and Glama discovery metadata, pinned in CI by the 7-manifest / 10-field `scripts/check-versions.mjs` gate.
+- **End-to-End A/B Multi-Turn Simulation Benchmark (`scripts/bench-ab-simulation.mjs`)**: Reproducible 30-session A/B benchmark across 10 recurring pitfall families × 3 turns (`-63.3%` total failures, `-95.0%` repeat pitfalls, `-61.4%` avoidable retry tokens, `0.008 ms` p50 recall latency), wired directly into the automated test suite.
 - **Read-Only Explainable Recall Simulator (`immune explain`, `/api/explain`, `immune_explain` MCP #21, Dashboard Tab)**: Inspect exact bilingual concept-graph expansions, per-signal scoring breakdowns (`bm25 × hit × path × lexical × rubric × decay`), and rendered `<immune_memory>` previews across terminal CLI, REST API, standalone Web Dashboard, and MCP without ever inflating hit counts.
-- **Zero-Config TypeScript SDK Entry (`dsh-immune-system/core`)**: Enabled `.d.ts` type declarations (`tsconfig.json` `declaration: true`) and exported `ImmuneStore`, `ImmuneRuntime`, `explainRecall`, `ciCheck`, `connectHost`, `BUILTIN_PACKS`, and `redact` under `./core` for custom agent frameworks (Vercel AI SDK, LangChain.js, Mastra, OpenCode).
+- **Zero-Config TypeScript SDK Entry (`dsh-immune-system/core`)**: Enabled `.d.ts` type declarations (`tsconfig.json` `declaration: true`) and exported `ImmuneStore`, `ImmuneRuntime`, `explainRecall`, `ciCheck`, `connectHost`, `BUILTIN_PACKS`, `renderWrappedSvg`, `computeImmunityScore`, `serializeTeamRulesJsonl`, `parseTeamRulesJsonl`, `writeTeamRulesFile`, and `redact` under `./core`.
 - **11-Host Ecosystem Expansion (`connect` for VS Code, Zed, Roo Code)**: Added `vscode` (`Code/User/mcp.json` under `servers`), `zed` (`zed/settings.json` under `context_servers`), and `roo-code` alongside all 8 existing environments (total **13 environments** including DSH & ZCode).
+
+### Fixed
+- **DSH 0.2.2 Session Persistence Format v4 (`dsh/src/dsh-adapter.ts`, #4)**: Updated `createPluginMessage()` to stamp producer-owned `source: { kind: 'plugin:dsh-immune-system' }` required by DSH 0.2.2+ v4 session persistence.
+- **Cross-OS Workspace Path Scoping (`core/hygiene.ts`)**: Routed Windows drive paths (`D:\...`) and POSIX paths (`/Users/...`) through `node:path` `win32` / `posix` explicitly so foreign OS paths scope and abstract deterministically across Linux and Windows CI runners.
 
 ### Improved
 - **9-Pack Retrieval Calibration (`R@1 = 100%`)**: Disambiguated Python `uv run` lockfile vs `pyproject/requirements.txt` and Docker `.dockerignore` concept edges in `core/retrieval.ts`, lifting `scripts/bench-seed-recall.mjs` across all **54 builtin rules** from **R@1 94% → 100%** (`R@3 100%`, `FP 0%`).
@@ -16,7 +24,7 @@ All notable changes to **agent-immune** (`dsh-immune-system`) are documented in 
 
 ### Added
 - **Local Git `pre-commit` Gate (`immune git-hook`)**: Non-destructive `.git/hooks/pre-commit` installer (`--install`, `--remove`, `--status`, `--warn-only`, `--json`) supporting standard `.git` repos, worktrees, and coexistence with existing Husky / user hooks.
-- **Shell Tab Completions (`immune completions`)**: Built-in completion generators for `bash`, `zsh`, `fish`, and `powershell` covering all 26 subcommands, 9 seed packs, and 8 host targets.
+- **Shell Tab Completions (`immune completions`)**: Built-in completion generators for `bash`, `zsh`, `fish`, and `powershell` covering all subcommands, 9 seed packs, and host targets.
 - **Rust & Go Bilingual Concept Graph**: Added bilingual semantic synonym edges (`core/retrieval.ts`) for borrow-checker aliasing (`E0502`), `Send` across `.await`, Tokio executor blocking, Go typed-nil interfaces, and concurrent map writes.
 - **Community Standards**: Added `CHANGELOG.md`, `CODE_OF_CONDUCT.md`, feature-request issue template, and convenience npm scripts (`npm run check`, `npm run bench`, `npm run verify`).
 

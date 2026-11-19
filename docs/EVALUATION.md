@@ -7,10 +7,10 @@ All metrics below are directly measured on the `dsh-immune-system@2.3.0` codebas
 ## 1. Environment Specification
 
 - **Runtime**: Node.js `v24.20.0` (`^22.19.0 || >=24.0.0`), zero runtime npm dependencies (`node:sqlite` + `node:zlib` built-in only)
-- **Operating System**: Windows 11
+- **Operating System**: Windows 11 & Ubuntu Linux CI Matrix
 - **Verified Local Ecosystems & Datasets**:
   - **ZCode CLI**: `21,034` tool calls (`885` sessions, `20,330` `model_usage` calls) + live plugin DB (`57` rules, `12,332` cumulative deliveries)
-  - **DeepSeek Harness (DSH)**: Cordis desktop profile + live plugin DB (`80e825e246e75be5.sqlite`, `33` active rules)
+  - **DeepSeek Harness (DSH)**: Cordis desktop profile + live plugin DB (`80e825e246e75be5.sqlite`, `33` active rules, v4 session source `plugin:dsh-immune-system`)
   - **Codex CLI**: `2,825` tool calls (`42` JSONL rollouts, `60.06 MB`)
   - **Antigravity**: `5,102` tool calls (`~290 MB` trajectories)
   - **Magpie Multi-Model Gateway**: `11,165` routed requests (`routing/*.jsonl(.gz)`) + `11,496` usage probes (`usage.jsonl`), **`4.27B`** input+cache tokens across **`70`** model identifiers and **`5`** agents (`zcode`, `dsh`, `curl`, `opencode`, `claude-desktop`)
@@ -22,10 +22,11 @@ All metrics below are directly measured on the `dsh-immune-system@2.3.0` codebas
 
 | Suite / Script | Command | Result | Scope |
 | --- | --- | --- | --- |
-| Unit & Integration Suite | `npm test` | **261 / 261 passed (`0` failed, `0` skipped)** | Core store, hygiene, rubric, Red-3 triage, SHA-256 receipts, shared-rule suppression, turn locks, `explain` simulator, `./core` SDK, `git-hook`, completions, MCP (`21` tools), manifests |
-| Version Sync Guard | `node scripts/check-versions.mjs` | **8/8 fields aligned at `2.3.0`** | All 6 root/plugin/DSH/ZCode/marketplace/Claude manifests |
-| Dist Graph Integrity | `node scripts/verify-dist-integrity.mjs` (+ `--self-test`) | **Passed (0 failed)** | 1:1 `src -> dist` mapping & relative import resolution (`279` imports, `97` files) |
-| DSH Outcome & Adapters | `node scripts/verify-step1.mjs` & `verify-steps23.mjs` | **15/15** & **24/24 passed** | Outcome judge, fail→success pair, inject, probes |
+| Unit & Integration Suite | `npm test` | **266 / 266 passed (`0` failed, `0` skipped)** | Core store, hygiene, rubric, Red-3 triage, SHA-256 receipts, shared-rule suppression, turn locks, `explain` simulator, `wrapped` SVG scorecard, `team-sync` JSONL, `./core` SDK, `git-hook`, completions, MCP (`21` tools), MCP registries, manifests |
+| Version Sync Guard | `node scripts/check-versions.mjs` | **10/10 fields aligned at `2.3.0`** | All 7 root/plugin/DSH/ZCode/marketplace/Claude/MCP-Registry manifests |
+| Dist Graph Integrity | `node scripts/verify-dist-integrity.mjs` (+ `--self-test`) | **Passed (0 failed)** | 1:1 `src -> dist` mapping & relative import resolution (`99` files) |
+| End-to-End A/B Simulation | `node scripts/bench-ab-simulation.mjs` | **Passed (`-95.0%` repeat pitfalls)** | 30 sessions (10 pitfall families × 3 turns): `-63.3%` total failures, `-61.4%` tokens, `0.008 ms` p50 recall |
+| DSH Outcome & Adapters | `node scripts/verify-step1.mjs` & `verify-steps23.mjs` | **15/15** & **24/24 passed** | Outcome judge, fail→success pair, inject, probes, DSH v4 message source |
 | Live Cordis Host Replay | `node scripts/verify-live-host.mjs` | **20/20 passed (`0` failed)** | Event bus, `turn-stopping`, priming, cold resume |
 | DSH Web Bundle Serving | `node scripts/verify-client-serve.mjs` | **10/10 passed (`profile=desktop`)** | `ClientModuleRegistry` `/plugins/dsh-immune-system/client.js` |
 | Cross-Host Hook E2E | `node scripts/verify-connected-runtime.mjs` | **42/42 passed (`0` failed)** | Claude Code + Codex + Antigravity + Gemini CLI + Cursor hooks, workspace routing & guard deny |
@@ -33,7 +34,7 @@ All metrics below are directly measured on the `dsh-immune-system@2.3.0` codebas
 
 ---
 
-## 3. Retrieval Precision, Scale, Latency, & Judge Replay
+## 3. Retrieval Precision, Scale, Latency, Judge Replay & A/B Multi-Turn Simulation
 
 ### 3.1 Retrieval Precision & Zero False Positives
 
@@ -64,6 +65,14 @@ Replayed against **`21,034` real host-labeled tool calls** in local ZCode histor
 - **Agreement: `97.81%`**
 - **False Negatives: `0`**
 - **False Positives: `461` (`2.19%`)** — read-only exit-1 probes (`grep`/`git`/`test`), safely excluded from episode closing and isolated by Red-3 triage.
+
+### 3.5 End-to-End A/B Multi-Turn Simulation (`node scripts/bench-ab-simulation.mjs`)
+
+Simulated **30 multi-turn coding sessions** across **10 real pitfall families × 3 sequential turns** comparing Control (no immune memory) vs Treatment (`agent-immune` enabled, zero priors at Turn 1):
+- **Total Failed Tool Calls**: `30` (Control) vs **`11`** (Treatment) → **`-63.3%` total failure reduction**
+- **Repeat Pitfalls (Turns 2 & 3)**: `20` (Control) vs **`1`** (Treatment) → **`-95.0%` repeat pitfall reduction**
+- **Avoidable Retry Tokens Spent**: `130,800` (Control) vs **`50,520`** (Treatment) → **`-61.4%` token reduction (`80,280` tokens saved)**
+- **Pre-Tool Recall Latency**: **`p50 = 0.008 ms`**, **`p95 = 0.025 ms`**
 
 ---
 
@@ -112,6 +121,7 @@ node scripts/verify-dist-integrity.mjs --self-test
 node scripts/verify-dist-integrity.mjs
 node scripts/bench-recall.mjs
 node scripts/bench-seed-recall.mjs
+node scripts/bench-ab-simulation.mjs
 node scripts/bench-scale.mjs
 node scripts/bench-tool-latency.mjs
 node scripts/verify-connected-runtime.mjs
