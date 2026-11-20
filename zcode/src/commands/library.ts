@@ -7,11 +7,20 @@ import { strings } from '../../../core/i18n.js';
 import { SNAPSHOT_FORMAT, exportLibrary, importLibrary } from '../../../core/sync.js';
 import { syncDoc } from '../../../core/sync-doc.js';
 import { ciCheck, formatShareViolations, parseManagedBlock, shareSanityCheck } from '../../../core/share-guard.js';
-import { computeImmunityScore, renderImmunityBadgeSvg, renderWrappedMarkdown, renderWrappedSvg, type WrappedInput } from '../../../core/wrapped.js';
+import {
+  computeImmunityScore,
+  renderImmunityBadgeSvg,
+  renderWrappedMarkdown,
+  renderWrappedSvg,
+  type WrappedInput,
+} from '../../../core/wrapped.js';
 import { parseTeamRulesJsonl, verifyTeamRulesJsonl, writeTeamRulesFile } from '../../../core/team-sync.js';
 import { diagnoseAgentArchetype, renderDiagnosisMarkdown, renderDiagnosisSvg, renderDiagnosisTerminal } from '../../../core/diagnose.js';
 import { IDE_TARGET_PATHS, compileIdeRules, type IdeRuleTarget } from '../../../core/compile-rules.js';
 import { renderAutopsyMarkdown, renderAutopsyTerminal, runPitfallAutopsy } from '../../../core/autopsy.js';
+import { evaluatePreFlightGuard, renderGuardHookDecision, renderGuardMarkdown, renderGuardTerminal } from '../../../core/guard.js';
+import { applyVaccineLockfile, detectWorkspaceDNA, renderVaccineMarkdown, renderVaccineTerminal, verifyVaccineLockfile, writeVaccineLockfile } from '../../../core/vaccine.js';
+import { federateSwarmRules, renderFederationMarkdown, renderFederationSvg, renderFederationTerminal, type SwarmRuleSource } from '../../../core/federate.js';
 import { dshDirOf } from '../root-marker.js';
 import { clamp, flagValue, pad } from './shared.js';
 
@@ -600,5 +609,136 @@ export function cmdAutopsy(store: ImmuneStore, args: string[]): number {
     return 0;
   }
   process.stdout.write(renderAutopsyTerminal(report));
+  return 0;
+}
+
+export function cmdGuard(store: ImmuneStore, args: string[]): number {
+  const asJson = args.includes('--json');
+  const asMarkdown = args.includes('--markdown');
+  const asHook = args.includes('--hook');
+  const strict = args.includes('--strict');
+  const toolName = flagValue(args, '--tool') ?? 'Bash';
+  const payload = args.filter((a) => !a.startsWith('-')).join(' ').trim();
+  if (!payload) {
+    process.stderr.write('usage: immune guard "<command-or-payload>" [--tool Bash|Edit|Write] [--strict] [--hook] [--markdown] [--json]\n');
+    return 2;
+  }
+  const dna = detectWorkspaceDNA(process.cwd());
+  const pm =
+    dna.packageManager === 'pnpm' || dna.packageManager === 'yarn' || dna.packageManager === 'bun'
+      ? dna.packageManager
+      : null;
+  const verdict = evaluatePreFlightGuard(payload, store.listAll(false), {
+    toolName,
+    strict,
+    workspacePackageManager: pm,
+  });
+  if (asHook) {
+    process.stdout.write(`${JSON.stringify(renderGuardHookDecision(verdict), null, 2)}\n`);
+    return verdict.decision === 'block' ? 1 : 0;
+  }
+  if (asJson) {
+    process.stdout.write(`${JSON.stringify(verdict, null, 2)}\n`);
+    return verdict.decision === 'block' ? 1 : 0;
+  }
+  if (asMarkdown) {
+    process.stdout.write(renderGuardMarkdown(verdict));
+    return verdict.decision === 'block' ? 1 : 0;
+  }
+  process.stdout.write(renderGuardTerminal(verdict));
+  return verdict.decision === 'block' ? 1 : 0;
+}
+
+export function cmdVaccinate(store: ImmuneStore, args: string[]): number {
+  const asJson = args.includes('--json');
+  const asMarkdown = args.includes('--markdown');
+  const isCheck = args.includes('--check');
+  const shouldApply = args.includes('--apply');
+  const explicitLock = flagValue(args, '--lockfile');
+  const lockfilePath = resolve(explicitLock ?? join('.immune', 'vaccine.lock.json'));
+
+  if (isCheck) {
+    if (!existsSync(lockfilePath)) {
+      process.stderr.write(`vaccinate check: lockfile not found: ${lockfilePath}\n`);
+      return 2;
+    }
+    const report = verifyVaccineLockfile(readFileSync(lockfilePath, 'utf8'));
+    if (asJson) {
+      process.stdout.write(`${JSON.stringify({ mode: 'check', file: lockfilePath, ...report }, null, 2)}\n`);
+    } else {
+      process.stdout.write(`vaccinate check: ${report.valid ? 'OK' : 'FAILED'} (${report.antibodyCount} antibodies, ${report.reason})\n`);
+    }
+    return report.valid ? 0 : 1;
+  }
+
+  const { lockfile } = writeVaccineLockfile(process.cwd(), store.listAll(false), { lockfilePath });
+  let appliedCount = 0;
+  if (shouldApply) {
+    const res = applyVaccineLockfile(store, lockfile);
+    appliedCount = res.applied;
+  }
+
+  if (asJson) {
+    process.stdout.write(`${JSON.stringify({ lockfilePath, appliedCount, lockfile }, null, 2)}\n`);
+    return 0;
+  }
+  if (asMarkdown) {
+    process.stdout.write(renderVaccineMarkdown(lockfile));
+    return 0;
+  }
+  process.stdout.write(renderVaccineTerminal(lockfile, lockfilePath));
+  return 0;
+}
+
+export function cmdFederate(store: ImmuneStore, args: string[]): number {
+  const asJson = args.includes('--json');
+  const asMarkdown = args.includes('--markdown');
+  const asSvg = args.includes('--svg');
+  const outPath = flagValue(args, '--out');
+  const rawMin = flagValue(args, '--min-consensus');
+  const minConsensusScore = rawMin && Number.isFinite(Number(rawMin)) ? Number(rawMin) : 0;
+
+  const fileInputs = args.filter((a) => !a.startsWith('-') && a !== outPath && a !== rawMin);
+  const sources: SwarmRuleSource[] = [
+    { sourceId: 'local-sqlite', rules: store.listAll(false) },
+  ];
+
+  const defaultTeamFile = resolve(join('.immune', 'rules.jsonl'));
+  if (fileInputs.length === 0 && existsSync(defaultTeamFile)) {
+    sources.push({
+      sourceId: '.immune/rules.jsonl',
+      rules: parseTeamRulesJsonl(readFileSync(defaultTeamFile, 'utf8')),
+    });
+  } else {
+    for (const fp of fileInputs) {
+      const resolved = resolve(fp);
+      if (existsSync(resolved)) {
+        sources.push({
+          sourceId: fp,
+          rules: parseTeamRulesJsonl(readFileSync(resolved, 'utf8')),
+        });
+      }
+    }
+  }
+
+  const report = federateSwarmRules(sources, { minConsensusScore });
+  if (outPath && !asSvg) {
+    writeTeamRulesFile(resolve(outPath), report.universalLaws, { minHits: 0 });
+  }
+  if (asSvg) {
+    const svgTarget = resolve(outPath ?? 'immune-federation.svg');
+    writeFileSync(svgTarget, renderFederationSvg(report), 'utf8');
+    process.stdout.write(`federation consensus SVG (${report.universalLaws.length} universal laws, ${report.averageConsensusScore}/100) -> ${svgTarget}\n`);
+    return 0;
+  }
+  if (asJson) {
+    process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+    return 0;
+  }
+  if (asMarkdown) {
+    process.stdout.write(renderFederationMarkdown(report));
+    return 0;
+  }
+  process.stdout.write(renderFederationTerminal(report));
   return 0;
 }
