@@ -9,6 +9,9 @@ import { packageVersion } from '../../core/version.js';
 import {
   cmdAutopsy,
   cmdBackupAsync,
+  cmdFederate,
+  cmdGuard,
+  cmdVaccinate,
   cmdCiCheck,
   cmdCompileRules,
   cmdDiagnose,
@@ -125,6 +128,12 @@ function main(argv: string[]): number {
         return cmdAutopsy(store, args);
       case 'compile-rules':
         return cmdCompileRules(store, args);
+      case 'guard':
+        return cmdGuard(store, args);
+      case 'vaccinate':
+        return cmdVaccinate(store, args);
+      case 'federate':
+        return cmdFederate(store, args);
       case 'stats':
         return cmdStats(store, args);
       case 'detours':

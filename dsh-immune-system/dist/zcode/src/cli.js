@@ -6,7 +6,7 @@
  */
 import { ImmuneStore } from '../../core/store/index.js';
 import { packageVersion } from '../../core/version.js';
-import { cmdAutopsy, cmdBackupAsync, cmdCiCheck, cmdCompileRules, cmdDiagnose, cmdExport, cmdExportJson, cmdForget, cmdImportJson, cmdLearn, cmdList, cmdSearch, cmdSyncDoc, cmdTeamSync, cmdWrapped, } from './commands/library.js';
+import { cmdAutopsy, cmdBackupAsync, cmdFederate, cmdGuard, cmdVaccinate, cmdCiCheck, cmdCompileRules, cmdDiagnose, cmdExport, cmdExportJson, cmdForget, cmdImportJson, cmdLearn, cmdList, cmdSearch, cmdSyncDoc, cmdTeamSync, cmdWrapped, } from './commands/library.js';
 import { cmdConsolidate, cmdCoverage, cmdDetours, cmdExplain, cmdHygiene, cmdModels, cmdReceipts, cmdRewriteSyncOrAsync, cmdStats, cmdTriage, } from './commands/intelligence.js';
 import { cmdAudit, cmdBackfillAsync, cmdIngestDisk, cmdIngestSkill, cmdSeed, cmdWorkspaces, } from './commands/ingest.js';
 import { cmdCompletions } from './commands/completions.js';
@@ -90,6 +90,12 @@ function main(argv) {
                 return cmdAutopsy(store, args);
             case 'compile-rules':
                 return cmdCompileRules(store, args);
+            case 'guard':
+                return cmdGuard(store, args);
+            case 'vaccinate':
+                return cmdVaccinate(store, args);
+            case 'federate':
+                return cmdFederate(store, args);
             case 'stats':
                 return cmdStats(store, args);
             case 'detours':
