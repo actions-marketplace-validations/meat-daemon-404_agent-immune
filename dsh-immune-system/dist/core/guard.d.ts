@@ -1,0 +1,52 @@
+import type { DiagnosableRule } from './diagnose.js';
+export type GuardSeverity = 'low' | 'medium' | 'high' | 'critical';
+export type GuardDecision = 'allow' | 'warn' | 'rewrite' | 'block';
+export interface GuardMatchedPolicy {
+    readonly id: string;
+    readonly title: string;
+    readonly severity: GuardSeverity;
+    readonly blastRadiusScore: number;
+    readonly reason: string;
+    readonly prescription: string;
+    readonly suggestedRewrite: string | null;
+    readonly source: 'builtin-policy' | 'workspace-lockfile' | 'learned-antibody';
+}
+export interface GuardEvaluationOptions {
+    readonly toolName?: string;
+    readonly strict?: boolean;
+    readonly workspacePackageManager?: 'pnpm' | 'yarn' | 'bun' | 'npm' | 'uv' | null;
+}
+export interface GuardVerdict {
+    readonly payload: string;
+    readonly toolName: string;
+    readonly decision: GuardDecision;
+    readonly severity: GuardSeverity;
+    readonly blastRadiusScore: number;
+    readonly suggestedRewrite: string | null;
+    readonly matches: ReadonlyArray<GuardMatchedPolicy>;
+    readonly summary: string;
+}
+export interface BuiltinGuardPolicySpec {
+    readonly id: string;
+    readonly title: string;
+    readonly severity: GuardSeverity;
+    readonly blastRadiusScore: number;
+    readonly defaultDecision: GuardDecision;
+    readonly pattern: RegExp;
+    readonly negativePattern?: RegExp;
+    readonly reason: string;
+    readonly prescription: string;
+    readonly rewrite?: (payload: string) => string | null;
+}
+export declare const BUILTIN_GUARD_POLICIES: ReadonlyArray<BuiltinGuardPolicySpec>;
+export declare function evaluatePreFlightGuard(payload: string, learnedRules?: ReadonlyArray<DiagnosableRule>, opts?: GuardEvaluationOptions): GuardVerdict;
+export declare function renderGuardTerminal(verdict: GuardVerdict): string;
+export declare function renderGuardMarkdown(verdict: GuardVerdict): string;
+export declare function renderGuardHookDecision(verdict: GuardVerdict): {
+    readonly decision: 'allow' | 'block';
+    readonly reason: string;
+    readonly blastRadiusScore: number;
+    readonly updatedInput?: {
+        readonly command: string;
+    };
+};

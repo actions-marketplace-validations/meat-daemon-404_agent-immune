@@ -131,3 +131,41 @@ export {
   type AutopsyReport,
   type FragileScar,
 } from './autopsy.js';
+export {
+  BUILTIN_GUARD_POLICIES,
+  evaluatePreFlightGuard,
+  renderGuardHookDecision,
+  renderGuardMarkdown,
+  renderGuardTerminal,
+  type BuiltinGuardPolicySpec,
+  type GuardDecision,
+  type GuardEvaluationOptions,
+  type GuardMatchedPolicy,
+  type GuardSeverity,
+  type GuardVerdict,
+} from './guard.js';
+export {
+  applyVaccineLockfile,
+  compileVaccineLockfile,
+  computeVaccineIntegrityHash,
+  detectWorkspaceDNA,
+  renderVaccineMarkdown,
+  renderVaccineTerminal,
+  verifyVaccineLockfile,
+  writeVaccineLockfile,
+  type DetectedPackageManager,
+  type VaccineAntibodySpec,
+  type VaccineLockfile,
+  type VaccineVerificationReport,
+  type WorkspaceDNA,
+} from './vaccine.js';
+export {
+  federateSwarmRules,
+  renderFederationMarkdown,
+  renderFederationSvg,
+  renderFederationTerminal,
+  type FederatedAntibodyCluster,
+  type SwarmConsensusTier,
+  type SwarmFederationReport,
+  type SwarmRuleSource,
+} from './federate.js';
