@@ -1,3 +1,9 @@
+/**
+ * Shareable "Agent Pitfall Wrapped" SVG scorecard, README badge, & Markdown generator.
+ *
+ * Renders a 1200x630 dark-mode social card SVG, a shields.io-style live SVG badge,
+ * or a viral GitHub README / PR summary Markdown snippet with zero external dependencies.
+ */
 export interface WrappedNemesis {
     readonly label: string;
     readonly count: number;

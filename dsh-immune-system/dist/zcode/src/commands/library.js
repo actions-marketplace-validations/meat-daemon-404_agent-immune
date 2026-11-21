@@ -6,7 +6,7 @@ import { strings } from '../../../core/i18n.js';
 import { SNAPSHOT_FORMAT, exportLibrary, importLibrary } from '../../../core/sync.js';
 import { syncDoc } from '../../../core/sync-doc.js';
 import { ciCheck, formatShareViolations, parseManagedBlock, shareSanityCheck } from '../../../core/share-guard.js';
-import { computeImmunityScore, renderImmunityBadgeSvg, renderWrappedMarkdown, renderWrappedSvg } from '../../../core/wrapped.js';
+import { computeImmunityScore, renderImmunityBadgeSvg, renderWrappedMarkdown, renderWrappedSvg, } from '../../../core/wrapped.js';
 import { parseTeamRulesJsonl, verifyTeamRulesJsonl, writeTeamRulesFile } from '../../../core/team-sync.js';
 import { diagnoseAgentArchetype, renderDiagnosisMarkdown, renderDiagnosisSvg, renderDiagnosisTerminal } from '../../../core/diagnose.js';
 import { IDE_TARGET_PATHS, compileIdeRules } from '../../../core/compile-rules.js';
@@ -468,7 +468,6 @@ export function cmdBackupAsync(store, args, onDone) {
     })
         .finally(onDone);
 }
-
 export function cmdDiagnose(store, args) {
     const asJson = args.includes('--json');
     const asMarkdown = args.includes('--markdown');
@@ -534,7 +533,6 @@ export function cmdCompileRules(store, args) {
     }
     return 0;
 }
-
 export function cmdAutopsy(store, args) {
     const asJson = args.includes('--json');
     const asMarkdown = args.includes('--markdown');
@@ -550,7 +548,6 @@ export function cmdAutopsy(store, args) {
     process.stdout.write(renderAutopsyTerminal(report));
     return 0;
 }
-
 export function cmdGuard(store, args) {
     const asJson = args.includes('--json');
     const asMarkdown = args.includes('--markdown');

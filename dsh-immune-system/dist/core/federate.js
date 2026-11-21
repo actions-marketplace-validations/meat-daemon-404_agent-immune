@@ -1,6 +1,3 @@
-/**
- * v3.0 Cross-Project Swarm Federation & Antibody Consensus Engine (`immune federate`).
- */
 import { canonicalRuleHash, isTeamShareSafe } from './team-sync.js';
 import { escapeSvgText } from './wrapped.js';
 function normTokens(text) {

@@ -1,3 +1,11 @@
+/**
+ * Forensic Session Autopsy & Token Burn Ledger (`immune autopsy`).
+ *
+ * Translates raw SQLite antibody counters into human-meaningful engineering
+ * metrics: prevented debug loops, rescued tokens, estimated frontier API dollar
+ * savings, minutes of developer life reclaimed from watching terminal spinners,
+ * forensic root-cause distribution, and fragile scars that models still ignore.
+ */
 import { type DiagnosableRule, type PitfallDomainId } from './diagnose.js';
 export interface FragileScar {
     readonly trigger_pattern: string;
@@ -24,10 +32,15 @@ export interface AutopsyReport {
     readonly buckets: ReadonlyArray<AutopsyBucket>;
     readonly fragileScars: ReadonlyArray<FragileScar>;
 }
+/**
+ * Run a forensic post-mortem autopsy over a project's antibody library.
+ */
 export declare function runPitfallAutopsy(rules: ReadonlyArray<DiagnosableRule>, opts?: {
     tokensPerLoop?: number;
     usdPerMillionTokens?: number;
     secondsPerLoop?: number;
 }): AutopsyReport;
+/** Render a candid, human-readable terminal autopsy report. */
 export declare function renderAutopsyTerminal(report: AutopsyReport): string;
+/** Render a shareable GitHub Markdown autopsy report. */
 export declare function renderAutopsyMarkdown(report: AutopsyReport): string;

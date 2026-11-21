@@ -184,7 +184,7 @@ export function evaluatePreFlightGuard(
     if (!policy.pattern.test(payload)) continue;
     if (policy.negativePattern && policy.negativePattern.test(payload)) continue;
 
-    const candidateRewrite = policy.rewrite ? policy.rewrite(currentRewrite ?? payload) : null;
+    const candidateRewrite: string | null = policy.rewrite ? policy.rewrite(currentRewrite ?? payload) : null;
     if (candidateRewrite && candidateRewrite !== (currentRewrite ?? payload)) {
       currentRewrite = candidateRewrite;
     }

@@ -1,5 +1,5 @@
 import type { DiagnosableRule } from './diagnose.js';
-import type { TeamRuleImportStore } from './team-sync.js';
+import { type TeamRuleImportStore } from './team-sync.js';
 export type DetectedPackageManager = 'pnpm' | 'yarn' | 'bun' | 'npm' | 'uv' | 'cargo' | 'go' | 'unknown';
 export interface VaccineAntibodySpec {
     readonly hash: string;

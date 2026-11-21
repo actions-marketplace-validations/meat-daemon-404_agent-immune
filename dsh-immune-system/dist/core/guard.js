@@ -1,6 +1,3 @@
-/**
- * v3.0 Pre-Flight Blast-Radius Guard & Destructive Command Interceptor (`immune guard`).
- */
 export const BUILTIN_GUARD_POLICIES = [
     {
         id: 'destructive-rm-root',
@@ -99,6 +96,9 @@ function tokenizeForGuard(text) {
         .split(/[^a-z0-9_./-]+/)
         .filter((t) => t.length >= 3);
 }
+/**
+ * Evaluate a proposed tool command or file edit payload before execution.
+ */
 export function evaluatePreFlightGuard(payload, learnedRules = [], opts = {}) {
     const toolName = opts.toolName ?? 'Bash';
     const strict = Boolean(opts.strict);
@@ -212,6 +212,7 @@ export function evaluatePreFlightGuard(payload, learnedRules = [], opts = {}) {
         summary,
     };
 }
+/** Render a human-friendly terminal Pre-Flight Guard verdict. */
 export function renderGuardTerminal(verdict) {
     const icon = verdict.decision === 'block'
         ? '🛑'
@@ -242,6 +243,7 @@ export function renderGuardTerminal(verdict) {
     lines.push('');
     return lines.join('\n');
 }
+/** Render a GitHub Markdown report for a Pre-Flight Guard evaluation. */
 export function renderGuardMarkdown(verdict) {
     const lines = [
         `### 🛡️ Pre-Flight Blast-Radius Guard Verdict: \`${verdict.decision.toUpperCase()}\` (${verdict.blastRadiusScore}/100)`,
@@ -259,6 +261,9 @@ export function renderGuardMarkdown(verdict) {
     lines.push('');
     return lines.join('\n');
 }
+/**
+ * Format a PreToolUse hook decision compatible with Claude Code / Cursor hook protocol.
+ */
 export function renderGuardHookDecision(verdict) {
     if (verdict.decision === 'block') {
         return {

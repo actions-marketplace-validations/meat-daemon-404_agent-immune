@@ -1,3 +1,10 @@
+/**
+ * Public programmatic SDK barrel (`import { ... } from 'dsh-immune-system/core'`).
+ *
+ * Exposes the zero-dependency SQLite+FTS5 pitfall immunity engine for custom
+ * Node.js / TypeScript coding agents, frameworks (Vercel AI SDK, LangChain.js,
+ * Mastra, OpenCode), and CI tooling.
+ */
 export type { Antibody, AntibodyStatus, DeliveryReceipt, DistillResult, FailureSnapshot, NewAntibody, RootCauseType, RuleQualityGrade, TriageBucket, TriageEvent, WorkspaceProfile, } from './types.js';
 export type { ReceiptOutcome } from './receipts.js';
 export { ImmuneStore, GlobalStore, globalDbPathFor, isPromotable, type DistillJob, type MatchOptions, type StoreOptions, } from './store/index.js';

@@ -1,3 +1,13 @@
+/**
+ * v3.0 Pre-Flight Blast-Radius Guard & Destructive Command Interceptor (`immune guard`).
+ *
+ * Evaluates proposed agent tool invocations (Bash, Edit, Write, Git, SQL)
+ * BEFORE execution against built-in catastrophic blast-radius signatures,
+ * workspace lockfile constraints, and high-confidence learned antibodies.
+ * Computes a 0-100 Blast-Radius Score, emits a deterministic safe command
+ * rewrite when possible, and formats hook protocol decisions for Claude Code,
+ * Cursor, Codex, and CI gates.
+ */
 import type { DiagnosableRule } from './diagnose.js';
 export type GuardSeverity = 'low' | 'medium' | 'high' | 'critical';
 export type GuardDecision = 'allow' | 'warn' | 'rewrite' | 'block';
@@ -39,9 +49,17 @@ export interface BuiltinGuardPolicySpec {
     readonly rewrite?: (payload: string) => string | null;
 }
 export declare const BUILTIN_GUARD_POLICIES: ReadonlyArray<BuiltinGuardPolicySpec>;
+/**
+ * Evaluate a proposed tool command or file edit payload before execution.
+ */
 export declare function evaluatePreFlightGuard(payload: string, learnedRules?: ReadonlyArray<DiagnosableRule>, opts?: GuardEvaluationOptions): GuardVerdict;
+/** Render a human-friendly terminal Pre-Flight Guard verdict. */
 export declare function renderGuardTerminal(verdict: GuardVerdict): string;
+/** Render a GitHub Markdown report for a Pre-Flight Guard evaluation. */
 export declare function renderGuardMarkdown(verdict: GuardVerdict): string;
+/**
+ * Format a PreToolUse hook decision compatible with Claude Code / Cursor hook protocol.
+ */
 export declare function renderGuardHookDecision(verdict: GuardVerdict): {
     readonly decision: 'allow' | 'block';
     readonly reason: string;

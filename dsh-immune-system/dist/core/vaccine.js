@@ -1,5 +1,11 @@
 /**
  * v3.0 Declarative Vaccine Lockfile & Zero-Shot Workspace DNA Auto-Immunization (`immune vaccinate`).
+ *
+ * Scans a repository's manifest files (package.json, pnpm-lock.yaml, tsconfig.json,
+ * Cargo.toml, go.mod, pyproject.toml, uv.lock, Dockerfile, .github/workflows) to
+ * build a deterministic Workspace DNA fingerprint, synthesizes zero-day stack
+ * antibodies, and compiles or verifies a Git-committable `.immune/vaccine.lock.json`
+ * with SHA-256 integrity verification.
  */
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
