@@ -12,6 +12,7 @@ export interface TeamSyncCandidate {
     readonly tool_name?: string | null;
     readonly hit_count?: number;
     readonly status?: string;
+    readonly project_scope?: string;
 }
 export interface TeamRuleImportStore {
     insert(input: {
@@ -21,14 +22,17 @@ export interface TeamRuleImportStore {
         tool_name?: string | null;
         prescription_source?: 'llm' | 'heuristic' | 'human';
         origin?: string;
+    }, opts?: {
+        skipIfExists?: boolean;
     }): unknown;
 }
 /** Deterministic 16-hex-char SHA-256 fingerprint of a rule's prescription. */
 export declare function canonicalRuleHash(prescription: string): string;
 /**
- * Basic privacy and portability check for git-committed team rules:
- * rejects rules containing user home directories, Windows drive paths,
- * email addresses, or credential tokens.
+ * Canonical privacy and portability gate for git-committed team rules:
+ * delegates to `shareSanityCheck` so every secret format (OpenAI/Anthropic/AWS/
+ * GitHub/PEM/JWT/URL credentials), user/drive/UNC path, and real email address
+ * is caught consistently across all sharing surfaces without rejecting `@2x.png`.
  */
 export declare function isTeamShareSafe(rule: TeamSyncCandidate): boolean;
 /** Convert candidate rules into deterministically sorted JSONL text. */
@@ -44,6 +48,7 @@ export declare function parseTeamRulesJsonl(raw: string): TeamRuleRecord[];
 /** Write sorted team rules to disk (e.g. `.immune/rules.jsonl`), merging with existing rows. */
 export declare function writeTeamRulesFile(filePath: string, candidates: ReadonlyArray<TeamSyncCandidate>, opts?: {
     minHits?: number;
+    replace?: boolean;
 }): {
     exported: number;
     skippedUnsafe: number;
@@ -51,7 +56,7 @@ export declare function writeTeamRulesFile(filePath: string, candidates: Readonl
 /**
  * Zero-config SessionStart/Stop hydration: if `.immune/rules.jsonl` exists in
  * the workspace and `IMMUNE_TEAM_SYNC !== 'off'`, idempotently import team rules
- * into the active project store.
+ * into the active project store without inflating `hit_count` on duplicates.
  */
 export declare function hydrateTeamRules(store: TeamRuleImportStore, workspace?: string, env?: NodeJS.ProcessEnv): {
     imported: number;
@@ -61,7 +66,7 @@ export declare function hydrateTeamRules(store: TeamRuleImportStore, workspace?:
 /**
  * Zero-config turn-end auto-export: if `.immune/rules.jsonl` already exists in
  * the workspace (or `IMMUNE_TEAM_SYNC === '1'`) and `IMMUNE_TEAM_SYNC !== 'off'`,
- * merge and export proven share-safe rules back to `.immune/rules.jsonl`.
+ * merge and export proven share-safe rules scoped to this workspace back to `.immune/rules.jsonl`.
  */
 export declare function maybeSyncTeamRulesAfterDrain(store: {
     listAll(includeQuarantined?: boolean): ReadonlyArray<TeamSyncCandidate>;
@@ -77,9 +82,12 @@ export interface TeamRulesCheckReport {
     readonly duplicates: number;
     readonly unsafeCount: number;
     readonly conflictMarkers: boolean;
+    readonly malformedLines: number;
+    readonly hashMismatches: number;
 }
 /**
  * Audit a `.immune/rules.jsonl` payload for CI gates (`immune team-sync --check`):
- * detects git merge conflict markers, unsorted hashes, duplicate hashes, and unsafe paths/secrets.
+ * detects git merge conflict markers, malformed JSON lines, forged/mismatched
+ * prescription hashes, unsorted hashes, duplicate hashes, and unsafe paths/secrets.
  */
 export declare function verifyTeamRulesJsonl(raw: string): TeamRulesCheckReport;

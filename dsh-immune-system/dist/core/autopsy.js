@@ -13,8 +13,11 @@ const CAUSE_TITLES = {
     shell: 'Non-TTY CLI Traps (Interactive prompts & flags)',
     toolchain: 'Lockfile & Package Manager Drift (npm vs pnpm/uv)',
     types: 'Compiler & Borrow-Checker Brawls (E0502 / NodeNext / nil)',
-    git_ci: 'Git History & CI GateCollisions (--force / hooks)',
+    git_ci: 'Git History & CI Gate Collisions (--force / hooks)',
 };
+function escapeMdCell(value) {
+    return value.replace(/[\r\n]+/g, ' ').replace(/`/g, "'").replace(/\|/g, '\\|').trim();
+}
 /**
  * Run a forensic post-mortem autopsy over a project's antibody library.
  */
@@ -28,11 +31,11 @@ export function runPitfallAutopsy(rules, opts = {}) {
     const usdSaved = Number(((tokensRescued / 1_000_000) * usdPerMillion).toFixed(2));
     const minutesReclaimed = Math.round((savedLoops * secondsPerLoop) / 60);
     const byDomain = {
-        filesystem: { loops: 0, example: null },
-        shell: { loops: 0, example: null },
-        toolchain: { loops: 0, example: null },
-        types: { loops: 0, example: null },
-        git_ci: { loops: 0, example: null },
+        filesystem: { loops: 0, example: null, exampleHits: -1 },
+        shell: { loops: 0, example: null, exampleHits: -1 },
+        toolchain: { loops: 0, example: null, exampleHits: -1 },
+        types: { loops: 0, example: null, exampleHits: -1 },
+        git_ci: { loops: 0, example: null, exampleHits: -1 },
     };
     const fragileScars = [];
     for (const r of active) {
@@ -40,12 +43,13 @@ export function runPitfallAutopsy(rules, opts = {}) {
         const hits = Math.max(0, r.hit_count ?? 0);
         const fails = Math.max(0, r.fail_count ?? 0);
         byDomain[dom].loops += hits;
-        if (!byDomain[dom].example && r.trigger_pattern.trim()) {
+        if (r.trigger_pattern.trim() && hits > byDomain[dom].exampleHits) {
             byDomain[dom].example = r.trigger_pattern.trim();
+            byDomain[dom].exampleHits = hits;
         }
         if (fails > 0) {
-            const total = Math.max(1, hits + fails);
-            const survivalPct = Math.round((hits / total) * 100);
+            const deliveries = Math.max(1, hits, fails);
+            const survivalPct = Math.max(0, Math.round(((deliveries - fails) / deliveries) * 100));
             const clinicalAction = fails >= 2
                 ? 'Escalate to [CRITICAL] salience or run `immune rewrite` to sharpen imperative verb'
                 : 'Monitor next delivery; narrow trigger tokens if recalled out-of-scope';
@@ -118,7 +122,7 @@ export function renderAutopsyTerminal(report) {
 /** Render a shareable GitHub Markdown autopsy report. */
 export function renderAutopsyMarkdown(report) {
     const bucketRows = report.buckets
-        .map((b) => `| **${b.causeTitle}** | \`${formatCompactNumber(b.savedLoops)}x\` | \`~${formatCompactNumber(b.tokensRescued)}\` | ${b.exampleTrigger ? `\`${b.exampleTrigger.replace(/\|/g, '\\|')}\`` : '—'} |`)
+        .map((b) => `| **${b.causeTitle}** | \`${formatCompactNumber(b.savedLoops)}x\` | \`~${formatCompactNumber(b.tokensRescued)}\` | ${b.exampleTrigger ? `\`${escapeMdCell(b.exampleTrigger)}\`` : '—'} |`)
         .join('\n');
     const lines = [
         `### 🔬 Forensic Pitfall Autopsy & Token Burn Ledger`,
@@ -140,7 +144,7 @@ export function renderAutopsyMarkdown(report) {
         '',
     ];
     if (report.fragileScars.length > 0) {
-        lines.push('#### 🩹 Fragile Scars Watchlist (Post-Injection Relapses)', '', '| Trigger | Survival Rate | Hits / Fails | Clinical Recommendation |', '| :--- | :--- | :--- | :--- |', ...report.fragileScars.map((f) => `| \`${f.trigger_pattern.replace(/\|/g, '\\|')}\` | **${f.survivalPct}%** | ${f.hits} / ${f.fails} | ${f.clinicalAction} |`), '');
+        lines.push('#### 🩹 Fragile Scars Watchlist (Post-Injection Relapses)', '', '| Trigger | Survival Rate | Hits / Fails | Clinical Recommendation |', '| :--- | :--- | :--- | :--- |', ...report.fragileScars.map((f) => `| \`${escapeMdCell(f.trigger_pattern)}\` | **${f.survivalPct}%** | ${f.hits} / ${f.fails} | ${f.clinicalAction} |`), '');
     }
     return lines.join('\n');
 }

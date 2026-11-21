@@ -4,6 +4,11 @@ import { renderSkillMarkdown } from '../../core/export.js';
 import { shareSanityCheck } from '../../core/share-guard.js';
 import { scanMagpieTelemetry } from '../../core/audit/magpie.js';
 import { explainRecall } from '../../core/explain.js';
+import { diagnoseAgentArchetype } from '../../core/diagnose.js';
+import { runPitfallAutopsy } from '../../core/autopsy.js';
+import { evaluatePreFlightGuard } from '../../core/guard.js';
+import { detectWorkspaceDNA } from '../../core/vaccine.js';
+import { computeImmunityScore } from '../../core/wrapped.js';
 export const UI_ROUTE_PREFIX = '/plugins/dsh-immune-system/api';
 /**
  * Same-origin check for mutations.
@@ -69,7 +74,8 @@ export function registerImmuneUiRoute(ctx, store, getBudgetMs) {
                     if (req.method === 'GET' && path.endsWith('/export')) {
                         const format = url.searchParams.get('format') === 'json' ? 'json' : 'md';
                         const snapshot = format === 'json' ? exportLibrary(store) : null;
-                        const exportRows = snapshot ? snapshot.antibodies : store.exportable(3);
+                        const mdRows = snapshot ? null : store.exportable(3);
+                        const exportRows = snapshot ? snapshot.antibodies : mdRows;
                         const violations = shareSanityCheck(exportRows);
                         if (violations.length > 0) {
                             sendJson(res, 422, { error: 'export blocked by the share gate', violations });
@@ -81,7 +87,7 @@ export function registerImmuneUiRoute(ctx, store, getBudgetMs) {
                             'cache-control': 'no-store',
                             'x-content-type-options': 'nosniff',
                         });
-                        res.end(snapshot ? JSON.stringify(snapshot, null, 2) : renderSkillMarkdown(store.exportable(3)));
+                        res.end(snapshot ? JSON.stringify(snapshot, null, 2) : renderSkillMarkdown(mdRows));
                         return;
                     }
                     if (req.method === 'GET' && path.endsWith('/workspaces')) {
@@ -99,9 +105,32 @@ export function registerImmuneUiRoute(ctx, store, getBudgetMs) {
                     if (req.method === 'GET' && path.endsWith('/explain')) {
                         const query = url.searchParams.get('q') ?? '';
                         const rawLimit = Number(url.searchParams.get('limit') ?? '5');
-                        const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(10, rawLimit) : 5;
+                        const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(10, Math.trunc(rawLimit)) : 5;
                         const toolName = url.searchParams.get('tool') ?? undefined;
                         sendJson(res, 200, explainRecall(store, query, { limit, toolName }));
+                        return;
+                    }
+                    if (req.method === 'GET' && path.endsWith('/insights')) {
+                        const active = store.listAll(false);
+                        const s = store.stats();
+                        const totalInjections = active.reduce((sum, r) => sum + r.hit_count, 0);
+                        const totalFails = active.reduce((sum, r) => sum + r.fail_count, 0);
+                        const repeatFailures = active.length === 0 && totalInjections === 0 ? 0 : Math.max(s.suppressedRepeats + totalInjections, active.length);
+                        const totalCalls = repeatFailures === 0 && totalFails === 0
+                            ? 0
+                            : Math.max((repeatFailures + totalFails) * 18, totalInjections * 4, active.length * 25);
+                        sendJson(res, 200, {
+                            immunityScore: computeImmunityScore({
+                                totalCalls,
+                                repeatFailures,
+                                avoidableTokens: (s.suppressedRepeats + totalInjections) * 2400,
+                                activeRules: active.length,
+                                totalInjections,
+                            }),
+                            diagnosis: diagnoseAgentArchetype(active),
+                            autopsy: runPitfallAutopsy(active),
+                            workspaceDna: detectWorkspaceDNA(process.cwd()),
+                        });
                         return;
                     }
                     if (req.method === 'GET') {
@@ -167,7 +196,47 @@ export function registerImmuneUiRoute(ctx, store, getBudgetMs) {
                         });
                         return;
                     }
-                    if (req.method === 'POST') {
+                    if (req.method === 'POST' && path.endsWith('/guard')) {
+                        if (!isSameOrigin(req)) {
+                            sendJson(res, 403, { error: 'cross-origin request refused' });
+                            return;
+                        }
+                        const type = String(req.headers['content-type'] ?? '');
+                        if (!type.includes('application/json')) {
+                            sendJson(res, 415, { error: 'content-type must be application/json' });
+                            return;
+                        }
+                        const body = await readBody(req);
+                        let parsed;
+                        try {
+                            parsed = (body.trim() ? JSON.parse(body) : {});
+                        }
+                        catch {
+                            sendJson(res, 400, { error: 'invalid json' });
+                            return;
+                        }
+                        const payload = typeof parsed.payload === 'string' ? parsed.payload : '';
+                        if (!payload.trim()) {
+                            sendJson(res, 400, { error: 'payload is required' });
+                            return;
+                        }
+                        const toolName = typeof parsed.toolName === 'string' && parsed.toolName.trim() ? parsed.toolName.trim() : 'Bash';
+                        const strict = parsed.strict === true;
+                        const dna = detectWorkspaceDNA(process.cwd());
+                        const pm = dna.packageManager === 'pnpm' ||
+                            dna.packageManager === 'yarn' ||
+                            dna.packageManager === 'bun' ||
+                            dna.packageManager === 'uv'
+                            ? dna.packageManager
+                            : null;
+                        sendJson(res, 200, evaluatePreFlightGuard(payload, store.listAll(false), {
+                            toolName,
+                            strict,
+                            workspacePackageManager: pm,
+                        }));
+                        return;
+                    }
+                    if (req.method === 'POST' && (path === UI_ROUTE_PREFIX || path.endsWith('/action'))) {
                         if (!isSameOrigin(req)) {
                             sendJson(res, 403, { error: 'cross-origin mutation refused' });
                             return;

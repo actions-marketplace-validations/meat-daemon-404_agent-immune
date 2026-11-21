@@ -29,6 +29,7 @@ export function renderClientScript(token, t, budget) {
   var nWorkspaces = document.getElementById('nWorkspaces');
   var tab = 'project';
   var timer = null;
+  var toastTimer = null;
   var seq = 0;
 
   function api(path) { return path + (path.indexOf('?') < 0 ? '?' : '&') + 't=' + encodeURIComponent(TOKEN); }
@@ -36,7 +37,8 @@ export function renderClientScript(token, t, budget) {
   function toast(msg, bad) {
     toastEl.textContent = msg;
     toastEl.className = bad ? 'show bad' : 'show';
-    setTimeout(function () { toastEl.className = bad ? 'bad' : ''; }, 2200);
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { toastEl.className = bad ? 'bad' : ''; }, 2200);
   }
 
   function el(tag, cls, text) {
@@ -182,7 +184,7 @@ export function renderClientScript(token, t, budget) {
       if (mode === 'hits') return (b.hit_count - a.hit_count) || (a.id - b.id);
       if (mode === 'fails') return (b.fail_count - a.fail_count) || (a.id - b.id);
       if (mode === 'rubric') return ((b.rubric_score || 0) - (a.rubric_score || 0)) || (b.hit_count - a.hit_count);
-      return String(b.updated_at).localeCompare(String(a.updated_at)) || (b.id - a.id);
+      return ((Number(b.updated_at) || 0) - (Number(a.updated_at) || 0)) || (b.id - a.id);
     });
     return copy;
   }
@@ -321,10 +323,16 @@ export function renderClientScript(token, t, budget) {
       tr.appendChild(cell(T.colDo, 'text', function (td) { td.textContent = c.prescription; }));
       tr.appendChild(cell(T.explainScore, 'counts', function (td) {
         var b = c.breakdown || {};
-        td.appendChild(el('b', '', String(b.finalScore || 0)));
-        td.appendChild(el('div', 'tags', '').appendChild(
-          el('span', 'tag', 'bm25=' + b.baseRelevance + ' lex×' + b.lexicalMultiplier + ' rub×' + b.rubricMultiplier + ' hit×' + b.hitMultiplier),
-        ).parentNode);
+        td.appendChild(el('b', '', String(b.finalScore != null ? b.finalScore : 0)));
+        var parts = [
+          'bm25=' + (b.baseRelevance != null ? b.baseRelevance : 0),
+          'lex×' + (b.lexicalMultiplier != null ? b.lexicalMultiplier : 1),
+          'rub×' + (b.rubricMultiplier != null ? b.rubricMultiplier : 1),
+          'hit×' + (b.hitMultiplier != null ? b.hitMultiplier : 1),
+        ];
+        if (b.pathAffinityBoost != null && b.pathAffinityBoost !== 1) parts.push('path×' + b.pathAffinityBoost);
+        if (b.timeDecay != null && b.timeDecay !== 1) parts.push('decay×' + b.timeDecay);
+        td.appendChild(el('div', 'tags', '').appendChild(el('span', 'tag', parts.join(' '))).parentNode);
       }));
       tbody.appendChild(tr);
     });
@@ -461,100 +469,6 @@ export function renderClientScript(token, t, budget) {
     bodyEl.appendChild(table);
   }
 
-  function renderExplainView(initialQuery, data) {
-    bodyEl.textContent = '';
-    var box = el('div', 'explain-box');
-    var row = el('div', 'explain-row');
-    var inp = document.createElement('input');
-    inp.type = 'text';
-    inp.value = initialQuery;
-    inp.placeholder = T.explainPrompt;
-    var btn = el('button', 'act', T.explainButton);
-    btn.type = 'button';
-    var runSim = function () {
-      var val = inp.value.trim();
-      qEl.value = val;
-      syncClear();
-      loadExplain(val);
-    };
-    btn.onclick = runSim;
-    inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') runSim(); });
-    row.appendChild(inp);
-    row.appendChild(btn);
-    box.appendChild(row);
-    if (data && data.addedConcepts && data.addedConcepts.length > 0) {
-      var cLine = el('div', 'tags');
-      cLine.appendChild(el('span', 'tag hi', T.explainConcepts + data.addedConcepts.join(' ')));
-      box.appendChild(cLine);
-    }
-    if (data && data.renderedBlock) {
-      box.appendChild(el('div', 'tags').appendChild(el('span', 'tag', T.explainPreview)).parentNode);
-      box.appendChild(el('pre', 'explain-preview', data.renderedBlock));
-    }
-    bodyEl.appendChild(box);
-    if (!data || !initialQuery.trim()) {
-      countEl.textContent = '0 ' + T.results;
-      renderEmpty(T.tabsExplain, T.explainHint);
-      return;
-    }
-    var list = data.candidates || [];
-    countEl.textContent = list.length + ' ' + T.results;
-    if (list.length === 0) {
-      renderEmpty(T.explainNoMatch, T.explainHint);
-      return;
-    }
-    var table = el('table');
-    var thead = el('thead');
-    var hr = el('tr');
-    ['#', T.colTrigger, T.colDo, T.explainScore].forEach(function (lbl) { hr.appendChild(el('th', '', lbl)); });
-    thead.appendChild(hr);
-    table.appendChild(thead);
-    var tbody = el('tbody');
-    list.forEach(function (c) {
-      var tr = el('tr');
-      tr.appendChild(cell('#', 'id', function (td) { td.textContent = (c.source === 'shared' ? 'S#' : '#') + c.id; }));
-      tr.appendChild(cell(T.colTrigger, 'trigger', function (td) {
-        td.textContent = c.trigger_pattern;
-        var tags = el('div', 'tags');
-        (c.matchedTokens || []).slice(0, 4).forEach(function (tk) { tags.appendChild(el('span', 'tag hi', tk)); });
-        (c.matchedBigrams || []).slice(0, 4).forEach(function (bg) { tags.appendChild(el('span', 'tag', bg)); });
-        if (tags.childNodes.length > 0) td.appendChild(tags);
-      }));
-      tr.appendChild(cell(T.colDo, 'text', function (td) { td.textContent = c.prescription; }));
-      tr.appendChild(cell(T.explainScore, 'counts', function (td) {
-        var b = c.breakdown || {};
-        td.appendChild(el('b', '', String(b.finalScore || 0)));
-        td.appendChild(el('div', 'tags', '').appendChild(
-          el('span', 'tag', 'bm25=' + b.baseRelevance + ' lex×' + b.lexicalMultiplier + ' rub×' + b.rubricMultiplier + ' hit×' + b.hitMultiplier),
-        ).parentNode);
-      }));
-      tbody.appendChild(tr);
-    });
-    table.appendChild(tbody);
-    bodyEl.appendChild(table);
-  }
-
-  function loadExplain(queryText) {
-    var trimmed = (queryText || '').trim();
-    if (!trimmed) {
-      renderExplainView('', null);
-      return;
-    }
-    var mine = ++seq;
-    renderSkeleton();
-    fetch(api('/api/explain?q=' + encodeURIComponent(trimmed)), { headers: { 'accept': 'application/json' } })
-      .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
-      .then(function (data) {
-        if (mine !== seq) return;
-        renderExplainView(trimmed, data);
-      })
-      .catch(function (err) {
-        if (mine !== seq) return;
-        bodyEl.textContent = '';
-        renderEmpty(T.loadFailed, String((err && err.message) || err));
-      });
-  }
-
   function load() {
     var q = qEl.value.trim();
     if (tab === 'explain') {
@@ -639,16 +553,19 @@ export function renderClientScript(token, t, budget) {
 
   qEl.addEventListener('input', function () {
     syncClear();
+    if (tab === 'workspaces') return;
     clearTimeout(timer);
     timer = setTimeout(load, 220);
   });
   clearEl.addEventListener('click', function () {
     qEl.value = '';
     syncClear();
-    load();
+    if (tab !== 'workspaces') load();
     qEl.focus();
   });
-  sortEl.addEventListener('change', load);
+  sortEl.addEventListener('change', function () {
+    if (tab !== 'workspaces' && tab !== 'explain') load();
+  });
 
   var importFile = document.getElementById('importFile');
   var importWrap = document.getElementById('importWrap');

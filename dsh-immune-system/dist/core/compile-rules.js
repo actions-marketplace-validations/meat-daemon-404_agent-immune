@@ -8,6 +8,8 @@
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { redactOutbound } from './redact.js';
+import { SECTION_END, SECTION_START } from './sync-doc.js';
 import { isTeamShareSafe } from './team-sync.js';
 export const IDE_TARGET_PATHS = {
     cursor: '.cursor/rules/immune-pitfalls.mdc',
@@ -16,8 +18,18 @@ export const IDE_TARGET_PATHS = {
     cline: '.clinerules',
     claude: 'CLAUDE.md',
 };
-const START_MARKER = '<!-- immune:generated:start -->';
-const END_MARKER = '<!-- immune:generated:end -->';
+const START_MARKER = SECTION_START;
+const END_MARKER = SECTION_END;
+const LEGACY_START_MARKER = '<!-- immune:generated:start -->';
+const LEGACY_END_MARKER = '<!-- immune:generated:end -->';
+function sanitizeRuleField(value) {
+    return redactOutbound(value)
+        .replace(/[<>]/g, ' ')
+        .replace(/`/g, "'")
+        .replace(/[\r\n]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
 /** Automatically infer file globs from a rule's trigger, symptom, and prescription. */
 export function inferRuleGlobs(rule) {
     const text = `${rule.trigger_pattern} ${rule.symptom} ${rule.prescription}`.toLowerCase();
@@ -60,14 +72,14 @@ export function renderFencedRuleBlock(target, rules) {
     else {
         for (const r of rules) {
             const globs = inferRuleGlobs(r);
-            const toolTag = r.tool_name ? `[${r.tool_name}] ` : '';
-            lines.push(`- **${toolTag}When**: \`${r.trigger_pattern.trim()}\` *(files: \`${globs}\`)*`, `  - **Avoid**: ${r.symptom.trim()}`, `  - **Do instead**: ${r.prescription.trim()}`);
+            const toolTag = r.tool_name ? `[${sanitizeRuleField(r.tool_name)}] ` : '';
+            lines.push(`- **${toolTag}When**: \`${sanitizeRuleField(r.trigger_pattern)}\` *(files: \`${globs}\`)*`, `  - **Avoid**: ${sanitizeRuleField(r.symptom)}`, `  - **Do instead**: ${sanitizeRuleField(r.prescription)}`);
         }
     }
     lines.push('', END_MARKER);
     return lines.join('\n');
 }
-/** Render a Cursor `.mdc` rule file with YAML frontmatter and per-rule glob hints. */
+/** Render a Cursor `.mdc` rule file with valid YAML frontmatter and per-rule glob hints. */
 export function renderCursorMdc(rules) {
     const uniqueGlobs = new Set();
     for (const r of rules) {
@@ -76,12 +88,13 @@ export function renderCursorMdc(rules) {
                 uniqueGlobs.add(g);
         }
     }
-    const globHeader = uniqueGlobs.size > 0 ? [...uniqueGlobs].slice(0, 8).join(', ') : '*';
+    const hasScopedGlobs = uniqueGlobs.size > 0;
+    const globHeader = hasScopedGlobs ? [...uniqueGlobs].slice(0, 8).join(', ') : '**/*';
     const lines = [
         '---',
         'description: Auto-compiled coding agent pitfall immunity rules (dsh-immune-system)',
-        `globs: ${globHeader}`,
-        'alwaysApply: true',
+        `globs: "${globHeader}"`,
+        `alwaysApply: ${hasScopedGlobs ? 'false' : 'true'}`,
         '---',
         '',
         '# 🛡️ Agent Immune — Learned Pitfall Rules',
@@ -91,20 +104,25 @@ export function renderCursorMdc(rules) {
     ];
     for (const r of rules) {
         const globs = inferRuleGlobs(r);
-        const toolTag = r.tool_name ? `[${r.tool_name}] ` : '';
-        lines.push(`- **${toolTag}Trigger**: \`${r.trigger_pattern.trim()}\` *(applies to: \`${globs}\`)*`, `  - **Avoid**: ${r.symptom.trim()}`, `  - **Prescription**: ${r.prescription.trim()}`);
+        const toolTag = r.tool_name ? `[${sanitizeRuleField(r.tool_name)}] ` : '';
+        lines.push(`- **${toolTag}Trigger**: \`${sanitizeRuleField(r.trigger_pattern)}\` *(applies to: \`${globs}\`)*`, `  - **Avoid**: ${sanitizeRuleField(r.symptom)}`, `  - **Prescription**: ${sanitizeRuleField(r.prescription)}`);
     }
     lines.push('');
     return lines.join('\n');
 }
 /** Merge a fenced block into an existing Markdown file without clobbering user content. */
 export function mergeFencedContent(existingRaw, fencedBlock) {
-    const startIdx = existingRaw.indexOf(START_MARKER);
-    const endIdx = existingRaw.indexOf(END_MARKER);
-    if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
-        const before = existingRaw.slice(0, startIdx).trimEnd();
-        const after = existingRaw.slice(endIdx + END_MARKER.length).trimStart();
-        return [before, fencedBlock, after].filter(Boolean).join('\n\n') + '\n';
+    for (const [startM, endM] of [
+        [START_MARKER, END_MARKER],
+        [LEGACY_START_MARKER, LEGACY_END_MARKER],
+    ]) {
+        const startIdx = existingRaw.indexOf(startM);
+        const endIdx = existingRaw.indexOf(endM);
+        if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
+            const before = existingRaw.slice(0, startIdx).trimEnd();
+            const after = existingRaw.slice(endIdx + endM.length).trimStart();
+            return [before, fencedBlock, after].filter(Boolean).join('\n\n') + '\n';
+        }
     }
     const trimmed = existingRaw.trimEnd();
     return trimmed ? `${trimmed}\n\n${fencedBlock}\n` : `${fencedBlock}\n`;

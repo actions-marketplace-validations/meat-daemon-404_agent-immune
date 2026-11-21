@@ -26,11 +26,12 @@ dsh-immune-system/  the installable package (manifest, hooks.json, commands,
 
 Build: `npm run build` (tsc, emits into `dsh-immune-system/dist/`). Zero runtime
 dependencies — `node:sqlite` only. `dist/` and `client/client.js` are committed
-so installs need no toolchain; bump versions in **six** manifests
+so installs need no toolchain; bump versions in **seven** manifests
 (`package.json` ×2 fields, `dsh-immune-system/package.json` ×2,
 `dsh-immune-system/.zcode-plugin/plugin.json`, `marketplace.json`,
-`.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json` — all checked by
-`scripts/check-versions.mjs`, so drift fails CI, not users).
+`.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`,
+`server.json` ×2 — all 10 fields checked by `scripts/check-versions.mjs`, so
+drift fails CI, not users).
 
 ## Load-bearing decisions (do not "simplify" these away)
 
@@ -452,7 +453,7 @@ node scripts/verify-live-host.mjs # 20  — real Cordis event bus + SQLite
 node scripts/bench-tool-latency.mjs  # cost lands at the turn boundary; also pins the drain curve and IMMUNE_DISTILL_BUDGET_MS
 node scripts/bench-scale.mjs         # 300-rule library: index cost and match p50/p95; gates a pathological slowdown
 node scripts/verify-client-serve.mjs # 10  — mounts the real ClientModuleRegistry and serves /plugins/<id>/client.js
-node scripts/verify-connected-runtime.mjs # 25 — the connect'd (vendored) hooks driven end-to-end with NO host env vars; also pinned in CI on Linux
+node scripts/verify-connected-runtime.mjs # 42 — the connect'd (vendored) hooks driven end-to-end with NO host env vars; also pinned in CI on Linux
 node scripts/verify-dist-integrity.mjs   # 5  — every relative dist import resolves, source↔dist 1:1; --self-test proves the dead-import detector; pinned in CI
 node scripts/verify-llm.mjs          # env-gated, SKIPs without LLM env; one command to live-verify external distillation
 node scripts/eval-judge.mjs          # machine-only: replays the host's labeled tool calls through the judge (needs the ZCode db)
@@ -522,7 +523,7 @@ silently broke the canonical episode shape.
 5. `node scripts/bench-seed-recall.mjs` PASS (fast; the CONTENT gate — every
    rule in `core/packs.ts` must be recallable from a paraphrased prompt, so a
    starter rule that nobody can find fails CI; also pins in CI)
-6. Bump all six manifests (same version everywhere; run `node scripts/check-versions.mjs`)
+6. Bump all seven manifests (10 fields, same version everywhere; run `node scripts/check-versions.mjs`)
 7. Commit (message file + `git commit -F`), push
 8. For a release: tag `v<version>`, `npm pack`, attach the tarball to a GitHub
    Release, update the installed copy:

@@ -48,8 +48,8 @@ export class ImmuneStore {
                     : resolveDbPath(process.env, opts.cwd));
         this.db = openDatabase(this.dbPath);
     }
-    insert(ab) {
-        return insertAntibody(this.db, ab);
+    insert(ab, opts = {}) {
+        return insertAntibody(this.db, ab, opts);
     }
     /**
      * Insert and, when the rule is provably generic, also publish it to the

@@ -157,6 +157,8 @@ export function insertAntibody(db, ab, options = {}) {
         LIMIT 1`)
         .get(prescription, effectiveScope);
     if (exact) {
+        if (options.skipIfExists)
+            return null;
         const merged = mergeTriggers(exact.trigger_pattern, trigger);
         const nextScope = exact.project_scope === '*' || effectiveScope === '*' ? '*' : exact.project_scope;
         if (merged) {
@@ -173,6 +175,8 @@ export function insertAntibody(db, ab, options = {}) {
         for (const candidate of candidates) {
             if (prescriptionSimilarity(candidate.prescription, prescription) < MERGE_THRESHOLD)
                 continue;
+            if (options.skipIfExists)
+                return null;
             if (options.humanHint || options.fromLlm) {
                 const mergedTrigger = mergeTriggers(candidate.trigger_pattern, trigger);
                 db.prepare(`UPDATE antibodies

@@ -2,6 +2,21 @@
 
 All notable changes to **agent-immune** (`dsh-immune-system`) are documented in this file.
 
+## [3.1.0] - 2026-11-21
+
+### Added
+- **`immune mcp` CLI Entrypoint (`zcode/src/cli.ts`)**: Wired the missing `mcp` subcommand directly to `runMcpServer()`, making `npx -y dsh-immune-system@latest mcp` work seamlessly across the Official MCP Registry (`server.json`), Smithery (`smithery.yaml`), and manual IDE configs.
+- **26 MCP Server Tools (`zcode/src/mcp-server.ts`)**: Added 5 read-only v2.4/v3.0 MCP tools (`immune_guard`, `immune_vaccinate`, `immune_diagnose`, `immune_autopsy`, `immune_federate`), strict MCP `isError: true` error reporting, Windows/symlink-safe direct-entry detection, and finite-integer parameter validation.
+- **Dashboard & DSH Insights / Guard APIs (`core/ui/server.ts`, `dsh/src/ui-route.ts`)**: Added `GET /api/insights` (Immunity Score, 5-domain diagnosis, forensic autopsy, Workspace DNA) and `POST /api/guard` (interactive Pre-Flight Guard evaluation), plus strict host-schema `renderGuardHostHookDecision()` in `core/guard.ts`.
+
+### Fixed
+- **Privacy & Secret Gate Hardening (`core/team-sync.ts`, `core/guard.ts`, `core/vaccine.ts`)**: Delegated `isTeamShareSafe()` to canonical `shareSanityCheck()` (closing leaks of Windows non-`Users` paths, `/root/.ssh`, OpenAI `sk-proj-`, Anthropic `sk-ant-`, AWS `AKIA`, GitHub `github_pat_`, PEM keys while allowing `@2x.png`); redacted live secrets from all `guard` verdict/terminal/Markdown outputs (AGENTS #10); hardened `verifyTeamRulesJsonl()` against malformed JSON and forged hashes; guarded `verifyVaccineLockfile()` against `null`/malformed JSON crashes and added `bun.lock` detection.
+- **Eliminated Repeat-Hydration `hit_count` Inflation (AGENTS #9)**: Added `InsertOptions.skipIfExists` so `hydrateTeamRules`, `applyVaccineLockfile`, and `team-sync --import` are strictly idempotent without inflating `hit_count`; moved team-rule hydration to `SessionStart` and scoped auto-exports to the active workspace.
+- **Pre-Flight Guard Security & Regex Matrix (`core/guards.ts`, `core/guard.ts`, `core/runtime.ts`, `dsh/src/index.ts`)**: Extracted raw shell command strings via `extractGuardInput()` to fix multiline bypass (`rm -rf /\necho`) and cross-line false positives; fixed flag permutations (`rm -fr /`, `rm -r -f /`, `chmod 0777`, `chmod a+rwx`, `git commit -n`, `TRUNCATE users`), scoped rewrites safely (`git push --force` chained commands, `prisma migrate dev --create-only`, `pnpm/yarn add`, `uv pip install`, `||` precedence grouping), added `git-clean-force` & `git-discard-worktree`, enforced stopword/weak-word/CJK filtering, and kept learned DB rules warning-only unless `strict: true` (AGENTS #8).
+- **IDE Rules Transpiler & `ci-check` Interop (`core/compile-rules.ts`, `core/share-guard.ts`)**: Unified fence markers with `sync-doc.ts` (`<!-- immune:generated start/end -->`), sanitized angle brackets/backticks/newlines, fixed valid YAML frontmatter in Cursor `.mdc`, and extended `parseManagedBlock()` to parse both `sync-doc` and `compile-rules` blocks.
+- **Composite GitHub Action (`action.yml`)**: Restored real shallow-safe `git diff` scanning with `--github` annotations, `fail-on-findings` / `node-version` / `doc` / `base-ref` inputs, `vaccinate-check` mode, local action CLI execution, and `strict: false` handling across all gates.
+- **CLI, Completions & Web UI Polish (`zcode/src/commands/*`, `core/ui/*`, `dsh-immune-system/client/client.js`, `core/diagnose.ts`, `core/federate.ts`, `core/autopsy.ts`, `core/wrapped.ts`)**: Fixed positional arg parsing across `wrapped`/`team-sync`/`compile-rules`/`federate`/`guard --`, fixed `connect <host> --json`, fixed Zsh/PowerShell flag quoting & swapped `--badge`/`--markdown` completions, fixed DSH Shadow-DOM fallback blank render, fixed numeric `updated_at` sorting, removed 93-line duplicate UI code, added `cold-start`/`git-gambler` archetypes, fixed CJK/cross-tool federation clustering, aligned survival-rate denominators, and synchronized `package-lock.json` & documentation.
+
 ## [3.0.1] - 2026-11-21
 
 ### Fixed

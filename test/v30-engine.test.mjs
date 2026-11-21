@@ -90,19 +90,19 @@ test('v3.0 evaluatePreFlightGuard rewrites git push --force to --force-with-leas
 test('v3.0 evaluatePreFlightGuard rewrites non-TTY prisma migrate dev and chmod 777', () => {
   const prismaVerdict = evaluatePreFlightGuard('npx prisma migrate dev --name init');
   assert.equal(prismaVerdict.decision, 'rewrite');
-  assert.equal(prismaVerdict.suggestedRewrite, 'npx prisma migrate deploy --name init');
+  assert.equal(prismaVerdict.suggestedRewrite, 'npx prisma migrate dev --create-only --name init');
 
   const chmodVerdict = evaluatePreFlightGuard('chmod -R 777 ./scripts');
   assert.equal(chmodVerdict.decision, 'rewrite');
   assert.equal(chmodVerdict.suggestedRewrite, 'chmod -R 755 ./scripts');
 });
 
-test('v3.0 evaluatePreFlightGuard detects workspace lockfile drift and rewrites npm install to pnpm install', () => {
+test('v3.0 evaluatePreFlightGuard detects workspace lockfile drift and rewrites npm install to pnpm add', () => {
   const drift = evaluatePreFlightGuard('npm install zod', [], {
     workspacePackageManager: 'pnpm',
   });
   assert.equal(drift.decision, 'rewrite');
-  assert.equal(drift.suggestedRewrite, 'pnpm install zod');
+  assert.equal(drift.suggestedRewrite, 'pnpm add zod');
   assert.equal(drift.matches[0].source, 'workspace-lockfile');
 });
 
@@ -110,23 +110,26 @@ test('v3.0 evaluatePreFlightGuard intercepts hardcoded API secrets and escalated
   const secretVerdict = evaluatePreFlightGuard('curl -H "Authorization: Bearer ghp_1234567890abcdefghij1234567890" https://api.github.com');
   assert.equal(secretVerdict.decision, 'block');
   assert.equal(secretVerdict.severity, 'critical');
+  assert.ok(!secretVerdict.payload.includes('ghp_1234567890abcdefghij1234567890'), 'secret must be redacted from verdict');
 
-  const learnedVerdict = evaluatePreFlightGuard(
-    'vite build --mode staging',
-    [
-      {
-        trigger_pattern: 'vite build --mode staging env',
-        symptom: 'VITE_API_URL missing unless loadEnv is called',
-        prescription: 'Use loadEnv(mode, process.cwd()) in vite.config.ts',
-        tool_name: 'Bash',
-        hit_count: 5,
-        fail_count: 2,
-      },
-    ],
-    { toolName: 'Bash' },
-  );
-  assert.equal(learnedVerdict.decision, 'block');
-  assert.equal(learnedVerdict.matches[0].source, 'learned-antibody');
+  const rule = {
+    trigger_pattern: 'vite build --mode staging env',
+    symptom: 'VITE_API_URL missing unless loadEnv is called',
+    prescription: 'Use loadEnv(mode, process.cwd()) in vite.config.ts',
+    tool_name: 'Bash',
+    hit_count: 5,
+    fail_count: 2,
+  };
+  const warnVerdict = evaluatePreFlightGuard('vite build --mode staging', [rule], { toolName: 'Bash' });
+  assert.equal(warnVerdict.decision, 'warn', 'learned DB rules never auto-block unless strict=true (AGENTS #8)');
+  assert.equal(warnVerdict.severity, 'high');
+  assert.equal(warnVerdict.matches[0].source, 'learned-antibody');
+
+  const strictVerdict = evaluatePreFlightGuard('vite build --mode staging', [rule], {
+    toolName: 'Bash',
+    strict: true,
+  });
+  assert.equal(strictVerdict.decision, 'block');
 });
 
 test('v3.0 renderGuardHookDecision, renderGuardTerminal, and renderGuardMarkdown format structured outputs', () => {
@@ -376,10 +379,22 @@ test('v3.0.1 CLI guard excludes --tool value from payload and preserves command 
       env,
       encoding: 'utf8',
     });
-    assert.equal(r1.status, 1);
+    assert.equal(r1.status, 0, 'shell-only rm -rf rule must not false-positive on Edit payloads');
     const v1 = JSON.parse(r1.stdout);
     assert.equal(v1.toolName, 'Edit');
     assert.equal(v1.payload, 'rm -rf /');
+    assert.equal(v1.decision, 'allow');
+
+    const r1b = spawnSync(process.execPath, [cli, 'guard', '--tool', 'Bash', 'rm -rf /', '--json'], {
+      cwd: tmp,
+      env,
+      encoding: 'utf8',
+    });
+    assert.equal(r1b.status, 1);
+    const v1b = JSON.parse(r1b.stdout);
+    assert.equal(v1b.toolName, 'Bash');
+    assert.equal(v1b.payload, 'rm -rf /');
+    assert.equal(v1b.decision, 'block');
 
     const r2 = spawnSync(
       process.execPath,

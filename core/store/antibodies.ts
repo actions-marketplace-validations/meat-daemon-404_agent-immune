@@ -34,6 +34,12 @@ export interface InsertOptions {
   humanHint?: boolean;
   /** Distilled by the model (as opposed to the deterministic rule path). */
   fromLlm?: boolean;
+  /**
+   * Idempotent hydration mode (team-sync / vaccine lockfile import):
+   * if an exact or near-duplicate rule already exists, return `null` without
+   * incrementing `hit_count` or mutating existing counters (AGENTS.md #9).
+   */
+  skipIfExists?: boolean;
 }
 
 /** Escape a token for a bound LIKE value (the pattern part is constant). */
@@ -217,6 +223,7 @@ export function insertAntibody(
     | { id: number; trigger_pattern: string; project_scope: string }
     | undefined;
   if (exact) {
+    if (options.skipIfExists) return null;
     const merged = mergeTriggers(exact.trigger_pattern, trigger);
     const nextScope = exact.project_scope === '*' || effectiveScope === '*' ? '*' : exact.project_scope;
     if (merged) {
@@ -236,6 +243,7 @@ export function insertAntibody(
     const candidates = findMergeCandidates(db, trigger, effectiveScope);
     for (const candidate of candidates) {
       if (prescriptionSimilarity(candidate.prescription, prescription) < MERGE_THRESHOLD) continue;
+      if (options.skipIfExists) return null;
       if (options.humanHint || options.fromLlm) {
         const mergedTrigger = mergeTriggers(candidate.trigger_pattern, trigger);
         db.prepare(

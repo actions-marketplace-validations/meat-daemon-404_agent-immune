@@ -16,6 +16,12 @@ export interface InsertOptions {
     humanHint?: boolean;
     /** Distilled by the model (as opposed to the deterministic rule path). */
     fromLlm?: boolean;
+    /**
+     * Idempotent hydration mode (team-sync / vaccine lockfile import):
+     * if an exact or near-duplicate rule already exists, return `null` without
+     * incrementing `hit_count` or mutating existing counters (AGENTS.md #9).
+     */
+    skipIfExists?: boolean;
 }
 /**
  * Union the incoming trigger into the stored one, keeping every recall path

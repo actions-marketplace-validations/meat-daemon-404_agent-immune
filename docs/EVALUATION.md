@@ -1,6 +1,6 @@
-# Evaluation & Real-World Benchmarks (`dsh-immune-system@2.3.0`)
+# Evaluation & Real-World Benchmarks (`dsh-immune-system@3.1.0`)
 
-All metrics below are directly measured on the `dsh-immune-system@2.3.0` codebase using built-in test suites and reproducible scripts under `scripts/`. None of the numbers are fabricated or extrapolated.
+All metrics below are directly measured on the `dsh-immune-system@3.1.0` codebase using built-in test suites and reproducible scripts under `scripts/`. None of the numbers are fabricated or extrapolated.
 
 ---
 
@@ -22,9 +22,9 @@ All metrics below are directly measured on the `dsh-immune-system@2.3.0` codebas
 
 | Suite / Script | Command | Result | Scope |
 | --- | --- | --- | --- |
-| Unit & Integration Suite | `npm test` | **266 / 266 passed (`0` failed, `0` skipped)** | Core store, hygiene, rubric, Red-3 triage, SHA-256 receipts, shared-rule suppression, turn locks, `explain` simulator, `wrapped` SVG scorecard, `team-sync` JSONL, `./core` SDK, `git-hook`, completions, MCP (`21` tools), MCP registries, manifests |
-| Version Sync Guard | `node scripts/check-versions.mjs` | **10/10 fields aligned at `2.3.0`** | All 7 root/plugin/DSH/ZCode/marketplace/Claude/MCP-Registry manifests |
-| Dist Graph Integrity | `node scripts/verify-dist-integrity.mjs` (+ `--self-test`) | **Passed (0 failed)** | 1:1 `src -> dist` mapping & relative import resolution (`99` files) |
+| Unit & Integration Suite | `npm test` | **302 / 302 passed (`0` failed, `0` skipped)** | Core store, hygiene, rubric, Red-3 triage, SHA-256 receipts, shared-rule suppression, turn locks, `explain` simulator, `wrapped` SVG scorecard, `team-sync` JSONL, `guard`, `vaccinate`, `federate`, `diagnose`, `autopsy`, `compile-rules`, `./core` SDK, `git-hook`, completions, MCP (`26` tools), MCP registries, manifests |
+| Version Sync Guard | `node scripts/check-versions.mjs` | **10/10 fields aligned at `3.1.0`** | All 7 root/plugin/DSH/ZCode/marketplace/Claude/MCP-Registry manifests |
+| Dist Graph Integrity | `node scripts/verify-dist-integrity.mjs` (+ `--self-test`) | **Passed (0 failed)** | 1:1 `src -> dist` mapping & relative import resolution (`105` files, `333` imports) |
 | End-to-End A/B Simulation | `node scripts/bench-ab-simulation.mjs` | **Passed (`-95.0%` repeat pitfalls)** | 30 sessions (10 pitfall families × 3 turns): `-63.3%` total failures, `-61.4%` tokens, `0.008 ms` p50 recall |
 | DSH Outcome & Adapters | `node scripts/verify-step1.mjs` & `verify-steps23.mjs` | **15/15** & **24/24 passed** | Outcome judge, fail→success pair, inject, probes, DSH v4 message source |
 | Live Cordis Host Replay | `node scripts/verify-live-host.mjs` | **20/20 passed (`0` failed)** | Event bus, `turn-stopping`, priming, cold resume |

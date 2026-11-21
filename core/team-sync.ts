@@ -8,8 +8,10 @@
  * Two branches adding different rules merge in git without conflicts.
  */
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { deriveProjectScope } from './hygiene.js';
+import { shareSanityCheck } from './share-guard.js';
 
 export interface TeamRuleRecord {
   readonly hash: string;
@@ -26,17 +28,21 @@ export interface TeamSyncCandidate {
   readonly tool_name?: string | null;
   readonly hit_count?: number;
   readonly status?: string;
+  readonly project_scope?: string;
 }
 
 export interface TeamRuleImportStore {
-  insert(input: {
-    trigger_pattern: string;
-    symptom: string;
-    prescription: string;
-    tool_name?: string | null;
-    prescription_source?: 'llm' | 'heuristic' | 'human';
-    origin?: string;
-  }): unknown;
+  insert(
+    input: {
+      trigger_pattern: string;
+      symptom: string;
+      prescription: string;
+      tool_name?: string | null;
+      prescription_source?: 'llm' | 'heuristic' | 'human';
+      origin?: string;
+    },
+    opts?: { skipIfExists?: boolean },
+  ): unknown;
 }
 
 /** Deterministic 16-hex-char SHA-256 fingerprint of a rule's prescription. */
@@ -46,16 +52,19 @@ export function canonicalRuleHash(prescription: string): string {
 }
 
 /**
- * Basic privacy and portability check for git-committed team rules:
- * rejects rules containing user home directories, Windows drive paths,
- * email addresses, or credential tokens.
+ * Canonical privacy and portability gate for git-committed team rules:
+ * delegates to `shareSanityCheck` so every secret format (OpenAI/Anthropic/AWS/
+ * GitHub/PEM/JWT/URL credentials), user/drive/UNC path, and real email address
+ * is caught consistently across all sharing surfaces without rejecting `@2x.png`.
  */
 export function isTeamShareSafe(rule: TeamSyncCandidate): boolean {
-  const combined = `${rule.trigger_pattern} ${rule.symptom} ${rule.prescription}`;
-  if (/(?:\/Users\/|\/home\/|[A-Za-z]:[\\/]+Users[\\/]+)/i.test(combined)) return false;
-  if (/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/.test(combined)) return false;
-  if (/(?:sk-[A-Za-z0-9]{16,}|ghp_[A-Za-z0-9]{20,}|Bearer\s+[A-Za-z0-9._-]{12,})/i.test(combined)) return false;
-  return true;
+  return shareSanityCheck([
+    {
+      trigger_pattern: rule.trigger_pattern,
+      symptom: rule.symptom,
+      prescription: rule.prescription,
+    },
+  ]).length === 0;
 }
 
 /** Convert candidate rules into deterministically sorted JSONL text. */
@@ -133,23 +142,33 @@ export function parseTeamRulesJsonl(raw: string): TeamRuleRecord[] {
 export function writeTeamRulesFile(
   filePath: string,
   candidates: ReadonlyArray<TeamSyncCandidate>,
-  opts: { minHits?: number } = {},
+  opts: { minHits?: number; replace?: boolean } = {},
 ): { exported: number; skippedUnsafe: number } {
-  const existing = existsSync(filePath) ? parseTeamRulesJsonl(readFileSync(filePath, 'utf8')) : [];
+  const existingRaw = existsSync(filePath) ? readFileSync(filePath, 'utf8') : '';
+  const existing = !opts.replace && existingRaw ? parseTeamRulesJsonl(existingRaw) : [];
   const mergedCandidates: TeamSyncCandidate[] = [
     ...existing.map((r) => ({ ...r, hit_count: opts.minHits ?? 3, status: 'active' })),
     ...candidates,
   ];
   const result = serializeTeamRulesJsonl(mergedCandidates, opts);
+  if (existsSync(filePath) && existingRaw === result.jsonl) {
+    return { exported: result.exported, skippedUnsafe: result.skippedUnsafe };
+  }
   mkdirSync(dirname(filePath), { recursive: true });
-  writeFileSync(filePath, result.jsonl, 'utf8');
+  const tmpPath = `${filePath}.${process.pid}.tmp`;
+  try {
+    writeFileSync(tmpPath, result.jsonl, 'utf8');
+    renameSync(tmpPath, filePath);
+  } catch {
+    writeFileSync(filePath, result.jsonl, 'utf8');
+  }
   return { exported: result.exported, skippedUnsafe: result.skippedUnsafe };
 }
 
 /**
  * Zero-config SessionStart/Stop hydration: if `.immune/rules.jsonl` exists in
  * the workspace and `IMMUNE_TEAM_SYNC !== 'off'`, idempotently import team rules
- * into the active project store.
+ * into the active project store without inflating `hit_count` on duplicates.
  */
 export function hydrateTeamRules(
   store: TeamRuleImportStore,
@@ -166,15 +185,21 @@ export function hydrateTeamRules(
   const records = parseTeamRulesJsonl(readFileSync(filePath, 'utf8'));
   let imported = 0;
   for (const rec of records) {
-    store.insert({
-      trigger_pattern: rec.trigger_pattern,
-      symptom: rec.symptom || '(team rule)',
-      prescription: rec.prescription,
-      tool_name: rec.tool_name,
-      prescription_source: 'human',
-      origin: 'team_sync',
-    });
-    imported += 1;
+    if (!isTeamShareSafe(rec)) continue;
+    const insertedId = store.insert(
+      {
+        trigger_pattern: rec.trigger_pattern,
+        symptom: rec.symptom || '(team rule)',
+        prescription: rec.prescription,
+        tool_name: rec.tool_name,
+        prescription_source: 'human',
+        origin: 'team_sync',
+      },
+      { skipIfExists: true },
+    );
+    if (insertedId !== null && insertedId !== undefined) {
+      imported += 1;
+    }
   }
   return { imported, total: records.length, path: filePath };
 }
@@ -182,7 +207,7 @@ export function hydrateTeamRules(
 /**
  * Zero-config turn-end auto-export: if `.immune/rules.jsonl` already exists in
  * the workspace (or `IMMUNE_TEAM_SYNC === '1'`) and `IMMUNE_TEAM_SYNC !== 'off'`,
- * merge and export proven share-safe rules back to `.immune/rules.jsonl`.
+ * merge and export proven share-safe rules scoped to this workspace back to `.immune/rules.jsonl`.
  */
 export function maybeSyncTeamRulesAfterDrain(
   store: { listAll(includeQuarantined?: boolean): ReadonlyArray<TeamSyncCandidate> },
@@ -194,7 +219,11 @@ export function maybeSyncTeamRulesAfterDrain(
   if (!existsSync(filePath) && env.IMMUNE_TEAM_SYNC !== '1') return null;
   const minHitsRaw = Number(env.IMMUNE_TEAM_SYNC_MIN_HITS ?? '3');
   const minHits = Number.isFinite(minHitsRaw) && minHitsRaw >= 1 ? Math.floor(minHitsRaw) : 3;
-  const res = writeTeamRulesFile(filePath, store.listAll(false), { minHits });
+  const workspaceScope = deriveProjectScope(workspace);
+  const scoped = store
+    .listAll(false)
+    .filter((r) => !r.project_scope || r.project_scope === '*' || r.project_scope === workspaceScope);
+  const res = writeTeamRulesFile(filePath, scoped, { minHits });
   return { exported: res.exported, skippedUnsafe: res.skippedUnsafe, path: filePath };
 }
 
@@ -205,42 +234,97 @@ export interface TeamRulesCheckReport {
   readonly duplicates: number;
   readonly unsafeCount: number;
   readonly conflictMarkers: boolean;
+  readonly malformedLines: number;
+  readonly hashMismatches: number;
 }
 
 /**
  * Audit a `.immune/rules.jsonl` payload for CI gates (`immune team-sync --check`):
- * detects git merge conflict markers, unsorted hashes, duplicate hashes, and unsafe paths/secrets.
+ * detects git merge conflict markers, malformed JSON lines, forged/mismatched
+ * prescription hashes, unsorted hashes, duplicate hashes, and unsafe paths/secrets.
  */
 export function verifyTeamRulesJsonl(raw: string): TeamRulesCheckReport {
   const conflictMarkers = /^(?:<{7}|={7}|>{7})/m.test(raw);
-  const records = parseTeamRulesJsonl(raw);
   const seen = new Set<string>();
+  let total = 0;
   let duplicates = 0;
   let unsafeCount = 0;
   let unsorted = false;
+  let malformedLines = 0;
+  let hashMismatches = 0;
   let prevHash = '';
 
-  for (const rec of records) {
-    if (seen.has(rec.hash)) {
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#') || /^(?:<{7}|={7}|>{7})/.test(trimmed)) continue;
+    let parsed: Partial<TeamRuleRecord>;
+    try {
+      const val = JSON.parse(trimmed);
+      if (!val || typeof val !== 'object' || Array.isArray(val)) {
+        malformedLines += 1;
+        continue;
+      }
+      parsed = val as Partial<TeamRuleRecord>;
+    } catch {
+      malformedLines += 1;
+      continue;
+    }
+
+    if (
+      typeof parsed.trigger_pattern !== 'string' ||
+      !parsed.trigger_pattern.trim() ||
+      typeof parsed.prescription !== 'string' ||
+      !parsed.prescription.trim()
+    ) {
+      malformedLines += 1;
+      continue;
+    }
+
+    const prescription = parsed.prescription.trim();
+    const expectedHash = canonicalRuleHash(prescription);
+    const actualHash = typeof parsed.hash === 'string' && parsed.hash.trim() ? parsed.hash.trim() : '';
+    if (!actualHash || actualHash !== expectedHash) {
+      hashMismatches += 1;
+    }
+    const effectiveHash = actualHash || expectedHash;
+
+    total += 1;
+    if (seen.has(effectiveHash)) {
       duplicates += 1;
     } else {
-      seen.add(rec.hash);
+      seen.add(effectiveHash);
     }
-    if (prevHash && rec.hash.localeCompare(prevHash) < 0) {
+    if (prevHash && effectiveHash.localeCompare(prevHash) < 0) {
       unsorted = true;
     }
-    prevHash = rec.hash;
+    prevHash = effectiveHash;
+
+    const rec: TeamRuleRecord = {
+      hash: effectiveHash,
+      trigger_pattern: parsed.trigger_pattern.trim(),
+      symptom: typeof parsed.symptom === 'string' ? parsed.symptom.trim() : '',
+      prescription,
+      tool_name: typeof parsed.tool_name === 'string' ? parsed.tool_name : null,
+    };
     if (!isTeamShareSafe(rec)) {
       unsafeCount += 1;
     }
   }
 
   return {
-    valid: !conflictMarkers && !unsorted && duplicates === 0 && unsafeCount === 0,
-    total: records.length,
+    valid:
+      !conflictMarkers &&
+      !unsorted &&
+      duplicates === 0 &&
+      unsafeCount === 0 &&
+      malformedLines === 0 &&
+      hashMismatches === 0,
+    total,
     unsorted,
     duplicates,
     unsafeCount,
     conflictMarkers,
+    malformedLines,
+    hashMismatches,
   };
 }

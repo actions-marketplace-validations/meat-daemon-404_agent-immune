@@ -8,7 +8,7 @@ export declare const SUPPRESSED_REPEATS_KEY = "suppressed_repeats";
 /** Runtime truth for the optional model path: rules it produced / times it degraded. */
 export declare const LLM_SUCCESS_KEY = "llm_distilled";
 export declare const LLM_FALLBACK_KEY = "llm_fallbacks";
-import { type PenaltyContext } from './antibodies.js';
+import { type InsertOptions, type PenaltyContext } from './antibodies.js';
 import type { SeedInstallReport, SeedRemoveReport, SeedRule } from './seeds.js';
 import { type ModelRow } from './models.js';
 import { type DistillJob } from './jobs.js';
@@ -61,7 +61,7 @@ export declare class ImmuneStore {
     /** Shared library, opened on first need; undefined = not decided yet. */
     private globalStore;
     constructor(opts?: StoreOptions);
-    insert(ab: NewAntibody): number | null;
+    insert(ab: NewAntibody, opts?: InsertOptions): number | null;
     /**
      * Insert and, when the rule is provably generic, also publish it to the
      * shared library so the next project starts already knowing it.

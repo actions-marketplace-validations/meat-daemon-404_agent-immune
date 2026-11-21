@@ -104,6 +104,10 @@ export function cmdConnect(args: string[]): number {
   try {
     if (remove) {
       const report = disconnectHost(definition.id);
+      if (asJson) {
+        process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+        return 0;
+      }
       process.stdout.write(
         report.removed > 0
           ? `removed ${report.removed} immune hook(s) from ${report.configPath}\n`
@@ -113,6 +117,10 @@ export function cmdConnect(args: string[]): number {
       return 0;
     }
     const report = connectHost(definition.id, { refresh: args.includes('--refresh') });
+    if (asJson) {
+      process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+      return 0;
+    }
     process.stdout.write(`connected ${report.label} -> ${report.configPath}\n`);
     const counts: string[] = [];
     if (report.added > 0) counts.push(`${report.added} event(s) wired`);

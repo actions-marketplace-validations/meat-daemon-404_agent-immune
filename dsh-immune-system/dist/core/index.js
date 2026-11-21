@@ -17,6 +17,6 @@ export { canonicalRuleHash, hydrateTeamRules, isTeamShareSafe, maybeSyncTeamRule
 export { classifyRuleDomain, diagnoseAgentArchetype, renderDiagnosisMarkdown, renderDiagnosisSvg, renderDiagnosisTerminal, } from './diagnose.js';
 export { IDE_TARGET_PATHS, compileIdeRules, inferRuleGlobs, mergeFencedContent, renderCursorMdc, renderFencedRuleBlock, selectCompilableRules, } from './compile-rules.js';
 export { renderAutopsyMarkdown, renderAutopsyTerminal, runPitfallAutopsy, } from './autopsy.js';
-export { BUILTIN_GUARD_POLICIES, evaluatePreFlightGuard, renderGuardHookDecision, renderGuardMarkdown, renderGuardTerminal, } from './guard.js';
+export { BUILTIN_GUARD_POLICIES, evaluatePreFlightGuard, renderGuardHookDecision, renderGuardHostHookDecision, renderGuardMarkdown, renderGuardTerminal, } from './guard.js';
 export { applyVaccineLockfile, compileVaccineLockfile, computeVaccineIntegrityHash, detectWorkspaceDNA, renderVaccineMarkdown, renderVaccineTerminal, verifyVaccineLockfile, writeVaccineLockfile, } from './vaccine.js';
 export { federateSwarmRules, renderFederationMarkdown, renderFederationSvg, renderFederationTerminal, } from './federate.js';

@@ -11,7 +11,7 @@ import type { DistillJob, ImmuneStore } from './store/index.js';
 import { applyDistillResult } from './commit.js';
 import { distillBatch, distillEpisode, isSubstantiveHint } from './distiller.js';
 import { currentFingerprint } from './env-fingerprint.js';
-import { findGuardHit, guardMode } from './guards.js';
+import { extractGuardInput, findGuardHit, guardMode } from './guards.js';
 import { deriveProjectScope } from './hygiene.js';
 import { readLlmConfig, type LlmConfig } from './llm.js';
 import { normaliseTargetPath, targetSignature } from './pairing.js';
@@ -184,7 +184,7 @@ export class ImmuneRuntime {
 
     const mode = guardMode();
     if (mode !== 'off') {
-      const inspected = redact(input).slice(0, 2000);
+      const inspected = redact(extractGuardInput(opts.toolInput)).slice(0, 2000);
       const hit = findGuardHit(inspected);
       if (hit) {
         const banner =

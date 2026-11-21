@@ -3,7 +3,7 @@
  */
 import { ImmuneStore } from '../../../core/store/index.js';
 import { ImmuneRuntime } from '../../../core/runtime.js';
-import { hydrateTeamRules, maybeSyncTeamRulesAfterDrain } from '../../../core/team-sync.js';
+import { maybeSyncTeamRulesAfterDrain } from '../../../core/team-sync.js';
 import { runHook, sessionIdOf } from '../hook-io.js';
 import { selfMarkers } from '../root-marker.js';
 await runHook('Stop', async (event) => {
@@ -18,11 +18,10 @@ await runHook('Stop', async (event) => {
             runPostDrainHooks: true,
         });
         try {
-            hydrateTeamRules(store, workspace);
             maybeSyncTeamRulesAfterDrain(store, workspace);
         }
         catch {
-            // Best-effort team rule two-way sync; never fail Stop hook.
+            // Best-effort team rule export; never fail Stop hook.
         }
     }
     finally {

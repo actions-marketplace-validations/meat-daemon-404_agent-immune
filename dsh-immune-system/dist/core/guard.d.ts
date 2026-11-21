@@ -11,6 +11,7 @@
 import type { DiagnosableRule } from './diagnose.js';
 export type GuardSeverity = 'low' | 'medium' | 'high' | 'critical';
 export type GuardDecision = 'allow' | 'warn' | 'rewrite' | 'block';
+export type GuardHookHost = 'generic' | 'claude-code' | 'cursor' | 'antigravity' | 'gemini-cli';
 export interface GuardMatchedPolicy {
     readonly id: string;
     readonly title: string;
@@ -44,6 +45,8 @@ export interface BuiltinGuardPolicySpec {
     readonly defaultDecision: GuardDecision;
     readonly pattern: RegExp;
     readonly negativePattern?: RegExp;
+    readonly shellOnly?: boolean;
+    readonly customMatch?: (payload: string) => boolean;
     readonly reason: string;
     readonly prescription: string;
     readonly rewrite?: (payload: string) => string | null;
@@ -58,7 +61,7 @@ export declare function renderGuardTerminal(verdict: GuardVerdict): string;
 /** Render a GitHub Markdown report for a Pre-Flight Guard evaluation. */
 export declare function renderGuardMarkdown(verdict: GuardVerdict): string;
 /**
- * Format a PreToolUse hook decision compatible with Claude Code / Cursor hook protocol.
+ * Format a PreToolUse hook decision (generic JSON contract).
  */
 export declare function renderGuardHookDecision(verdict: GuardVerdict): {
     readonly decision: 'allow' | 'block';
@@ -68,3 +71,7 @@ export declare function renderGuardHookDecision(verdict: GuardVerdict): {
         readonly command: string;
     };
 };
+/**
+ * Format a strict host-schema PreToolUse hook payload without unknown keys (AGENTS.md #2).
+ */
+export declare function renderGuardHostHookDecision(verdict: GuardVerdict, host?: GuardHookHost): Record<string, unknown>;

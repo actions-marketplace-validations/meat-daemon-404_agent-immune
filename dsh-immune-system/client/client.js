@@ -436,7 +436,7 @@ window.__ModuleLoader__.load({
         if (sort === 'hits') return b.hit_count - a.hit_count || a.id - b.id;
         if (sort === 'fails') return b.fail_count - a.fail_count || a.id - b.id;
         if (sort === 'rubric') return (b.rubric_score || 0) - (a.rubric_score || 0) || b.hit_count - a.hit_count;
-        return String(b.updated_at).localeCompare(String(a.updated_at)) || b.id - a.id;
+        return ((Number(b.updated_at) || 0) - (Number(a.updated_at) || 0)) || b.id - a.id;
       });
 
       var body;
@@ -826,10 +826,17 @@ window.__ModuleLoader__.load({
       var target = React.useState(null);
       var mount = target[0];
       var setMount = target[1];
+      var fb = React.useState(false);
+      var useFallback = fb[0];
+      var setUseFallback = fb[1];
 
       React.useEffect(function () {
         var node = host.current;
-        if (!node || !ReactDOM || typeof node.attachShadow !== 'function') return undefined;
+        if (!node) return undefined;
+        if (!ReactDOM || typeof ReactDOM.createPortal !== 'function' || typeof node.attachShadow !== 'function') {
+          setUseFallback(true);
+          return undefined;
+        }
         var shadow = node.shadowRoot || node.attachShadow({ mode: 'open' });
         var slot = shadow.querySelector('div[data-immune-root]');
         if (!slot) {
@@ -845,7 +852,7 @@ window.__ModuleLoader__.load({
       return h(
         'div',
         { ref: host, className: 'shield', style: { display: 'block', width: '100%', minWidth: 0 } },
-        ready ? ReactDOM.createPortal(h(ImmunePanel, null), mount) : null,
+        ready ? ReactDOM.createPortal(h(ImmunePanel, null), mount) : useFallback ? h(ImmunePanel, null) : null,
       );
     }
 

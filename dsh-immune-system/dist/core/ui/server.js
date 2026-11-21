@@ -24,6 +24,11 @@ import { renderSkillMarkdown } from '../export.js';
 import { shareSanityCheck } from '../share-guard.js';
 import { scanMagpieTelemetry } from '../audit/magpie.js';
 import { explainRecall } from '../explain.js';
+import { diagnoseAgentArchetype } from '../diagnose.js';
+import { runPitfallAutopsy } from '../autopsy.js';
+import { evaluatePreFlightGuard } from '../guard.js';
+import { detectWorkspaceDNA } from '../vaccine.js';
+import { computeImmunityScore } from '../wrapped.js';
 export async function startUiServer(options = {}) {
     const store = new ImmuneStore(options.dbPath ? { dbPath: options.dbPath } : {});
     const token = randomBytes(24).toString('hex');
@@ -83,7 +88,8 @@ export async function startUiServer(options = {}) {
             // Token-gated like every /api path: the download link carries it.
             const format = url.searchParams.get('format') === 'json' ? 'json' : 'md';
             const snapshot = format === 'json' ? exportLibrary(store) : null;
-            const exportRows = snapshot ? snapshot.antibodies : store.exportable(3);
+            const mdRows = snapshot ? null : store.exportable(3);
+            const exportRows = snapshot ? snapshot.antibodies : mdRows;
             const violations = shareSanityCheck(exportRows);
             if (violations.length > 0) {
                 sendJson(res, 422, { error: 'export blocked by the share gate', violations });
@@ -95,7 +101,7 @@ export async function startUiServer(options = {}) {
                 'cache-control': 'no-store',
                 'x-content-type-options': 'nosniff',
             });
-            res.end(snapshot ? JSON.stringify(snapshot, null, 2) : renderSkillMarkdown(store.exportable(3)));
+            res.end(snapshot ? JSON.stringify(snapshot, null, 2) : renderSkillMarkdown(mdRows));
             return;
         }
         if (path === '/api/import' && req.method === 'POST') {
@@ -138,9 +144,64 @@ export async function startUiServer(options = {}) {
         if (path === '/api/explain' && req.method === 'GET') {
             const query = url.searchParams.get('q') ?? '';
             const rawLimit = Number(url.searchParams.get('limit') ?? '5');
-            const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(10, rawLimit) : 5;
+            const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(10, Math.trunc(rawLimit)) : 5;
             const toolName = url.searchParams.get('tool') ?? undefined;
             sendJson(res, 200, explainRecall(store, query, { limit, toolName }));
+            return;
+        }
+        if (path === '/api/insights' && req.method === 'GET') {
+            const active = store.listAll(false);
+            const s = store.stats();
+            const totalInjections = active.reduce((sum, r) => sum + r.hit_count, 0);
+            const totalFails = active.reduce((sum, r) => sum + r.fail_count, 0);
+            const repeatFailures = active.length === 0 && totalInjections === 0 ? 0 : Math.max(s.suppressedRepeats + totalInjections, active.length);
+            const totalCalls = repeatFailures === 0 && totalFails === 0
+                ? 0
+                : Math.max((repeatFailures + totalFails) * 18, totalInjections * 4, active.length * 25);
+            sendJson(res, 200, {
+                immunityScore: computeImmunityScore({
+                    totalCalls,
+                    repeatFailures,
+                    avoidableTokens: (s.suppressedRepeats + totalInjections) * 2400,
+                    activeRules: active.length,
+                    totalInjections,
+                }),
+                diagnosis: diagnoseAgentArchetype(active),
+                autopsy: runPitfallAutopsy(active),
+                workspaceDna: detectWorkspaceDNA(process.cwd()),
+            });
+            return;
+        }
+        if (path === '/api/guard' && req.method === 'POST') {
+            readBody(req, res, (body) => {
+                let parsed;
+                try {
+                    parsed = (body.trim() ? JSON.parse(body) : {});
+                }
+                catch {
+                    sendJson(res, 400, { error: 'invalid json' });
+                    return;
+                }
+                const payload = typeof parsed.payload === 'string' ? parsed.payload : '';
+                if (!payload.trim()) {
+                    sendJson(res, 400, { error: 'payload is required' });
+                    return;
+                }
+                const toolName = typeof parsed.toolName === 'string' && parsed.toolName.trim() ? parsed.toolName.trim() : 'Bash';
+                const strict = parsed.strict === true;
+                const dna = detectWorkspaceDNA(process.cwd());
+                const pm = dna.packageManager === 'pnpm' ||
+                    dna.packageManager === 'yarn' ||
+                    dna.packageManager === 'bun' ||
+                    dna.packageManager === 'uv'
+                    ? dna.packageManager
+                    : null;
+                sendJson(res, 200, evaluatePreFlightGuard(payload, store.listAll(false), {
+                    toolName,
+                    strict,
+                    workspacePackageManager: pm,
+                }));
+            });
             return;
         }
         if (path === '/api/hygiene' && req.method === 'POST') {

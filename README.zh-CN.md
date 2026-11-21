@@ -9,7 +9,7 @@
   <p>
     <a href="https://www.npmjs.com/package/dsh-immune-system"><img src="https://img.shields.io/npm/v/dsh-immune-system?label=npm%20%7C%20dsh-immune-system" alt="npm 版本"></a>
     <a href="https://github.com/meat-daemon-404/agent-immune/actions/workflows/ci.yml"><img src="https://github.com/meat-daemon-404/agent-immune/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-    <img src="https://img.shields.io/badge/单测-283%20通过-16a34a" alt="283 单测通过">
+    <img src="https://img.shields.io/badge/单测-302%20通过-16a34a" alt="302 单测通过">
     <img src="https://img.shields.io/badge/运行时依赖-0-2563eb" alt="零运行时依赖">
     <img src="https://img.shields.io/badge/node-%5E22.19%20%7C%7C%20%3E%3D24-0ea5e9" alt="node ^22.19 || >=24">
     <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT">
@@ -124,11 +124,22 @@ immune autopsy --markdown                      # 输出 Markdown 格式的 ROI �
 ```
 
 ### 3. 💉 跨 IDE 规则“罗塞塔编译器”（`immune compile-rules`）
-在 Claude Code 里踩过一次坑，为什么换到 Cursor 或 GitHub Copilot 还要再踩一遍？`immune compile-rules` 可以把本地 SQLite 里经过实战验证且通过隐私安全门禁（自动剔除含 `/Users/`、邮箱和 Token 的规则）的抗体，**一键转译成 5 大主流 IDE 的原生规则格式**——包括带自动文件后缀推导（`globs: **/*.rs, **/Cargo.toml`）的 Cursor `.mdc` 文件，且通过 `<!-- immune:generated -->` 围栏完美保留你原本手写的指令：
+在 Claude Code 里踩过一次坑，为什么换到 Cursor 或 GitHub Copilot 还要再踩一遍？`immune compile-rules` 可以把本地 SQLite 里经过实战验证且通过隐私安全门禁（自动剔除含 `/Users/`、邮箱和 Token 的规则）的抗体，**一键转译成 5 大主流 IDE 的原生规则格式**——包括带自动文件后缀推导（`globs: "**/*.rs, **/Cargo.toml"`）的 Cursor `.mdc` 文件，且通过 `<!-- immune:generated start/end -->` 围栏完美保留你原本手写的指令并与 `ci-check` 互通：
 
 ```bash
 immune compile-rules --target all              # 一键编译至 Cursor (.mdc)、Copilot、Windsurf、Cline 与 CLAUDE.md
 immune compile-rules --target cursor           # 仅生成 .cursor/rules/immune-pitfalls.mdc（自动推导 globs）
+```
+
+### 4. 🛡️ 执行前爆炸半径守卫、声明式疫苗锁文件与多仓蜂群联邦（`guard` / `vaccinate` / `federate`）
+- **`immune guard "<cmd>"`**：对高危命令进行 `0–100` 爆炸半径打分，阻断 `rm -rf /`、破坏性 SQL DDL 与明文凭证（且所有输出自动脱敏），并安全改写高频坑点（`git push --force` → `--force-with-lease`、`prisma migrate dev` → `--create-only`、锁文件漂移自动改写为 `pnpm/yarn/bun add` 或 `uv pip install`）。
+- **`immune vaccinate [--apply|--check|--refresh]`**：扫描仓库 Workspace DNA 生成带 SHA-256 完整性校验的 `.immune/vaccine.lock.json`，实现新克隆仓库第 0 天零试错免疫。
+- **`immune federate [files...] [--svg]`**：跨多仓、多 Agent 聚类收敛共享抗体，产出 `0–100` 蜂群共识分与通用法则（Universal Swarm Laws）。
+
+```bash
+immune guard "git push origin main --force"    # -> REWRITE: git push origin main --force-with-lease
+immune vaccinate --apply                       # 校验并应用 .immune/vaccine.lock.json 到本地 SQLite
+immune federate --svg ./swarm-consensus.svg    # 聚类多仓规则并渲染暗黑主题共识 SVG
 ```
 
 ---
@@ -138,12 +149,12 @@ immune compile-rules --target cursor           # 仅生成 .cursor/rules/immune-
 | 宿主 / 环境 | 接入形态 | 一键接入命令 | 运行机制与注入通道 |
 | --- | --- | --- | --- |
 | **Claude Code** | 6 个生命周期 Hook 或原生插件 | `npx dsh-immune-system@latest connect claude-code` | `~/.claude/settings.json` (`hookSpecificOutput`) 或 `.claude-plugin/` |
-| **Cursor** | 6 个生命周期 Hook + 旁路 MCP（20 工具） | `npx dsh-immune-system@latest connect cursor` | `~/.cursor/hooks.json` (`permission` / `agent_message`) + `~/.cursor/mcp.json` |
+| **Cursor** | 7 个生命周期 Hook + 旁路 MCP（26 工具） | `npx dsh-immune-system@latest connect cursor` | `~/.cursor/hooks.json` (`permission` / `agent_message`) + `~/.cursor/mcp.json` |
 | **Codex CLI** | 5 个生命周期 Hook（首次需跑 `/hooks` 信任） | `npx dsh-immune-system@latest connect codex` | `~/.codex/hooks.json`（自动映射 `shell_command` / `apply_patch`） |
 | **Google Antigravity** | 5 个生命周期 Hook（驼峰协议适配） | `npx dsh-immune-system@latest connect antigravity` | `~/.gemini/config/hooks.json`（`SessionStart` / `UserPromptSubmit` / `PreInvocation` / `PostToolUse` / `Stop`） |
 | **Gemini CLI** | 5 个生命周期 Hook | `npx dsh-immune-system@latest connect gemini-cli` | `~/.gemini/settings.json`（`BeforeAgent` / `BeforeTool` / `AfterTool` / `AfterAgent`） |
-| **Windsurf / Roo Code / Cline / Claude Desktop** | MCP Server（21 工具） | `npx dsh-immune-system@latest connect <host>` | 自动接入 Windsurf、Roo Code、Cline 与 Claude Desktop 配置 |
-| **VS Code / Zed** | 原生 MCP / Context Server（21 工具） | `npx dsh-immune-system@latest connect vscode` / `zed` | `Code/User/mcp.json`（`servers`） · `zed/settings.json`（`context_servers`） |
+| **Windsurf / Roo Code / Cline / Claude Desktop** | MCP Server（26 工具） | `npx dsh-immune-system@latest connect <host>` | 自动接入 Windsurf、Roo Code、Cline 与 Claude Desktop 配置 |
+| **VS Code / Zed** | 原生 MCP / Context Server（26 工具） | `npx dsh-immune-system@latest connect vscode` / `zed` | `Code/User/mcp.json`（`servers`） · `zed/settings.json`（`context_servers`） |
 | **MCP 官方及主流注册表** | 标准注册表元数据清单 | `server.json` · `smithery.yaml` · `glama.json` | `io.github.meat-daemon-404/agent-immune`（`npx -y dsh-immune-system@latest mcp`） |
 | **自定义 Node/TS Agent** | 零依赖强类型 SDK | `import { ImmuneRuntime } from 'dsh-immune-system/core'` | 自带完整 `.d.ts` 类型声明（`./dist/core/index.d.ts`） |
 | **DeepSeek Harness (DSH)** | 原生 Cordis 插件包 + Shadow-DOM 设置页 | `dsh plugin --profile <profile> add dsh-immune-system` | `agent/session-start`、`pre-step`、`tools/post-execute`、`turn-stopping`（兼容 DSH 0.2.2+ v4 消息源） |
@@ -307,23 +318,27 @@ immune sync-doc                    # 将成熟规则同步写入 AGENTS.md（或
 随时可运行 `immune --help` 或 `immune <子命令> --help` 查看详细参数（只读与巡检命令均支持 `--json` 机器可读输出）。
 
 <details>
-<summary><b>展开查看全部 32 个 CLI 子命令</b></summary>
+<summary><b>展开查看全部 CLI 子命令（40+ 项）</b></summary>
 
 | 分类 | 命令 | 作用 |
 | --- | --- | --- |
 | **快速上手与宿主连接** | `immune demo` | 在内存中演示完整的「失败 → 蒸馏评分 → 异构提问召回 → `<immune_memory>`」闭环 |
+| | `immune mcp` | 启动零依赖 stdio JSON-RPC 2.0 MCP Server（共 `26` 项工具） |
 | | `immune connect [host] [--status\|--refresh\|--remove] [--json]` | 一键接入或卸载 11 类外部编程助手（省略 `host` 自动探测本机环境） |
 | | `immune git-hook [--install\|--remove\|--status] [--warn-only]` | 无损安装或卸载 `.git/hooks/pre-commit` 本地提交前避坑巡检钩子 |
 | | `immune completions <bash\|zsh\|fish\|powershell>` | 输出终端 Tab 自动补全脚本（支持 `immune` 与 `dsh-immune-system`） |
 | | `immune doctor [--json]` | 自检 Node/FTS5、双库状态、固定安装位钩子路径、UI 契约、预算钳位与规则卫生 |
-| | `immune ui [--port 7788]` | 启动本地离线回环仪表盘（含「召回模拟器」、中英双语切换） |
+| | `immune ui [--port 7788]` | 启动本地离线回环仪表盘（含召回模拟器、Insights 与 Guard API） |
+| **主动拦截与 v3.x 能力** | `immune guard "<cmd>" [--tool T] [--strict] [--hook] [--hook-host H]` | 执行前爆炸半径打分（`0–100`）、高危拦截与安全命令改写 |
+| | `immune vaccinate [--check\|--apply\|--refresh] [--lockfile F]` | 扫描 Workspace DNA 编译、校验或注入 `.immune/vaccine.lock.json` |
+| | `immune federate [files...] [--out F] [--min-consensus N] [--svg]` | 跨仓聚类共享抗体并产出通用法则（Universal Swarm Laws）与共识分 |
 | **抗体库管理与同步** | `immune list [--all] [--json]` | 查看当前生效（或含已退役/隔离）的抗体列表、评分与作用域 |
 | | `immune search <query>` | 只读搜索（不虚增命中计数） |
 | | `immune explain "<query>" [--tool T] [--limit N] [--json]` | 只读「召回模拟器」：查看概念图谱扩展、打分拆解与注入预览 |
 | | `immune learn <trigger> [symptom] <prescription>` | 直接写入人工确认的经验规则（`prescription_source = 'human'`） |
-| | `immune forget <id> \| --last \| --prune [days]` | 删除指定规则（完整保留只追加 SHA-256 回执链）或清理长期零命中僵尸规则 |
+| | `immune forget <id> \| --last \| --prune \| --purge` | 删除指定规则（完整保留只追加 SHA-256 回执链）或清理长期零命中僵尸规则 |
 | | `immune stats [--json]` | 查看规则分布、抑制重复带来的可省 Token 估算、模型归因与睡眠评审簇 |
-| | `immune diagnose [--svg [out.svg]] [--markdown] [--json]` | 诊断 Agent 踩坑故障人格（6 类）、五维免疫雷达图与专属疫苗处方 |
+| | `immune diagnose [--svg [out.svg]] [--markdown] [--json]` | 诊断 Agent 踩坑故障人格、五维免疫雷达图与专属疫苗处方 |
 | | `immune autopsy [--markdown] [--json]` | 法医级踩坑尸检账本：统计救回的 Token、API 美金、等待分钟数与脆弱伤疤 |
 | | `immune compile-rules [--target all\|cursor\|copilot\|windsurf\|cline\|claude]` | 将安全规则一键转译为 Cursor `.mdc`（自动推导 globs）、Copilot、Windsurf 等 5 种格式 |
 | | `immune wrapped [out.svg] [--badge] [--markdown] [--hosts H] [--stdout] [--json]` | 生成 1200×630 暗黑主题 SVG 避坑免疫成绩单、扁平徽章或 Markdown 表 |
@@ -333,45 +348,49 @@ immune sync-doc                    # 将成熟规则同步写入 AGENTS.md（或
 | | `immune sync-doc [--out FILE] [--min-hits N]` | 将成熟规则同步至 `AGENTS.md`（若仅存在 `CLAUDE.md` 则自动对齐） |
 | | `immune ci-check [--diff FILE] [--doc FILE] [--github] [--warn-only] [--json]` | 无状态扫描 Git Diff 风险行，支持 GitHub PR 行级批注与 Step Summary |
 | | `immune backup [dest.sqlite]` | 调用 `node:sqlite` 原生备份接口穿过 WAL 写出一致快照 |
-| **冷启动与知识摄入** | `immune seed [pack] [--baseline widely\|newly] [--remove] [--json]` | 列出、安装或保守卸载 9 套内置防呆种子包 |
+| **冷启动与知识摄入** | `immune seed [pack] [--baseline widely\|newly] [--remove]` | 列出、安装或保守卸载 9 套内置防呆种子包 |
 | | `immune audit [--dry-run] [--days N] [--max N] [--source S] [--json]` | 回放 ZCode / Codex / Claude Code / Antigravity 历史日志生成体检报告与蒸馏任务 |
 | | `immune ingest-skill <path> [--pack P] [--baseline B] [--remove]` | 将外部 `SKILL.md` 或规范文档按章节/表格索引进 FTS5 |
-| | `immune ingest-disk [roots...] [--max-depth N] [--dry-run]` | 扫描指定磁盘目录树下的工程规范与技能资产并脱敏入库 |
+| | `immune ingest-disk [roots...] [--depth N] [--dry-run]` | 扫描指定磁盘目录树下的工程规范与技能资产并脱敏入库 |
 | **质量治理与遥测** | `immune hygiene [--dry-run] [--json]` | 执行五维评分、路径抽象、工作区作用域加锁与噪声隔离修复 |
 | | `immune rewrite [--dry-run] [--max N] [--id a,b]` | 调用所配模型将命令行转储改写为精炼建议 |
-| | `immune consolidate [--dry-run] [--json]` | 合并同课近似规则，无损继承触发词、命中计数与多模型归因 |
+| | `immune consolidate [--dry-run]` | 合并同课近似规则，无损继承触发词、命中计数与多模型归因 |
 | | `immune coverage [--days N] [--top K] [--json]` | 审计宿主近期真实报错的规则覆盖率与未覆盖盲区簇 |
-| | `immune triage [--limit N] [--json]` | 查看 Red-3 注入后失败五桶分诊详情 |
-| | `immune receipts [--limit N] [--json]` | 校验 SHA-256 投递回执哈希链完整性与节省统计 |
-| | `immune models [--json]` / `workspaces [--json]` / `detours [--json]` | 模型免疫存活矩阵（含 Magpie 遥测）、已登记工作区画像与 4+ 次探测弯路记录 |
+| | `immune triage [--json]` / `receipts [--json]` | 查看 Red-3 注入后失败五桶分诊详情并校验 SHA-256 投递回执哈希链 |
+| | `immune models [--json]` / `workspaces [--json]` / `detours` | 模型免疫存活矩阵（含 Magpie 遥测）、已登记工作区画像与 4+ 次探测弯路记录 |
 </details>
 
 <details>
-<summary><b>展开查看全部 21 项 MCP Server 工具</b></summary>
+<summary><b>展开查看全部 26 项 MCP Server 工具</b></summary>
 
 | MCP 工具名 | 功能说明 |
 | --- | --- |
-| `immune_match` | 针对当前任务检索匹配抗体并记录投递回执 |
-| `immune_list` | 只读浏览抗体库（绝不虚增命中计数） |
+| `immune_list` | 只读浏览或按关键词筛选抗体库（绝不虚增命中计数） |
+| `immune_stats` | 读取活跃/退役/隔离/共享计数、累计投递数与蒸馏队列深度 |
+| `immune_export` | 经隐私安全门禁导出成熟规则 `SKILL.md` Markdown |
 | `immune_learn` | 写入人工或 Agent 确认的经验规则（`prescription_source = 'human'`） |
-| `immune_forget` | 按 ID 或 `--last` 删除规则 |
-| `immune_status` | 激活或退役指定规则 |
-| `immune_stats` | 读取库健康度、隔离计数、模型归因与节省 Token 统计 |
-| `immune_export` | 经隐私安全门禁导出成熟规则 Markdown |
+| `immune_forget` | 按数字 ID 物理删除指定规则（完整保留回执链） |
+| `immune_retire` | 按数字 ID 退役规则停止注入（可用 `immune_restore` 恢复） |
+| `immune_restore` | 按数字 ID 将已退役规则恢复生效 |
 | `immune_audit` | 只读扫描本机多宿主会话历史并生成踩坑报告 |
-| `immune_seed_packs` | 查询或安装 9 套内置种子规则包 |
-| `immune_ingest_skill` | 按需索引或移除外部 `SKILL.md` / Markdown 指南 |
+| `immune_seed_packs` | 只读列出 9 套内置种子规则包及已摄入 `skill:*` 包统计 |
+| `immune_detours` | 只读列出同一目标连续探测 4 次以上的低效弯路遥测记录 |
 | `immune_rewrite_candidates` | 获取待改写的回声级命令规则与严格改写契约（供无 API Key 宿主自省改写） |
 | `immune_rewrite_apply` | 提交经守卫校验的宿主改写结果（`prescription_source = 'host_llm'`） |
-| `immune_hygiene` | 预览或执行五维质量清洗与作用域修复 |
+| `immune_hygiene` | 预览或执行五维质量清洗与作用域修复（默认 `dryRun=true`） |
 | `immune_triage` | 查询 Red-3 五桶因果分诊统计 |
 | `immune_receipts` | 校验 SHA-256 投递回执链完整性与 ROI |
 | `immune_workspaces` | 列出已索引工作区作用域、技术栈与规则数 |
-| `immune_ingest_disk` | 扫描指定工作区目录提取规范与技能规则 |
+| `immune_ingest_disk` | 扫描指定工作区目录提取规范与技能规则（默认 `dryRun=true`） |
 | `immune_models` | 查询跨模型规则存活矩阵与本地 Magpie 网关流量摘要 |
 | `immune_doctor` | 执行完整的运行环境、SQLite FTS5、钩子路径与规则卫生体检 |
 | `immune_ci_check` | 无状态扫描 Git Diff 是否触碰仓库 `AGENTS.md` / `CLAUDE.md` 已登记坑点 |
 | `immune_explain` | 只读召回模拟器：实时返回概念图谱扩展、多维打分拆解与 `<immune_memory>` 注入预览 |
+| `immune_guard` | 执行前爆炸半径守卫：打分（`0–100`）、拦截高危命令/明文密钥并返回安全改写 |
+| `immune_vaccinate` | 扫描 Workspace DNA 并校验或预览 `.immune/vaccine.lock.json` |
+| `immune_diagnose` | 诊断 Agent 故障人格、五维免疫雷达与 System-Prompt 疫苗 |
+| `immune_autopsy` | 法医级踩坑尸检账本（拦截循环数、挽回 Token/API 费用与脆弱伤疤） |
+| `immune_federate` | 跨工作区聚类共享抗体并计算蜂群共识分与通用法则 |
 </details>
 
 ---
@@ -381,7 +400,7 @@ immune sync-doc                    # 将成熟规则同步写入 AGENTS.md（或
 每次提交与 PR 均在 **Linux（Node 22 & 24）** 与 **Windows（Node 24）** 双平台矩阵运行门禁：
 
 - **失败判定真值回放**（`scripts/eval-judge.mjs`）：回放 **21,034 次带宿主标注的真实工具调用**，判定一致率 **97.81%**，**0 假阴性**；`2.19%`（`461` 次）假阳性全部为「非零退出即预期答案」的只读探针命令，由探针免疫与 Red-3 分诊在下游安全隔离（详见 [AGENTS.md](AGENTS.md) 决策 #25）。
-- **自动化单测与多宿主契约验证**：**`283 / 283` 项单测与集成测试全绿**（`npm test`）、**`42 / 42` 项多宿主真实子进程 Hook 端到端断言**（覆盖 Claude Code、Codex、Antigravity、Gemini CLI 与 Cursor，`scripts/verify-connected-runtime.mjs`）、**`20 / 20` 项真实 Cordis 事件总线断言**（`scripts/verify-live-host.mjs`）、**`7` 份清单 `10` 个版本字段一致性门禁**（`scripts/check-versions.mjs`），以及 **`100%` 源码与构建产物 1:1 静态导入图校验**（`scripts/verify-dist-integrity.mjs`）。
+- **自动化单测与多宿主契约验证**：**`302 / 302` 项单测与集成测试全绿**（`npm test`）、**`42 / 42` 项多宿主真实子进程 Hook 端到端断言**（覆盖 Claude Code、Codex、Antigravity、Gemini CLI 与 Cursor，`scripts/verify-connected-runtime.mjs`）、**`20 / 20` 项真实 Cordis 事件总线断言**（`scripts/verify-live-host.mjs`）、**`7` 份清单 `10` 个版本字段一致性门禁**（`scripts/check-versions.mjs`），以及 **`100%` 源码与构建产物 1:1 静态导入图校验**（`scripts/verify-dist-integrity.mjs`）。
 - **中英双语召回与 9 包内容门禁**：`scripts/bench-recall.mjs` 达 **R@1 100%、R@3 100%、误报 0%**；覆盖全部 **54 条内置种子规则**的 `scripts/bench-seed-recall.mjs` 达 **R@1 100%（54/54）、R@3 100%（54/54）、误报 0%（0/9）**。
 - **索引规模与热路径延迟**（`scripts/bench-scale.mjs`、`scripts/bench-tool-latency.mjs`）：300 条规则入库仅需 `60 ms`（`0.20 ms/条`），检索延迟 `p50 = 0.60 ms`、`p95 = 1.20 ms`；工具执行路径零模型调用（中位延迟 `1.8 ms`），蒸馏统一在回合末 `1–60 s` 预算钳位内批量排空。
 - **严格因果反事实拦截回放**（`scripts/bench-ablation.mjs`）：在 **28,961 次真实多宿主调用**上按时间顺序严格前向重放，零先验 **Cold-Start 提前拦截 88.5%（115/130）** 的重复错误；预热内置包与本地资产后 **Warm-Start 拦截率达 96.9%（126/130）**，全错误覆盖率 **94.3%**。

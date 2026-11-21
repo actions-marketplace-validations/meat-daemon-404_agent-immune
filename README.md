@@ -9,7 +9,7 @@
   <p>
     <a href="https://www.npmjs.com/package/dsh-immune-system"><img src="https://img.shields.io/npm/v/dsh-immune-system?label=npm%20%7C%20dsh-immune-system" alt="npm version"></a>
     <a href="https://github.com/meat-daemon-404/agent-immune/actions/workflows/ci.yml"><img src="https://github.com/meat-daemon-404/agent-immune/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-    <img src="https://img.shields.io/badge/tests-283%20passing-16a34a" alt="283 tests passing">
+    <img src="https://img.shields.io/badge/tests-302%20passing-16a34a" alt="302 tests passing">
     <img src="https://img.shields.io/badge/runtime%20deps-0-2563eb" alt="zero runtime dependencies">
     <img src="https://img.shields.io/badge/node-%5E22.19%20%7C%7C%20%3E%3D24-0ea5e9" alt="node ^22.19 || >=24">
     <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT">
@@ -126,11 +126,22 @@ immune autopsy --markdown                      # shareable Markdown autopsy tabl
 ```
 
 ### 3. 💉 The Rosetta Stone of IDE Rules (`immune compile-rules`)
-Why re-learn a pitfall in Cursor that your agent already solved in Claude Code? `immune compile-rules` transpiles proven, privacy-gated SQLite antibodies into **5 native IDE rule formats at once**—including Cursor `.cursor/rules/immune-pitfalls.mdc` with **automatic file-glob inference** (`**/*.rs, **/Cargo.toml` for Rust rules, `**/*.tsx` for Next.js rules), GitHub Copilot `.github/copilot-instructions.md`, Windsurf `.windsurfrules`, Cline `.clinerules`, and `CLAUDE.md` (preserving your hand-written instructions outside `<!-- immune:generated -->` markers):
+Why re-learn a pitfall in Cursor that your agent already solved in Claude Code? `immune compile-rules` transpiles proven, privacy-gated SQLite antibodies into **5 native IDE rule formats at once**—including Cursor `.cursor/rules/immune-pitfalls.mdc` with **automatic file-glob inference** (`**/*.rs, **/Cargo.toml` for Rust rules, `**/*.tsx` for Next.js rules), GitHub Copilot `.github/copilot-instructions.md`, Windsurf `.windsurfrules`, Cline `.clinerules`, and `CLAUDE.md` (preserving your hand-written instructions outside `<!-- immune:generated start/end -->` markers):
 
 ```bash
 immune compile-rules --target all              # transpile to Cursor (.mdc), Copilot, Windsurf, Cline & CLAUDE.md
 immune compile-rules --target cursor           # emit .cursor/rules/immune-pitfalls.mdc with inferred file globs
+```
+
+### 4. 🛡️ Active Pre-Flight Guard, Declarative Vaccine & Swarm Federation (`guard` / `vaccinate` / `federate`)
+- **`immune guard "<cmd>"`**: Scores destructive shell/edit payloads (`0–100`), blocks `rm -rf /`, destructive SQL DDL, and live API secrets (always redacted from outputs), and auto-rewrites high-friction mistakes (`git push --force` → `--force-with-lease`, `prisma migrate dev` → `--create-only`, `npm install` in `pnpm`/`yarn`/`bun` repos → `add`, `pip install` in `uv` repos → `uv pip install`).
+- **`immune vaccinate [--apply|--check|--refresh]`**: Compiles Workspace DNA manifests into a SHA-256 verified `.immune/vaccine.lock.json` for zero-shot Day-0 cold-start immunization.
+- **`immune federate [files...] [--svg]`**: Clusters corroborated share-safe antibodies across multiple repositories into **Universal Swarm Laws** with `0–100` consensus scores.
+
+```bash
+immune guard "git push origin main --force"    # -> REWRITE: git push origin main --force-with-lease
+immune vaccinate --apply                       # verify & hydrate .immune/vaccine.lock.json into SQLite
+immune federate --svg ./swarm-consensus.svg    # cluster multi-repo rules into Universal Swarm Laws
 ```
 
 ---
@@ -140,12 +151,12 @@ immune compile-rules --target cursor           # emit .cursor/rules/immune-pitfa
 | Environment | Integration | Setup Command | Runtime Surface |
 | --- | --- | --- | --- |
 | **Claude Code** | Lifecycle Hooks (6) or Native Plugin | `npx dsh-immune-system@latest connect claude-code` | `~/.claude/settings.json` (`hookSpecificOutput`) or `.claude-plugin/` |
-| **Cursor** | Lifecycle Hooks (6) + Sidecar MCP (20 tools) | `npx dsh-immune-system@latest connect cursor` | `~/.cursor/hooks.json` (`permission` / `agent_message`) + `~/.cursor/mcp.json` |
+| **Cursor** | Lifecycle Hooks (7) + Sidecar MCP (26 tools) | `npx dsh-immune-system@latest connect cursor` | `~/.cursor/hooks.json` (`permission` / `agent_message`) + `~/.cursor/mcp.json` |
 | **Codex CLI** | Lifecycle Hooks (5; run `/hooks` once to trust) | `npx dsh-immune-system@latest connect codex` | `~/.codex/hooks.json` (`shell_command` / `apply_patch` mapped) |
 | **Google Antigravity** | Lifecycle Hooks (5, camelCase dialect) | `npx dsh-immune-system@latest connect antigravity` | `~/.gemini/config/hooks.json` (`PreInvocation` `injectSteps` / `decision`) |
 | **Gemini CLI** | Lifecycle Hooks (5) | `npx dsh-immune-system@latest connect gemini-cli` | `~/.gemini/settings.json` (`BeforeAgent` / `BeforeTool` / `AfterTool`) |
-| **Windsurf / Roo Code / Cline / Claude Desktop** | MCP Server (21 tools) | `npx dsh-immune-system@latest connect <host>` | Native `mcpServers` configs across Windsurf, Roo Code, Cline & Claude Desktop |
-| **VS Code / Zed** | Native MCP / Context Server (21 tools) | `npx dsh-immune-system@latest connect vscode` / `zed` | `Code/User/mcp.json` (`servers`) · `zed/settings.json` (`context_servers`) |
+| **Windsurf / Roo Code / Cline / Claude Desktop** | MCP Server (26 tools) | `npx dsh-immune-system@latest connect <host>` | Native `mcpServers` configs across Windsurf, Roo Code, Cline & Claude Desktop |
+| **VS Code / Zed** | Native MCP / Context Server (26 tools) | `npx dsh-immune-system@latest connect vscode` / `zed` | `Code/User/mcp.json` (`servers`) · `zed/settings.json` (`context_servers`) |
 | **MCP Registries (Official / Smithery / Glama)** | Verified Registry Manifests | `server.json` · `smithery.yaml` · `glama.json` | `io.github.meat-daemon-404/agent-immune` (`npx -y dsh-immune-system@latest mcp`) |
 | **Custom Node/TS Agents** | Typed Zero-Dep SDK | `import { ImmuneRuntime } from 'dsh-immune-system/core'` | Built-in `.d.ts` declarations (`./dist/core/index.d.ts`) |
 | **DeepSeek Harness (DSH)** | Native Cordis Bundle + Shadow-DOM Web Tab | `dsh plugin --profile <profile> add dsh-immune-system` | `agent/session-start`, `pre-step`, `tools/post-execute`, `turn-stopping` (v4 `plugin:dsh-immune-system`) |
@@ -309,23 +320,27 @@ immune sync-doc                    # update <!-- immune:generated --> block in A
 Run `immune --help` or `immune <command> --help` anytime (`--json` supported across read/inspection commands).
 
 <details>
-<summary><b>All CLI Commands (32 commands)</b></summary>
+<summary><b>All CLI Commands (40+ subcommands)</b></summary>
 
 | Category | Command | Purpose |
 | --- | --- | --- |
 | **Quickstart & Host Wiring** | `immune demo` | Run the full distill → recall → `<immune_memory>` loop in memory |
+| | `immune mcp` | Start the zero-dependency JSON-RPC 2.0 MCP server over stdio (`26` tools) |
 | | `immune connect [host] [--status\|--refresh\|--remove] [--json]` | Wire/remove hooks or MCP across 11 external hosts (auto-detects when `host` omitted) |
 | | `immune git-hook [--install\|--remove\|--status] [--warn-only]` | Non-destructive `.git/hooks/pre-commit` pitfall gate over staged diffs |
 | | `immune completions <bash\|zsh\|fish\|powershell>` | Generate shell tab-completion scripts for `immune` & `dsh-immune-system` |
 | | `immune doctor [--json]` | Check Node/FTS5, DBs, vendored hook paths, UI contract, budget clamp & hygiene |
-| | `immune ui [--port 7788]` | Launch offline loopback dashboard (`127.0.0.1`, Recall Simulator, EN / 中文 toggle) |
+| | `immune ui [--port 7788]` | Launch offline loopback dashboard (`127.0.0.1`, Recall Simulator, Insights & Guard APIs) |
+| **Active Guard & v3.x Workflows** | `immune guard "<cmd>" [--tool T] [--strict] [--hook] [--hook-host H]` | Pre-flight blast-radius scorer (`0–100`), blocker, and safe command rewriter |
+| | `immune vaccinate [--check\|--apply\|--refresh] [--lockfile F]` | Compile, verify, or hydrate Workspace DNA `.immune/vaccine.lock.json` |
+| | `immune federate [files...] [--out F] [--min-consensus N] [--svg]` | Cluster multi-repo rules into Universal Swarm Laws with consensus scoring |
 | **Library & Sync** | `immune list [--all] [--json]` | List active (or all) antibodies with hits/fails, grade, and scope |
 | | `immune search <query>` | Read-only FTS5 + bilingual concept search without inflating hit counts |
 | | `immune explain "<query>" [--tool T] [--limit N] [--json]` | Read-only Recall Simulator: inspect concept expansion & score breakdown |
 | | `immune learn <trigger> [symptom] <prescription>` | Record a human-authored rule (`prescription_source = 'human'`) |
-| | `immune forget <id> \| --last \| --prune [days]` | Delete a rule (preserving append-only receipt chain) or prune stale 0-hit rules |
+| | `immune forget <id> \| --last \| --prune \| --purge` | Delete a rule (preserving append-only receipt chain) or prune stale 0-hit rules |
 | | `immune stats [--json]` | Counts, avoided-token estimate, per-model breakdown, sleep-review clusters |
-| | `immune diagnose [--svg [out.svg]] [--markdown] [--json]` | Diagnose agent failure persona (6 archetypes), 5-domain radar & prompt vaccine |
+| | `immune diagnose [--svg [out.svg]] [--markdown] [--json]` | Diagnose agent failure persona, 5-domain radar & prompt vaccine |
 | | `immune autopsy [--markdown] [--json]` | Forensic post-mortem on prevented loops, rescued tokens, API $ saved & fragile scars |
 | | `immune compile-rules [--target all\|cursor\|copilot\|windsurf\|cline\|claude]` | Transpile rules into native Cursor `.mdc` (auto globs), Copilot, Windsurf, Cline & `CLAUDE.md` |
 | | `immune wrapped [out.svg] [--badge] [--markdown] [--hosts H] [--stdout] [--json]` | Render a 1200×630 dark-mode Pitfall Scorecard SVG, live badge, or Markdown table |
@@ -335,45 +350,49 @@ Run `immune --help` or `immune <command> --help` anytime (`--json` supported acr
 | | `immune sync-doc [--out FILE] [--min-hits N]` | Sync `<!-- immune:generated -->` into `AGENTS.md` (or existing `CLAUDE.md`) |
 | | `immune ci-check [--diff FILE] [--doc FILE] [--github] [--warn-only] [--json]` | Stateless PR diff pitfall scanner with GitHub annotations & step summary |
 | | `immune backup [dest.sqlite]` | Consistent WAL-safe backup via `node:sqlite` backup API |
-| **Cold-Start & Packs** | `immune seed [pack] [--baseline widely\|newly] [--remove] [--json]` | List, install, or conservatively remove any of the 9 builtin seed packs |
+| **Cold-Start & Packs** | `immune seed [pack] [--baseline widely\|newly] [--remove]` | List, install, or conservatively remove any of the 9 builtin seed packs |
 | | `immune audit [--dry-run] [--days N] [--max N] [--source S] [--json]` | Replay ZCode / Codex / Claude Code / Antigravity logs into pitfall report & jobs |
 | | `immune ingest-skill <path> [--pack P] [--baseline B] [--remove]` | Index external `SKILL.md` / Markdown guidance tables into FTS5 |
-| | `immune ingest-disk [roots...] [--max-depth N] [--dry-run]` | Discover local repos & skills across disk roots with path/secret scrubbing |
+| | `immune ingest-disk [roots...] [--depth N] [--dry-run]` | Discover local repos & skills across disk roots with path/secret scrubbing |
 | **Quality & Telemetry** | `immune hygiene [--dry-run] [--json]` | Run 5-dim rubric grading, path abstraction, scope lock & garbage quarantine |
 | | `immune rewrite [--dry-run] [--max N] [--id a,b]` | Rewrite command-echo prescriptions into concise advice via configured LLM |
-| | `immune consolidate [--dry-run] [--json]` | Merge proven near-duplicate rules, preserving triggers, hits & model attribution |
+| | `immune consolidate [--dry-run]` | Merge proven near-duplicate rules, preserving triggers, hits & model attribution |
 | | `immune coverage [--days N] [--top K] [--json]` | Measure `known` vs `still injected` vs `uncovered` host failure clusters |
-| | `immune triage [--limit N] [--json]` | Inspect Red-3 post-injection failure buckets |
-| | `immune receipts [--limit N] [--json]` | Verify SHA-256 chained delivery receipts & token savings |
-| | `immune models [--json]` / `workspaces [--json]` / `detours [--json]` | Per-model survival + Magpie gateway stats, indexed workspaces, and 4+ probe detours |
+| | `immune triage [--json]` / `receipts [--json]` | Inspect Red-3 post-injection failure buckets & verify SHA-256 delivery receipts |
+| | `immune models [--json]` / `workspaces [--json]` / `detours` | Per-model survival + Magpie gateway stats, indexed workspaces, and 4+ probe detours |
 </details>
 
 <details>
-<summary><b>All MCP Server Tools (21 tools over stdio)</b></summary>
+<summary><b>All MCP Server Tools (26 tools over stdio)</b></summary>
 
 | Tool | Description |
 | --- | --- |
-| `immune_match` | Recall matching antibodies for an upcoming task/prompt (bumps delivery counters & receipts) |
-| `immune_list` | Browse stored antibodies read-only without inflating hit counters |
+| `immune_list` | Browse or filter stored antibodies read-only without inflating hit counters |
+| `immune_stats` | Library health, active/retired/quarantined/shared counts, injections & queue depth |
+| `immune_export` | Render proven antibodies (`hits >= minHits`) as privacy-gated `SKILL.md` Markdown |
 | `immune_learn` | Save a human/agent-verified antibody (`prescription_source = 'human'`) |
-| `immune_forget` | Delete an antibody by ID or `--last` |
-| `immune_status` | Activate or retire an antibody by ID |
-| `immune_stats` | Library health, quarantined count, per-model breakdown, and avoided-token metrics |
-| `immune_export` | Render proven antibodies as privacy-gated Markdown |
+| `immune_forget` | Permanently delete an antibody by numeric ID (preserving receipt chain) |
+| `immune_retire` | Stop injecting an antibody by numeric ID (reversible via `immune_restore`) |
+| `immune_restore` | Restore a retired antibody back into active rotation by numeric ID |
 | `immune_audit` | Read-only pitfall audit across local ZCode / Codex / Claude / Antigravity history |
-| `immune_seed_packs` | List or install any of the 9 builtin starter packs |
-| `immune_ingest_skill` | Index or remove external `SKILL.md` / Markdown guidance files |
+| `immune_seed_packs` | Read-only listing of the 9 builtin starter packs and ingested `skill:*` packs |
+| `immune_detours` | Read-only listing of sessions that probed the same target 4+ times before fixing |
 | `immune_rewrite_candidates` | Fetch command-echo rules + strict rewrite contract for API-keyless host-LLM upgrading |
 | `immune_rewrite_apply` | Apply guarded host-LLM advice rewrites (`prescription_source = 'host_llm'`) |
 | `immune_hygiene` | Audit or repair library quality grades, path abstractions, and workspace scopes |
 | `immune_triage` | Read Red-3 post-injection failure triage breakdown |
 | `immune_receipts` | Verify SHA-256 delivery receipt chain integrity and ROI |
 | `immune_workspaces` | List discovered workspace scopes, tech stacks, and rule counts |
-| `immune_ingest_disk` | Scan workspace directories for `AGENTS.md` / `CLAUDE.md` / `SKILL.md` rules |
+| `immune_ingest_disk` | Scan workspace directories for `AGENTS.md` / `CLAUDE.md` / `SKILL.md` rules (`dryRun=true` default) |
 | `immune_models` | Per-model immunity survival matrix + local Magpie gateway telemetry |
 | `immune_doctor` | Full environment, SQLite FTS5, vendored hooks, and hygiene diagnostic |
 | `immune_ci_check` | Stateless git diff scanner against `AGENTS.md` / `CLAUDE.md` managed pitfall blocks |
 | `immune_explain` | Read-only Recall Simulator: inspect concept expansions, score weights & `<immune_memory>` preview |
+| `immune_guard` | Pre-Flight Blast-Radius Guard: score (`0–100`), block secrets/hazards, and safely rewrite commands |
+| `immune_vaccinate` | Scan Workspace DNA manifests and verify or preview `.immune/vaccine.lock.json` |
+| `immune_diagnose` | Diagnose agent failure archetype, 5-domain immunity radar, and system-prompt vaccine |
+| `immune_autopsy` | Forensic ROI post-mortem (prevented loops, rescued tokens, API $ saved & fragile scars) |
+| `immune_federate` | Cluster multi-workspace share-safe antibodies into Universal Swarm Laws (`0–100` consensus) |
 </details>
 
 ---
@@ -383,7 +402,7 @@ Run `immune --help` or `immune <command> --help` anytime (`--json` supported acr
 Every push and PR runs on **Linux (Node 22 & 24)** and **Windows (Node 24)**:
 
 - **Outcome Judge Ground-Truth Replay** (`scripts/eval-judge.mjs`): **97.81% agreement** across **21,034 real host-labeled tool calls**, **0 false negatives**, and `2.19%` (`461`) false positives (exclusively exit-1 read-only probes such as `grep`/`git diff`, contained downstream by probe-skipping and Red-3 triage — see [AGENTS.md](AGENTS.md) #25).
-- **Automated Test & Contract Suites**: **`283 / 283` unit & integration tests** (`npm test`), **`42 / 42` multi-host vendored hook assertions** across Claude Code, Codex, Antigravity, Gemini CLI & Cursor (`scripts/verify-connected-runtime.mjs`), **`20 / 20` live Cordis event-bus assertions** (`scripts/verify-live-host.mjs`), **`15 + 24 + 10` adapter & bundle serve assertions**, **`7`-manifest / `10`-field version sync guard** (`scripts/check-versions.mjs`), and **`100%` 1:1 dist import graph verification** (`scripts/verify-dist-integrity.mjs`).
+- **Automated Test & Contract Suites**: **`302 / 302` unit & integration tests** (`npm test`), **`42 / 42` multi-host vendored hook assertions** across Claude Code, Codex, Antigravity, Gemini CLI & Cursor (`scripts/verify-connected-runtime.mjs`), **`20 / 20` live Cordis event-bus assertions** (`scripts/verify-live-host.mjs`), **`15 + 24 + 10` adapter & bundle serve assertions**, **`7`-manifest / `10`-field version sync guard** (`scripts/check-versions.mjs`), and **`100%` 1:1 dist import graph verification** (`scripts/verify-dist-integrity.mjs`).
 - **Bilingual Recall & 9-Pack Content Gate**: `scripts/bench-recall.mjs` achieves **R@1 100%, R@3 100%, FP 0%**; `scripts/bench-seed-recall.mjs` across all **54 builtin rules** achieves **R@1 100% (54/54), R@3 100% (54/54), FP 0% (0/9)**.
 - **Scale & Hot-Path Latency** (`scripts/bench-scale.mjs`, `scripts/bench-tool-latency.mjs`): 300 rules index in `60 ms` (`0.20 ms/rule`), query `p50 = 0.60 ms` / `p95 = 1.20 ms`. Tool-execution hooks never call a model (`median 1.8 ms`); LLM distillation is batched at turn end under a strict `1–60 s` clamp.
 - **Strictly Causal Counterfactual Replay** (`scripts/bench-ablation.mjs`): Walking forward across **28,961 real multi-host tool calls** intercepts **88.5% (115/130)** of recurring repeat mistakes from zero priors (**Cold-Start**), and **96.9% (126/130)** with **94.3%** total episode coverage when pre-warmed (**Warm-Start**).

@@ -8,8 +8,13 @@ export declare function parseSeedCliArgs(args: string[], valueFlags: string[]): 
     values: Map<string, string>;
     booleans: Set<string>;
 };
-/** Read `--flag value` or `--flag=value`; returns `undefined` if missing or followed by another `--` flag. */
+/** Read `--flag value` or `--flag=value`; stops scanning past `--` separator. */
 export declare function flagValue(args: readonly string[], flag: string): string | undefined;
+/**
+ * Extract positional arguments while skipping known value-taking flags
+ * (`--flag value` and `--flag=value`) and honoring `--` end-of-options.
+ */
+export declare function positionalArgs(args: readonly string[], valueFlags?: readonly string[]): string[];
 export declare function hasHelpFlag(args: readonly string[]): boolean;
 export declare const style: {
     bold: (s: string) => string;

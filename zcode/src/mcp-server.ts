@@ -18,14 +18,13 @@
  * Every tool is read-heavy by design; the two mutations (learn / forget) mirror
  * the CLI exactly, including zombie semantics.
  */
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { createInterface } from 'node:readline';
-import { resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { join, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { ImmuneStore } from '../../core/store/index.js';
 import { renderSkillMarkdown } from '../../core/export.js';
 import { ciCheck, formatShareViolations, parseManagedBlock, shareSanityCheck } from '../../core/share-guard.js';
-import { resolveDbPath } from '../../core/store/path.js';
 import { auditHistory, renderAuditReport } from '../../core/audit.js';
 import { BUILTIN_PACKS } from '../../core/packs.js';
 import { REWRITE_PROMPT } from '../../core/rewrite.js';
@@ -33,6 +32,12 @@ import { HOST_REWRITE_BATCH, applyHostRewrites, hostRewriteCandidates } from '..
 import { ingestDiskCorpus } from '../../core/disk-ingest.js';
 import { scanMagpieTelemetry } from '../../core/audit/magpie.js';
 import { explainRecall } from '../../core/explain.js';
+import { evaluatePreFlightGuard } from '../../core/guard.js';
+import { compileVaccineLockfile, detectWorkspaceDNA, verifyVaccineLockfile } from '../../core/vaccine.js';
+import { diagnoseAgentArchetype } from '../../core/diagnose.js';
+import { runPitfallAutopsy } from '../../core/autopsy.js';
+import { federateSwarmRules, type SwarmRuleSource } from '../../core/federate.js';
+import { parseTeamRulesJsonl } from '../../core/team-sync.js';
 import { packageVersion } from '../../core/version.js';
 import { runDoctor } from './doctor.js';
 
@@ -80,7 +85,7 @@ const TOOLS = [
         symptom: { type: 'string', description: 'The wrong instinct, one line.' },
         prescription: { type: 'string', description: 'The verified correct move, one line.' },
       },
-      required: ['trigger', 'symptom', 'prescription'],
+      required: ['trigger', 'prescription'],
     },
   },
   {
@@ -251,7 +256,64 @@ const TOOLS = [
       required: ['query'],
     },
   },
+  {
+    name: 'immune_guard',
+    description:
+      'Pre-Flight Blast-Radius Guard (v3): evaluate a proposed Bash/Edit/Write command against destructive signatures, workspace lockfile drift, secret literals, and learned antibodies. Returns 0-100 score, decision (allow|warn|rewrite|block), and safe command rewrite. READ-ONLY.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        payload: { type: 'string', description: 'Proposed shell command or edit payload to check before execution.' },
+        toolName: { type: 'string', description: 'Tool name (default "Bash").' },
+        strict: { type: 'boolean', description: 'Promote warnings/rewrites to block. Default false.' },
+        workspace: { type: 'string', description: 'Optional workspace directory for lockfile drift detection (defaults to cwd).' },
+      },
+      required: ['payload'],
+    },
+  },
+  {
+    name: 'immune_vaccinate',
+    description:
+      'Scan repository Workspace DNA (package manager, stacks, recommended packs), verify an existing .immune/vaccine.lock.json, or preview synthesized zero-day antibodies. READ-ONLY.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace: { type: 'string', description: 'Workspace directory to scan (defaults to cwd).' },
+        checkLockfile: { type: 'boolean', description: 'Verify existing .immune/vaccine.lock.json SHA-256 integrity if present.' },
+      },
+    },
+  },
+  {
+    name: 'immune_diagnose',
+    description:
+      'Diagnose agent failure persona, 5-domain immunity radar, recommended booster packs, and copy-paste system-prompt vaccine from active rules. READ-ONLY.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'immune_autopsy',
+    description:
+      'Run a forensic post-mortem autopsy: prevented debug loops, rescued retry tokens, estimated API dollar savings, root-cause buckets, and Fragile Scars watchlist. READ-ONLY.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'immune_federate',
+    description:
+      'Cluster semantically equivalent share-safe antibodies across local SQLite and optional .immune/rules.jsonl files, computing Swarm Consensus Scores (0-100) and Universal Swarm Laws. READ-ONLY.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        files: { type: 'array', items: { type: 'string' }, description: 'Optional paths to .immune/rules.jsonl files.' },
+        minConsensusScore: { type: 'number', description: 'Filter clusters below this score (0-100, default 0).' },
+      },
+    },
+  },
 ];
+
+function positiveInt(raw: unknown, fallback: number, max: number): number {
+  return typeof raw === 'number' && Number.isFinite(raw) && raw > 0
+    ? Math.min(max, Math.trunc(raw))
+    : fallback;
+}
 
 /** Dispatch one tools/call. Kept pure-ish so tests can call it without stdio. */
 export function callTool(store: ImmuneStore, name: string, args: Record<string, unknown>): string {
@@ -259,7 +321,7 @@ export function callTool(store: ImmuneStore, name: string, args: Record<string, 
     case 'immune_list': {
       const query = typeof args.query === 'string' ? args.query.trim() : '';
       const includeRetired = args.includeRetired === true;
-      const limit = typeof args.limit === 'number' && args.limit > 0 ? Math.min(args.limit, 200) : 50;
+      const limit = positiveInt(args.limit, 50, 200);
 
       let rows = query
         ? store.peek(query, limit)
@@ -306,7 +368,7 @@ export function callTool(store: ImmuneStore, name: string, args: Record<string, 
     }
 
     case 'immune_export': {
-      const minHits = typeof args.minHits === 'number' && args.minHits > 0 ? args.minHits : 3;
+      const minHits = positiveInt(args.minHits, 3, 10_000);
       const title = typeof args.title === 'string' && args.title.trim() ? args.title.trim() : 'project-pitfalls';
       const rows = store.exportable(minHits);
       if (rows.length === 0) {
@@ -448,12 +510,12 @@ export function callTool(store: ImmuneStore, name: string, args: Record<string, 
     }
 
     case 'immune_triage': {
-      const limit = typeof args.limit === 'number' && args.limit > 0 ? Math.min(200, Math.trunc(args.limit)) : 20;
+      const limit = positiveInt(args.limit, 20, 200);
       return JSON.stringify(store.triageSummary(limit), null, 2);
     }
 
     case 'immune_receipts': {
-      const limit = typeof args.limit === 'number' && args.limit > 0 ? Math.min(2000, Math.trunc(args.limit)) : 500;
+      const limit = positiveInt(args.limit, 500, 2000);
       return JSON.stringify(store.receiptSummary(limit), null, 2);
     }
 
@@ -467,8 +529,7 @@ export function callTool(store: ImmuneStore, name: string, args: Record<string, 
         : [];
       if (roots.length === 0) return 'error: roots must be a non-empty array of directory paths.';
       const dryRun = args.dryRun !== false;
-      const maxProjects =
-        typeof args.maxProjects === 'number' && args.maxProjects > 0 ? Math.min(200, Math.trunc(args.maxProjects)) : 60;
+      const maxProjects = positiveInt(args.maxProjects, 60, 200);
       const report = ingestDiskCorpus(store, { roots, dryRun, maxProjects });
       return JSON.stringify(report, null, 2);
     }
@@ -517,11 +578,69 @@ export function callTool(store: ImmuneStore, name: string, args: Record<string, 
     case 'immune_explain': {
       const query = typeof args.query === 'string' ? args.query : '';
       const toolName = typeof args.toolName === 'string' && args.toolName.trim() ? args.toolName.trim() : undefined;
-      const limit =
-        typeof args.limit === 'number' && Number.isFinite(args.limit) && args.limit > 0
-          ? Math.min(10, Math.trunc(args.limit))
-          : 5;
+      const limit = positiveInt(args.limit, 5, 10);
       return JSON.stringify(explainRecall(store, query, { toolName, limit }), null, 2);
+    }
+
+    case 'immune_guard': {
+      const payload = typeof args.payload === 'string' ? args.payload : '';
+      if (!payload.trim()) return 'error: payload is required.';
+      const toolName = typeof args.toolName === 'string' && args.toolName.trim() ? args.toolName.trim() : 'Bash';
+      const strict = args.strict === true;
+      const ws = typeof args.workspace === 'string' && args.workspace.trim() ? resolve(args.workspace.trim()) : process.cwd();
+      const dna = detectWorkspaceDNA(ws);
+      const pm =
+        dna.packageManager === 'pnpm' ||
+        dna.packageManager === 'yarn' ||
+        dna.packageManager === 'bun' ||
+        dna.packageManager === 'uv'
+          ? dna.packageManager
+          : null;
+      const verdict = evaluatePreFlightGuard(payload, store.listAll(false), {
+        toolName,
+        strict,
+        workspacePackageManager: pm,
+      });
+      return JSON.stringify(verdict, null, 2);
+    }
+
+    case 'immune_vaccinate': {
+      const ws = typeof args.workspace === 'string' && args.workspace.trim() ? resolve(args.workspace.trim()) : process.cwd();
+      const lockPath = join(ws, '.immune', 'vaccine.lock.json');
+      if (args.checkLockfile === true) {
+        if (!existsSync(lockPath)) {
+          return JSON.stringify({ exists: false, file: lockPath, valid: false, reason: 'lockfile not found' }, null, 2);
+        }
+        const report = verifyVaccineLockfile(readFileSync(lockPath, 'utf8'));
+        return JSON.stringify({ exists: true, file: lockPath, ...report }, null, 2);
+      }
+      const preview = compileVaccineLockfile(ws, store.listAll(false));
+      return JSON.stringify({ workspace: ws, lockfilePath: lockPath, preview }, null, 2);
+    }
+
+    case 'immune_diagnose': {
+      return JSON.stringify(diagnoseAgentArchetype(store.listAll(false)), null, 2);
+    }
+
+    case 'immune_autopsy': {
+      return JSON.stringify(runPitfallAutopsy(store.listAll(false)), null, 2);
+    }
+
+    case 'immune_federate': {
+      const rawFiles = Array.isArray(args.files)
+        ? args.files.filter((f): f is string => typeof f === 'string' && f.trim().length > 0)
+        : [];
+      const minConsensusScore =
+        typeof args.minConsensusScore === 'number' && Number.isFinite(args.minConsensusScore)
+          ? Math.max(0, Math.min(100, args.minConsensusScore))
+          : 0;
+      const sources: SwarmRuleSource[] = [{ sourceId: 'local-sqlite', rules: store.listAll(false) }];
+      for (const fp of rawFiles) {
+        const abs = resolve(fp);
+        if (!existsSync(abs)) return `error: file not found: ${abs}`;
+        sources.push({ sourceId: fp, rules: parseTeamRulesJsonl(readFileSync(abs, 'utf8')) });
+      }
+      return JSON.stringify(federateSwarmRules(sources, { minConsensusScore }), null, 2);
     }
 
     default:
@@ -593,7 +712,14 @@ export function runMcpServer(env: NodeJS.ProcessEnv = process.env): Promise<void
           }
           try {
             const text = callTool(store, name, args);
-            write({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text }] } });
+            const isError = text.startsWith('error:');
+            write({
+              jsonrpc: '2.0',
+              id,
+              result: isError
+                ? { content: [{ type: 'text', text }], isError: true }
+                : { content: [{ type: 'text', text }] },
+            });
           } catch (error) {
             write({
               jsonrpc: '2.0',
@@ -623,8 +749,22 @@ export function runMcpServer(env: NodeJS.ProcessEnv = process.env): Promise<void
   });
 }
 
+function isDirectEntry(): boolean {
+  const argv1 = process.argv[1];
+  if (!argv1) return false;
+  try {
+    const selfPath = realpathSync(fileURLToPath(import.meta.url));
+    const entryPath = realpathSync(argv1);
+    return process.platform === 'win32'
+      ? selfPath.toLowerCase() === entryPath.toLowerCase()
+      : selfPath === entryPath;
+  } catch {
+    return import.meta.url === pathToFileURL(argv1).href;
+  }
+}
+
 // Entry-point guard: running this file as a process starts the stdio loop;
 // importing it (the tests) only gets callTool without a live server.
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isDirectEntry()) {
   void runMcpServer();
 }

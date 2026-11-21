@@ -56,6 +56,7 @@ import {
   newestActiveId,
   pruneZombieAntibodies,
   retireZombieAntibodies,
+  type InsertOptions,
   type PenaltyContext,
 } from './antibodies.js';
 import { installSeedPack, removeSeedPack, seededPackCounts } from './seeds.js';
@@ -169,8 +170,8 @@ export class ImmuneStore {
     this.db = openDatabase(this.dbPath);
   }
 
-  insert(ab: NewAntibody): number | null {
-    return insertAntibody(this.db, ab);
+  insert(ab: NewAntibody, opts: InsertOptions = {}): number | null {
+    return insertAntibody(this.db, ab, opts);
   }
 
   /**

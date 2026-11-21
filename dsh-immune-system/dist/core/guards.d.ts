@@ -36,6 +36,12 @@ export interface GuardHit {
     rule: GuardRule;
 }
 /**
+ * Extract raw command text for shell payloads so real newlines are preserved
+ * (preventing `JSON.stringify` `\\n` escapes from bypassing line anchors or
+ * causing cross-line false positives).
+ */
+export declare function extractGuardInput(toolInput: unknown): string;
+/**
  * First rule matching `text`, or null.
  *
  * Every pattern is anchored by construction (bounded alternation, no nested

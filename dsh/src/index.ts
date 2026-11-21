@@ -15,7 +15,7 @@ import { renderSkillMarkdown } from '../../core/export.js';
 import { formatShareViolations, shareSanityCheck } from '../../core/share-guard.js';
 import { isSubstantiveHint } from '../../core/distiller.js';
 import { strings } from '../../core/i18n.js';
-import { findGuardHit, guardMode } from '../../core/guards.js';
+import { extractGuardInput, findGuardHit, guardMode } from '../../core/guards.js';
 import { redact } from '../../core/redact.js';
 import { ImmuneRuntime, clampBudgetMs, resolveDrainBudgetMs } from '../../core/runtime.js';
 import { registerImmuneUiRoute } from './ui-route.js';
@@ -259,12 +259,7 @@ function startPlugin(ctx: DshContext): void {
 
   ctx.on(DSH_EVENTS.preToolExecute, async (exec, next): Promise<DshPreToolDecision> => {
     if (guardMode() === 'deny') {
-      let argsText = '';
-      try {
-        argsText = redact(JSON.stringify(exec?.arguments ?? {})).slice(0, 2000);
-      } catch {
-        argsText = '';
-      }
+      const argsText = redact(extractGuardInput(exec?.arguments ?? {})).slice(0, 2000);
       const hit = findGuardHit(argsText);
       if (hit) {
         return { kind: 'deny', reason: `[${hit.rule.id}] ${hit.rule.what} → ${hit.rule.instead}` };

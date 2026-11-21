@@ -23,7 +23,7 @@ export interface DomainRadarAxis {
     readonly immunityPct: number;
 }
 export interface AgentArchetype {
-    readonly id: 'blind-surgeon' | 'shell-trapper' | 'lockfile-rebel' | 'type-gladiator' | 'env-drifter' | 'immunized-sentinel';
+    readonly id: 'cold-start' | 'blind-surgeon' | 'shell-trapper' | 'lockfile-rebel' | 'type-gladiator' | 'git-gambler' | 'env-drifter' | 'immunized-sentinel';
     readonly title: string;
     readonly tagline: string;
     readonly diagnosis: string;
