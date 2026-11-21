@@ -12,6 +12,20 @@ export interface Labels {
   tabsQuarantined: string;
   tabsWorkspaces: string;
   tabsExplain: string;
+  tabsGuard: string;
+  tabsInsights: string;
+  guardPrompt: string;
+  guardButton: string;
+  guardStrict: string;
+  guardAuditTitle: string;
+  guardNoEvents: string;
+  guardSafeRewrite: string;
+  insightsScore: string;
+  insightsArchetype: string;
+  insightsAutopsy: string;
+  insightsDna: string;
+  insightsFederation: string;
+  guardCount: string;
   explainPrompt: string;
   explainButton: string;
   explainHint: string;
@@ -102,6 +116,20 @@ export const LABELS: Record<'zh-CN' | 'en', Labels> = {
     tabsQuarantined: '隔离区',
     tabsWorkspaces: '工作区',
     tabsExplain: '召回模拟器',
+    tabsGuard: '预检卫士',
+    tabsInsights: '洞察诊断',
+    guardPrompt: '输入拟执行的 Shell 命令或写入内容，实时计算爆炸半径并预览安全改写…',
+    guardButton: '预检评估',
+    guardStrict: '严格模式',
+    guardAuditTitle: '实时拦截审计日志',
+    guardNoEvents: '暂无实时预检拦截记录（启用 IMMUNE_GUARD=warn|ask|deny 后自动记录）',
+    guardSafeRewrite: '推荐安全改写: ',
+    insightsScore: '免疫评分',
+    insightsArchetype: '踩坑画像与五维雷达',
+    insightsAutopsy: '法医尸检与节省估算',
+    insightsDna: '工作区 DNA 与疫苗锁文件',
+    insightsFederation: '跨库联邦共识预览',
+    guardCount: '预检拦截',
     explainPrompt: '输入报错日志或用户提问，即时诊断为何命中哪条抗体（只读，不虚增命中数）…',
     explainButton: '模拟召回',
     explainHint: '输入报错日志、命令行或提问并按回车，即可查看概念图谱扩展与每条打分拆解。',
@@ -190,6 +218,20 @@ export const LABELS: Record<'zh-CN' | 'en', Labels> = {
     tabsQuarantined: 'Quarantined',
     tabsWorkspaces: 'Workspaces',
     tabsExplain: 'Recall Simulator',
+    tabsGuard: 'Guard',
+    tabsInsights: 'Insights',
+    guardPrompt: 'Enter a shell command or edit payload to score Blast Radius & preview safe rewrite…',
+    guardButton: 'Evaluate',
+    guardStrict: 'Strict',
+    guardAuditTitle: 'Live Guard Audit Ledger',
+    guardNoEvents: 'No live guard interceptions recorded yet (enable IMMUNE_GUARD=warn|ask|deny).',
+    guardSafeRewrite: 'Safe rewrite: ',
+    insightsScore: 'Immunity Score',
+    insightsArchetype: 'Agent Archetype & 5-Domain Radar',
+    insightsAutopsy: 'Forensic Autopsy & Rescued Work',
+    insightsDna: 'Workspace DNA & Vaccine Lockfile',
+    insightsFederation: 'Swarm Federation Preview',
+    guardCount: 'guard hits',
     explainPrompt: 'Paste an error log, command, or prompt to inspect why rules fire (read-only)…',
     explainButton: 'Simulate',
     explainHint: 'Enter a prompt or error trace above to inspect concept-graph expansions and scoring weights.',

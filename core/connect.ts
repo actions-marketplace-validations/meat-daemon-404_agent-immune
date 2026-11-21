@@ -120,7 +120,9 @@ export type ConnectHostId =
   | 'zed'
   | 'roo-code'
   | 'claude-desktop'
-  | 'cline';
+  | 'cline'
+  | 'opencode'
+  | 'kiro';
 
 /** One hook script wired into a host event, in the shared `command` dialect. */
 interface HookHandler {
@@ -154,6 +156,8 @@ export interface HostDefinition {
   /** Codex, Antigravity, Gemini CLI, and Cursor have no PostToolUseFailure event. */
   includesFailureHook: boolean;
   dialect?: 'standard' | 'antigravity' | 'gemini-cli' | 'cursor' | 'mcp';
+  /** MCP entry shape: standard `{ command, args }` vs OpenCode `{ type: 'local', command: [...] }`. */
+  mcpFormat?: 'standard' | 'opencode';
   /** Extra steps the user must take after connecting. */
   notes: string[];
 }
@@ -287,6 +291,25 @@ export const HOSTS: Record<ConnectHostId, HostDefinition> = {
     includesFailureHook: false,
     dialect: 'mcp',
     notes: ['wires MCP server in Cline VS Code extension'],
+  },
+  opencode: {
+    id: 'opencode',
+    label: 'OpenCode',
+    relativeConfigPath: join('.config', 'opencode', 'opencode.json'),
+    eventsKey: 'mcp',
+    includesFailureHook: false,
+    dialect: 'mcp',
+    mcpFormat: 'opencode',
+    notes: ['wires local MCP server in ~/.config/opencode/opencode.json; restart OpenCode to activate'],
+  },
+  kiro: {
+    id: 'kiro',
+    label: 'Kiro',
+    relativeConfigPath: join('.kiro', 'settings', 'mcp.json'),
+    eventsKey: 'mcpServers',
+    includesFailureHook: false,
+    dialect: 'mcp',
+    notes: ['wires MCP server in ~/.kiro/settings/mcp.json; reload Kiro to activate'],
   },
 };
 
@@ -568,6 +591,7 @@ function wireMcpConfigFile(
   mcpConfigPath: string,
   mcpScriptPath: string,
   serversKey = 'mcpServers',
+  mcpFormat: 'standard' | 'opencode' = 'standard',
 ): { added: number; upgraded: number; alreadyPresent: number; backupPath: string | null } {
   const { existed, config } = readConfig(mcpConfigPath);
   const serversRaw = config[serversKey];
@@ -577,14 +601,28 @@ function wireMcpConfigFile(
   const servers = (serversRaw as Record<string, unknown> | undefined) ?? {};
   config[serversKey] = servers;
 
-  const existing = servers[MCP_SERVER_ID] as { command?: unknown; args?: unknown } | undefined;
-  const wantedEntry = { command: 'node', args: [mcpScriptPath] };
+  const existing = servers[MCP_SERVER_ID] as { type?: unknown; command?: unknown; args?: unknown; enabled?: unknown } | undefined;
+  const wantedEntry =
+    mcpFormat === 'opencode'
+      ? { type: 'local', command: ['node', mcpScriptPath], enabled: true }
+      : { command: 'node', args: [mcpScriptPath] };
   const isSame =
-    existing &&
-    existing.command === 'node' &&
-    Array.isArray(existing.args) &&
-    existing.args.length === 1 &&
-    existing.args[0] === mcpScriptPath;
+    mcpFormat === 'opencode'
+      ? Boolean(
+          existing &&
+            existing.type === 'local' &&
+            Array.isArray(existing.command) &&
+            existing.command.length === 2 &&
+            existing.command[0] === 'node' &&
+            existing.command[1] === mcpScriptPath,
+        )
+      : Boolean(
+          existing &&
+            existing.command === 'node' &&
+            Array.isArray(existing.args) &&
+            existing.args.length === 1 &&
+            existing.args[0] === mcpScriptPath,
+        );
 
   if (isSame) {
     return { added: 0, upgraded: 0, alreadyPresent: 1, backupPath: null };
@@ -624,7 +662,7 @@ export function connectHost(hostId: ConnectHostId, options?: ConnectOptions): Co
   if (host.dialect === 'mcp') {
     const serversKey = host.eventsKey ?? 'mcpServers';
     const mcpPath = mcpServerPathOf(scriptDir);
-    const mcpRes = wireMcpConfigFile(configPath, mcpPath, serversKey);
+    const mcpRes = wireMcpConfigFile(configPath, mcpPath, serversKey, host.mcpFormat ?? 'standard');
     return {
       host: host.id,
       label: host.label,
@@ -726,6 +764,10 @@ export function listImmuneCommands(hostId: ConnectHostId, home?: string): string
       const serversKey = host.eventsKey ?? 'mcpServers';
       const servers = config[serversKey] as Record<string, { command?: unknown; args?: unknown }> | undefined;
       const entry = servers?.[MCP_SERVER_ID];
+      if (host.mcpFormat === 'opencode') {
+        const script = Array.isArray(entry?.command) && typeof entry.command[1] === 'string' ? entry.command[1] : '';
+        return script ? [`node "${script}"`] : [];
+      }
       const arg0 = Array.isArray(entry?.args) && typeof entry.args[0] === 'string' ? entry.args[0] : '';
       return arg0 ? [`node "${arg0}"`] : [];
     }
@@ -1009,6 +1051,12 @@ export function detectHosts(home: string): DetectedHost[] {
   const zedSettings = join(home, HOSTS.zed.relativeConfigPath);
   if (existsSync(zedSettings)) {
     detected.push({ host: 'zed', label: 'Zed', marker: zedSettings, wired: true });
+  }
+  if (existsSync(join(home, '.config', 'opencode'))) {
+    detected.push({ host: 'opencode', label: 'OpenCode', marker: '~/.config/opencode', wired: true });
+  }
+  if (existsSync(join(home, '.kiro'))) {
+    detected.push({ host: 'kiro', label: 'Kiro', marker: '~/.kiro', wired: true });
   }
   if (existsSync(join(home, '.zcode'))) {
     detected.push({

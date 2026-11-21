@@ -1,6 +1,7 @@
-import type { Antibody, AntibodyStatus, FailureSnapshot, NewAntibody, WorkspaceProfile } from '../types.js';
+import type { Antibody, AntibodyStatus, FailureSnapshot, GuardEventSummary, NewAntibody, WorkspaceProfile } from '../types.js';
 import { type HygieneReport } from '../hygiene.js';
 import { type ReceiptSummary } from '../receipts.js';
+import { type NewGuardEvent } from './guard-events.js';
 import { type TriageSummary } from '../triage.js';
 import type { MagpieTelemetryReport } from '../audit/magpie.js';
 /** meta-table key for the value metric: repeats the plugin measurably prevented. */
@@ -218,6 +219,15 @@ export declare class ImmuneStore {
     triageSummary(limit?: number): TriageSummary;
     /** Verify and summarize SHA-256 chained delivery receipts. */
     receiptSummary(limit?: number): ReceiptSummary;
+    /**
+     * Settle verified `'held'` receipts at turn end for rules injected in
+     * `sessionId` that survived without a related failure in this window.
+     */
+    recordHeldReceipts(sessionId: string, projectScope?: string, tokensPerHold?: number): number;
+    /** Persist a redacted live Pre-Flight Guard interception into the audit ledger. */
+    recordGuardEvent(entry: NewGuardEvent): void;
+    /** Read-only summary and recent rows from the live Pre-Flight Guard audit ledger. */
+    guardEventSummary(limit?: number): GuardEventSummary;
     /** Build per-model immunity matrix + adaptive escalation targets. */
     modelImmunity(magpie?: MagpieTelemetryReport | null): {
         models: import("../model-intel.js").ModelImmunityProfile[];

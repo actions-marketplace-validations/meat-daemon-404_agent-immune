@@ -1,4 +1,19 @@
+/**
+ * Query surface shared by the standalone dashboard and the DSH web route.
+ *
+ * Kept separate from either server so the two cannot drift: one definition of
+ * "what the UI may read" and "which mutations exist".
+ */
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { scanMagpieSummary } from '../audit/magpie.js';
+import { diagnoseAgentArchetype } from '../diagnose.js';
+import { runPitfallAutopsy } from '../autopsy.js';
+import { evaluatePreFlightGuard } from '../guard.js';
+import { detectWorkspaceDNA, verifyVaccineLockfile } from '../vaccine.js';
+import { federateSwarmRules } from '../federate.js';
+import { parseTeamRulesJsonl } from '../team-sync.js';
+import { computeImmunityScore } from '../wrapped.js';
 export const MAX_QUERY = 200;
 export const ACTIONS = new Set(['retire', 'restore', 'delete']);
 /**
@@ -41,6 +56,7 @@ export function dashboardStats(store) {
         workspaces: store.listWorkspaceProfiles().length,
         triage: store.triageSummary(12),
         receipts: store.receiptSummary(500),
+        guardInterceptions: store.guardEventSummary(1).total,
         gateway: scanMagpieSummary(),
     };
 }
@@ -100,6 +116,81 @@ export function readWorkspaces(store) {
 }
 export function runHygieneAction(store, dryRun = false) {
     return store.repairHygiene({ dryRun });
+}
+/**
+ * Unified v4 read-only insights payload shared by both standalone dashboard and
+ * DSH native settings tab. Grounded strictly in real database receipts, hits,
+ * suppressions, and guard events (zero synthetic multipliers).
+ */
+export function readInsights(store, workspace = process.cwd()) {
+    const active = store.listAll(false);
+    const s = store.stats();
+    const receipts = store.receiptSummary(500);
+    const guardSummary = store.guardEventSummary(15);
+    const totalInjections = active.reduce((sum, r) => sum + Math.max(0, r.hit_count), 0);
+    const heldCount = receipts.byOutcome.held ?? 0;
+    const failedCount = receipts.byOutcome.failed ?? 0;
+    const prevented = s.suppressedRepeats + heldCount + guardSummary.total;
+    const observedTotal = Math.max(prevented + failedCount, totalInjections);
+    const lockPath = join(workspace, '.immune', 'vaccine.lock.json');
+    const lockfile = existsSync(lockPath)
+        ? { exists: true, ...verifyVaccineLockfile(readFileSync(lockPath, 'utf8')) }
+        : { exists: false, valid: false, reason: 'No .immune/vaccine.lock.json found (run `immune vaccinate`)' };
+    return {
+        immunityScore: computeImmunityScore({
+            totalCalls: observedTotal,
+            repeatFailures: prevented,
+            avoidableTokens: receipts.estimatedTokensSaved,
+            activeRules: active.length,
+            totalInjections,
+        }),
+        diagnosis: diagnoseAgentArchetype(active),
+        autopsy: runPitfallAutopsy(active),
+        workspaceDna: detectWorkspaceDNA(workspace),
+        lockfile,
+        guardSummary,
+        receipts,
+    };
+}
+/** Shared read-only Pre-Flight Guard evaluator for both UI HTTP endpoints. */
+export function evaluateUiGuard(store, payload, opts = {}) {
+    const dna = detectWorkspaceDNA(opts.workspace ?? process.cwd());
+    const pm = dna.packageManager === 'pnpm' ||
+        dna.packageManager === 'yarn' ||
+        dna.packageManager === 'bun' ||
+        dna.packageManager === 'uv'
+        ? dna.packageManager
+        : null;
+    return evaluatePreFlightGuard(payload, store.listAll(false), {
+        toolName: opts.toolName?.trim() || 'Bash',
+        strict: opts.strict === true,
+        workspacePackageManager: pm,
+    });
+}
+/** Shared read-only Pre-Flight Guard audit ledger query. */
+export function readGuardEvents(store, limit = 25) {
+    return store.guardEventSummary(limit);
+}
+/** Shared read-only Swarm Federation preview across local SQLite, shared DB, and `.immune/rules.jsonl`. */
+export function readFederationPreview(store, workspace = process.cwd()) {
+    const sources = [{ sourceId: 'local-sqlite', rules: store.listAll(false) }];
+    const shared = store.sharedAntibodies(200);
+    if (shared.length > 0) {
+        sources.push({ sourceId: 'shared-library', rules: shared });
+    }
+    const teamPath = join(workspace, '.immune', 'rules.jsonl');
+    if (existsSync(teamPath)) {
+        try {
+            const teamRules = parseTeamRulesJsonl(readFileSync(teamPath, 'utf8'));
+            if (teamRules.length > 0) {
+                sources.push({ sourceId: '.immune/rules.jsonl', rules: teamRules });
+            }
+        }
+        catch {
+            // Ignore unreadable team rules file in UI preview.
+        }
+    }
+    return federateSwarmRules(sources);
 }
 const WEEK = 7 * 24 * 60 * 60 * 1000;
 const EVOLUTION_WEEKS = 8;

@@ -8,7 +8,7 @@
  * with SHA-256 integrity verification.
  */
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { canonicalRuleHash, isTeamShareSafe } from './team-sync.js';
 import { packageVersion } from './version.js';
@@ -387,6 +387,37 @@ export function applyVaccineLockfile(store, lockfile) {
             applied += 1;
     }
     return { applied, total: lockfile.antibodies.length };
+}
+/**
+ * Best-effort SessionStart auto-hydration of a repository's committed
+ * `.immune/vaccine.lock.json`. Strictly verifies SHA-256 integrity first so a
+ * tampered or malformed lockfile is never imported, and uses `skipIfExists` so
+ * repeat sessions never inflate `hit_count` (AGENTS.md #9).
+ */
+export function hydrateVaccineLockfile(store, workspaceDir) {
+    const lockfilePath = join(workspaceDir, '.immune', 'vaccine.lock.json');
+    if (!existsSync(lockfilePath)) {
+        return { present: false, verified: false, applied: 0, total: 0 };
+    }
+    let raw = '';
+    try {
+        raw = readFileSync(lockfilePath, 'utf8');
+    }
+    catch {
+        return { present: true, verified: false, applied: 0, total: 0 };
+    }
+    const check = verifyVaccineLockfile(raw);
+    if (!check.valid) {
+        return { present: true, verified: false, applied: 0, total: check.antibodyCount };
+    }
+    try {
+        const parsed = JSON.parse(raw);
+        const res = applyVaccineLockfile(store, parsed);
+        return { present: true, verified: true, applied: res.applied, total: res.total };
+    }
+    catch {
+        return { present: true, verified: false, applied: 0, total: 0 };
+    }
 }
 export function renderVaccineTerminal(lockfile, lockfilePath) {
     const ver = packageVersion();

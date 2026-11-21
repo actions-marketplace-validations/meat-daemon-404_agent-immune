@@ -150,10 +150,15 @@ export function insertAntibody(db, ab, options = {}) {
     const initialStatus = ab.status ?? 'active';
     const retireReason = initialStatus === 'quarantined' ? (verdict.quarantineReason ?? 'hygiene_quarantined') : '';
     const now = Date.now();
-    // 1. Exact prescription match within compatible scope.
+    // 1. Exact prescription match within compatible active scope.
+    //    Inactive (retired / quarantined) rows are excluded so re-learning a
+    //    previously retired lesson creates a fresh active antibody rather than
+    //    silently bumping counters on a dead row.
     const exact = db
         .prepare(`SELECT id, trigger_pattern, project_scope FROM antibodies
-        WHERE prescription = ? AND (project_scope = '*' OR project_scope = ?)
+        WHERE status = 'active'
+          AND prescription = ?
+          AND (project_scope = '*' OR project_scope = ?)
         LIMIT 1`)
         .get(prescription, effectiveScope);
     if (exact) {
@@ -242,11 +247,12 @@ export function findMatches(db, text, limit, projectScope = '*') {
             // A malformed MATCH expression must never break the user's turn.
         }
     }
-    if (rows.length >= limit)
-        return rows.slice(0, limit);
+    // Hybrid bilingual union (v4.0): FTS5 trigram cannot index 2-char CJK terms
+    // (AGENTS.md #5). Never short-circuit CJK bigram lookup just because FTS5
+    // already filled `limit` rows with generic English tokens (e.g. "npm run dev 跨域").
     const bigrams = cjkBigrams(expanded);
     if (bigrams.length === 0)
-        return rows;
+        return rows.slice(0, limit);
     try {
         const clause = '(trigger_pattern LIKE ? OR symptom LIKE ? OR prescription LIKE ?)';
         const where = bigrams.map(() => clause).join(' OR ');
@@ -273,11 +279,25 @@ export function findMatches(db, text, limit, projectScope = '*') {
         })
             .filter((entry) => entry.score >= 1)
             .sort((a, b) => b.score - a.score || b.row.hit_count - a.row.hit_count);
-        for (const entry of scored) {
-            if (rows.length >= limit)
-                break;
-            rows.push(entry.row);
-            seen.add(entry.row.id);
+        if (scored.length > 0) {
+            const freeSlots = Math.max(0, limit - rows.length);
+            if (freeSlots >= scored.length) {
+                for (const entry of scored) {
+                    rows.push(entry.row);
+                    seen.add(entry.row.id);
+                }
+            }
+            else {
+                // Reserve up to half the candidate slots (min 2 when limit >= 2) for
+                // CJK bigram hits so downstream rerank sees bilingual exact matches.
+                const cjkBudget = Math.min(scored.length, Math.max(freeSlots, limit >= 2 ? Math.max(2, Math.floor(limit / 2)) : 1));
+                const ftsKeep = Math.max(0, limit - cjkBudget);
+                const merged = rows.slice(0, ftsKeep);
+                for (const entry of scored.slice(0, cjkBudget)) {
+                    merged.push(entry.row);
+                }
+                return merged.slice(0, limit);
+            }
         }
     }
     catch {
@@ -290,6 +310,15 @@ export function bumpHits(db, ids) {
     const stmt = db.prepare('UPDATE antibodies SET hit_count = hit_count + 1 WHERE id = ?');
     for (const id of ids)
         stmt.run(id);
+}
+/** Record single-shot shared-library promotion timestamp so hot-path matches never re-open global.sqlite. */
+export function markPromoted(db, id, now = Date.now()) {
+    try {
+        db.prepare('UPDATE antibodies SET promoted_at = ? WHERE id = ?').run(now, id);
+    }
+    catch {
+        // Non-fatal on legacy DBs before migration.
+    }
 }
 export function listAntibodies(db, includeRetired = true) {
     const sql = includeRetired
@@ -340,6 +369,7 @@ export function penalizeAntibodies(db, ids, ctx) {
         const before = rowToAntibody(rawBefore);
         if (ctx && !isRelated(before.trigger_pattern, ctx.failureText, ctx.toolName))
             continue;
+        let nextBucket = ctx ? 'stale_or_bad_advice' : '';
         if (ctx) {
             const verdict = triagePostInjectionFailure(before, ctx.failureText, ctx.toolName, ctx.projectScope ?? '*');
             if (verdict.bucket === 'flake_or_transient') {
@@ -366,6 +396,7 @@ export function penalizeAntibodies(db, ids, ctx) {
                 continue;
             }
             if (verdict.bucket === 'ignored_by_agent') {
+                nextBucket = verdict.bucket;
                 bumpIgnored.run(verdict.bucket, now, id);
                 recordTriageEvent(db, {
                     ruleId: id,
@@ -379,6 +410,7 @@ export function penalizeAntibodies(db, ids, ctx) {
                     continue;
             }
             else {
+                nextBucket = verdict.bucket;
                 recordTriageEvent(db, {
                     ruleId: id,
                     sessionId: ctx.sessionId,
@@ -389,7 +421,7 @@ export function penalizeAntibodies(db, ids, ctx) {
                 });
             }
         }
-        bumpFail.run(ctx ? 'stale_or_bad_advice' : '', now, id);
+        bumpFail.run(nextBucket, now, id);
         penalized.push(id);
         if (!shouldRetire(before.hit_count, before.fail_count + 1))
             continue;

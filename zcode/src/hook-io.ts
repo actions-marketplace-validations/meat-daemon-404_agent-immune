@@ -13,6 +13,7 @@
  */
 import { rememberPluginRoot } from './root-marker.js';
 import { appendFileSync } from 'node:fs';
+import { canonicalToolName } from '../../core/tools.js';
 
 /**
  * Optional execution trace, enabled with IMMUNE_DEBUG_LOG=<path>.
@@ -291,33 +292,11 @@ export function sessionIdOf(event: HookEvent): string {
  * Bash/Edit names. Keep the map here — one entry point every hook already
  * calls — so no adapter code is duplicated per host.
  */
-const HOST_TOOL_ALIASES: Record<string, string> = {
-  shell_command: 'Bash',
-  exec_command: 'Bash',
-  shell: 'Bash',
-  local_shell: 'Bash',
-  apply_patch: 'Edit',
-  run_command: 'Bash',
-  run_shell_command: 'Bash',
-  replace: 'Edit',
-  edit_file: 'Edit',
-  replace_file_content: 'Edit',
-  multi_replace_file_content: 'Edit',
-  write_file: 'Write',
-  write_to_file: 'Write',
-  read_file: 'Read',
-  view_file: 'Read',
-  view_file_outline: 'Read',
-  view_code_item: 'Read',
-  grep_search: 'Grep',
-  search_file_content: 'Grep',
-  find_by_name: 'Glob',
-  glob: 'Glob',
-  list_dir: 'Glob',
-};
-
+/**
+ * Normalise host tool names via the single canonical taxonomy in `core/tools.ts`.
+ */
 export function normaliseToolName(name: string): string {
-  return HOST_TOOL_ALIASES[name.toLowerCase()] ?? name;
+  return canonicalToolName(name);
 }
 
 export function toolNameOf(event: HookEvent): string {

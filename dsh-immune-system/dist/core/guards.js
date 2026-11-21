@@ -60,6 +60,8 @@ export function guardMode(env = process.env) {
     const raw = env.IMMUNE_GUARD?.trim().toLowerCase();
     if (raw === 'deny')
         return 'deny';
+    if (raw === 'ask')
+        return 'ask';
     if (raw === 'warn' || raw === '1' || raw === 'true')
         return 'warn';
     return 'off';

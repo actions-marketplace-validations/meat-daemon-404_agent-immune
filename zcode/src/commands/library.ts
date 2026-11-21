@@ -647,7 +647,36 @@ export function cmdGuard(store: ImmuneStore, args: string[]): number {
   const asJson = flagArgs.includes('--json');
   const asMarkdown = flagArgs.includes('--markdown');
   const asHook = flagArgs.includes('--hook');
+  const asLog = flagArgs.includes('--log');
   const strict = flagArgs.includes('--strict');
+  if (asLog) {
+    const rawLimit = Number(flagValue(flagArgs, '--limit') ?? '20');
+    const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(200, Math.trunc(rawLimit)) : 20;
+    const summary = store.guardEventSummary(limit);
+    if (asJson) {
+      process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
+      return 0;
+    }
+    const lines = [
+      `Pre-Flight Guard Audit Ledger: ${summary.total} interception(s) (avg blast ${summary.avgBlastRadius}/100)`,
+      `  decisions: block=${summary.byDecision.block ?? 0} · rewrite=${summary.byDecision.rewrite ?? 0} · warn=${summary.byDecision.warn ?? 0}`,
+    ];
+    if (summary.recent.length === 0) {
+      lines.push('  (no live guard interceptions recorded yet — enable IMMUNE_GUARD=warn|ask|deny)');
+    } else {
+      for (const ev of summary.recent) {
+        const ts = new Date(ev.created_at).toISOString().slice(0, 19).replace('T', ' ');
+        lines.push(
+          `  #${ev.id} [${ev.decision.toUpperCase()} ${ev.blast_radius}/100] ${ts} ${ev.tool_name} (${ev.policy_ids.join(', ')}) — ${ev.payload_preview}`,
+        );
+        if (ev.suggested_rewrite) {
+          lines.push(`      ↳ safe rewrite: ${ev.suggested_rewrite}`);
+        }
+      }
+    }
+    process.stdout.write(`${lines.join('\n')}\n`);
+    return 0;
+  }
   const toolName = flagValue(flagArgs, '--tool') ?? 'Bash';
   const rawHookHost = flagValue(flagArgs, '--hook-host')?.toLowerCase() as GuardHookHost | undefined;
   const positional: string[] = [];
@@ -662,17 +691,20 @@ export function cmdGuard(store: ImmuneStore, args: string[]): number {
       afterSeparator = true;
       continue;
     }
-    if (a === '--tool' || a === '--hook-host') {
+    if (a === '--tool' || a === '--hook-host' || a === '--limit') {
       i++;
       continue;
     }
-    if (a.startsWith('--tool=') || a.startsWith('--hook-host=')) continue;
-    if (a === '--json' || a === '--markdown' || a === '--hook' || a === '--strict') continue;
+    if (a.startsWith('--tool=') || a.startsWith('--hook-host=') || a.startsWith('--limit=')) continue;
+    if (a === '--json' || a === '--markdown' || a === '--hook' || a === '--strict' || a === '--log') continue;
     positional.push(a);
   }
   const payload = positional.join(' ').trim();
   if (!payload) {
-    process.stderr.write('usage: immune guard "<command-or-payload>" [--tool Bash|Edit|Write] [--strict] [--hook] [--hook-host <host>] [--markdown] [--json]\n');
+    process.stderr.write(
+      'usage: immune guard "<command-or-payload>" [--tool Bash|Edit|Write] [--strict] [--hook] [--hook-host <host>] [--markdown] [--json]\n' +
+        '       immune guard --log [--limit N] [--json]\n',
+    );
     return 2;
   }
   const dna = detectWorkspaceDNA(process.cwd());

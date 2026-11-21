@@ -22,6 +22,14 @@ const MARKERS: ReadonlyArray<{ stack: string; files: string[] }> = [
   { stack: 'go-mod', files: ['go.mod'] },
   { stack: 'docker', files: ['Dockerfile', 'docker-compose.yml', 'docker-compose.yaml', 'compose.yaml'] },
   { stack: 'dsh-ecosystem', files: ['cordis.patch.yml'] },
+  {
+    stack: 'sql-migrations',
+    files: ['prisma/schema.prisma', 'drizzle.config.ts', 'drizzle.config.js', 'drizzle.config.mjs', 'alembic.ini'],
+  },
+  {
+    stack: 'nextjs-react',
+    files: ['next.config.ts', 'next.config.mjs', 'next.config.js'],
+  },
 ];
 
 const WEB_MARKER_FILES = [

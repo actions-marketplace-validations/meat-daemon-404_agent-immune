@@ -333,11 +333,12 @@ test('v2.1 MCP exposes 20 tools including immune_doctor, immune_ci_check, and hu
     await rpc(1, 'initialize', { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'test', version: '1.0' } });
     const listResp = await rpc(2, 'tools/list');
     const names = listResp.result.tools.map((t) => t.name);
-    assert.equal(names.length, 26);
+    assert.equal(names.length, 27);
     assert.ok(names.includes('immune_doctor'));
     assert.ok(names.includes('immune_ci_check'));
     assert.ok(names.includes('immune_explain'));
     assert.ok(names.includes('immune_guard'));
+    assert.ok(names.includes('immune_guard_log'));
     assert.ok(names.includes('immune_vaccinate'));
     assert.ok(names.includes('immune_diagnose'));
     assert.ok(names.includes('immune_autopsy'));

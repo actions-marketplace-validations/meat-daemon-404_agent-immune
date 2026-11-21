@@ -1,6 +1,6 @@
-# Evaluation & Real-World Benchmarks (`dsh-immune-system@3.1.0`)
+# Evaluation & Real-World Benchmarks (`dsh-immune-system@4.0.0`)
 
-All metrics below are directly measured on the `dsh-immune-system@3.1.0` codebase using built-in test suites and reproducible scripts under `scripts/`. None of the numbers are fabricated or extrapolated.
+All metrics below are directly measured on the `dsh-immune-system@4.0.0` codebase using built-in test suites and reproducible scripts under `scripts/`. None of the numbers are fabricated or extrapolated.
 
 ---
 
@@ -22,10 +22,10 @@ All metrics below are directly measured on the `dsh-immune-system@3.1.0` codebas
 
 | Suite / Script | Command | Result | Scope |
 | --- | --- | --- | --- |
-| Unit & Integration Suite | `npm test` | **302 / 302 passed (`0` failed, `0` skipped)** | Core store, hygiene, rubric, Red-3 triage, SHA-256 receipts, shared-rule suppression, turn locks, `explain` simulator, `wrapped` SVG scorecard, `team-sync` JSONL, `guard`, `vaccinate`, `federate`, `diagnose`, `autopsy`, `compile-rules`, `./core` SDK, `git-hook`, completions, MCP (`26` tools), MCP registries, manifests |
-| Version Sync Guard | `node scripts/check-versions.mjs` | **10/10 fields aligned at `3.1.0`** | All 7 root/plugin/DSH/ZCode/marketplace/Claude/MCP-Registry manifests |
-| Dist Graph Integrity | `node scripts/verify-dist-integrity.mjs` (+ `--self-test`) | **Passed (0 failed)** | 1:1 `src -> dist` mapping & relative import resolution (`105` files, `333` imports) |
-| End-to-End A/B Simulation | `node scripts/bench-ab-simulation.mjs` | **Passed (`-95.0%` repeat pitfalls)** | 30 sessions (10 pitfall families × 3 turns): `-63.3%` total failures, `-61.4%` tokens, `0.008 ms` p50 recall |
+| Unit & Integration Suite | `npm test` | **308 / 308 passed (`0` failed, `0` skipped)** | Core store (`user_version` v4 fast-path, multi-target episodes), hygiene, rubric, Red-3 triage, `BEGIN IMMEDIATE` SHA-256 receipts + `'held'` ROI, live unified Pre-Flight Guard & `guard_events`, `explain` simulator, `wrapped` SVG, `team-sync` JSONL, `vaccinate` auto-hydration, `federate`, `diagnose`, `autopsy`, `compile-rules`, `./core` SDK, `git-hook` worktree `commondir`, 13 `connect` hosts, MCP (`27` tools + `5` resources + `3` prompts), manifests |
+| Version Sync Guard | `node scripts/check-versions.mjs` | **10/10 fields aligned at `4.0.0`** | All 7 root/plugin/DSH/ZCode/marketplace/Claude/MCP-Registry manifests |
+| Dist Graph Integrity | `node scripts/verify-dist-integrity.mjs` (+ `--self-test`) | **Passed (0 failed)** | 1:1 `src -> dist` mapping & relative import resolution (`107` files, `343` imports) |
+| End-to-End A/B Simulation | `node scripts/bench-ab-simulation.mjs` | **Passed (`-95.0%` repeat pitfalls)** | 30 sessions (10 pitfall families × 3 turns): `-63.3%` total failures, `-61.4%` tokens, `0.005 ms` p50 recall |
 | DSH Outcome & Adapters | `node scripts/verify-step1.mjs` & `verify-steps23.mjs` | **15/15** & **24/24 passed** | Outcome judge, fail→success pair, inject, probes, DSH v4 message source |
 | Live Cordis Host Replay | `node scripts/verify-live-host.mjs` | **20/20 passed (`0` failed)** | Event bus, `turn-stopping`, priming, cold resume |
 | DSH Web Bundle Serving | `node scripts/verify-client-serve.mjs` | **10/10 passed (`profile=desktop`)** | `ClientModuleRegistry` `/plugins/dsh-immune-system/client.js` |
@@ -40,24 +40,24 @@ All metrics below are directly measured on the `dsh-immune-system@3.1.0` codebas
 
 - **`node scripts/bench-recall.mjs`** (bilingual paraphrase matrix):
   - **`R@1: 100%`**, **`R@3: 100%`**, **`FP: 0% (0/8)`** (`8` positives, `8` negatives including conversational CJK traps)
-- **`node scripts/bench-seed-recall.mjs`** (all 9 builtin packs, `54` paraphrased queries):
-  - After `lexicalTriggerAffinity` + disambiguated concept graph + CJK conversational stop-filtering (`core/retrieval.ts`, `core/store/tokenize.ts`, `core/store/rerank.ts`):
-    - **`R@1: 69% -> 100%` (`54 / 54`, +31 percentage points)**
-    - **`R@3: 100%` (`54 / 54`)**
+- **`node scripts/bench-seed-recall.mjs`** (all 12 builtin packs, `72` paraphrased queries):
+  - After `lexicalTriggerAffinity` + disambiguated concept graph + unstarved hybrid FTS5/CJK recall (`core/retrieval.ts`, `core/store/antibodies.ts`, `core/store/rerank.ts`):
+    - **`R@1: 100%` (`72 / 72`)**
+    - **`R@3: 100%` (`72 / 72`)**
     - **`FP: 0% (0 / 9)`**
 
 ### 3.2 Indexing & Query Tail Latency (`node scripts/bench-scale.mjs`)
 
-- Seeded **`300` rules in `55 ms`** (`0.18 ms/rule`)
-- Executed **`67` queries**: **`p50 = 0.58 ms`**, **`p95 = 1.03 ms`**, **`max = 5.42 ms`**
+- Seeded **`300` rules in `60 ms`** (`0.20 ms/rule`)
+- Executed **`67` queries**: **`p50 = 0.93 ms`**, **`p95 = 1.40 ms`**, **`max = 6.04 ms`**
 
 ### 3.3 Hook Path Isolation & Batched Turn-End Drain (`node scripts/bench-tool-latency.mjs`)
 
 Mock OpenAI endpoint (`800 ms` artificial latency per HTTP round-trip):
-- **`tools/post-execute` hot path**: **`median = 1.697 ms`**, **`worst = 3.964 ms`** (zero model calls on tool execution path).
-- **Batched `agent/turn-stopping` drain** (`3` queued episodes, `12 s` default budget): **`861 ms`** total.
-- **Queue depth curve (`[1, 4, 5, 9]` episodes)**: `822 ms` (`1` batch), `825 ms` (`1` batch), `1,650 ms` (`2` batches), `2,463 ms` (`3` batches).
-- **Tight budget cap (`IMMUNE_DISTILL_BUDGET_MS=1400`, `6` queued)**: **`844 ms` total**, **`httpCalls = 1`**, stops starting a doomed second LLM batch (**`PASS (0 failed)`**).
+- **`tools/post-execute` hot path**: **`median = 1.42–1.82 ms`**, **`worst = 4.52 ms`** (zero model calls on tool execution path).
+- **Batched `agent/turn-stopping` drain** (`3` queued episodes, `12 s` default budget): **`852 ms`** total.
+- **Queue depth curve (`[1, 4, 5, 9]` episodes)**: `813 ms` (`1` batch), `829 ms` (`1` batch), `1,647 ms` (`2` batches), `2,471 ms` (`3` batches).
+- **Tight budget cap (`IMMUNE_DISTILL_BUDGET_MS=1400`, `6` queued)**: **`835 ms` total**, **`httpCalls = 1`**, stops starting a doomed second LLM batch (**`PASS (0 failed)`**).
 
 ### 3.4 Outcome Classifier Ground-Truth Replay (`node scripts/eval-judge.mjs`)
 

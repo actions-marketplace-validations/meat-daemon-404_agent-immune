@@ -17,7 +17,7 @@
  * the caller.
  */
 
-export type GuardMode = 'off' | 'warn' | 'deny';
+export type GuardMode = 'off' | 'warn' | 'ask' | 'deny';
 
 export interface GuardRule {
   /** Stable id, shown to the model so it can be referenced. */
@@ -72,6 +72,7 @@ export const GUARD_RULES: readonly GuardRule[] = [
 export function guardMode(env: NodeJS.ProcessEnv = process.env): GuardMode {
   const raw = env.IMMUNE_GUARD?.trim().toLowerCase();
   if (raw === 'deny') return 'deny';
+  if (raw === 'ask') return 'ask';
   if (raw === 'warn' || raw === '1' || raw === 'true') return 'warn';
   return 'off';
 }

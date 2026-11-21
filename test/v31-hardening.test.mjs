@@ -75,7 +75,7 @@ test('v3.1 cli.js mcp starts JSON-RPC stdio server, exposes 26 tools, and sets i
     assert.equal(init.result.serverInfo.name, 'dsh-immune-system');
 
     const listed = await rpc(2, 'tools/list');
-    assert.equal(listed.result.tools.length, 26);
+    assert.equal(listed.result.tools.length, 27);
 
     const guardResp = await rpc(3, 'tools/call', {
       name: 'immune_guard',

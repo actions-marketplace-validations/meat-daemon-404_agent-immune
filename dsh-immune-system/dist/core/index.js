@@ -1,11 +1,12 @@
+export { canonicalToolName, isFileToolName, isPassiveReadToolName, isRepairToolName, isShellToolName, } from './tools.js';
 export { ImmuneStore, GlobalStore, globalDbPathFor, isPromotable, } from './store/index.js';
 export { ImmuneRuntime, DRAIN_BATCH_SIZE, clampBudgetMs, resolveDrainBudgetMs, } from './runtime.js';
 export { distillEpisode, distillBatch } from './distiller.js';
 export { scoreAntibodyRubric, inferRootCause } from './rubric.js';
 export { abstractMachinePaths, canonicalizeSymptom, classifyRuleQuality, deriveProjectScope, repairLibraryHygiene, } from './hygiene.js';
 export { triagePostInjectionFailure, summarizeTriage } from './triage.js';
-export { recordDeliveryReceipt, summarizeReceipts } from './receipts.js';
-export { expandConceptQuery, lexicalTriggerAffinity } from './retrieval.js';
+export { DEFAULT_HELD_TOKENS_EST, recordDeliveryReceipt, recordHeldReceiptsForSession, summarizeReceipts, } from './receipts.js';
+export { expandConceptQuery, lexicalTriggerAffinity, prepareLexicalQuery, } from './retrieval.js';
 export { explainRecall } from './explain.js';
 export { ciCheck, parseManagedBlock, shareSanityCheck, } from './share-guard.js';
 export { BUILTIN_PACKS } from './packs.js';
@@ -17,6 +18,7 @@ export { canonicalRuleHash, hydrateTeamRules, isTeamShareSafe, maybeSyncTeamRule
 export { classifyRuleDomain, diagnoseAgentArchetype, renderDiagnosisMarkdown, renderDiagnosisSvg, renderDiagnosisTerminal, } from './diagnose.js';
 export { IDE_TARGET_PATHS, compileIdeRules, inferRuleGlobs, mergeFencedContent, renderCursorMdc, renderFencedRuleBlock, selectCompilableRules, } from './compile-rules.js';
 export { renderAutopsyMarkdown, renderAutopsyTerminal, runPitfallAutopsy, } from './autopsy.js';
-export { BUILTIN_GUARD_POLICIES, evaluatePreFlightGuard, renderGuardHookDecision, renderGuardHostHookDecision, renderGuardMarkdown, renderGuardTerminal, } from './guard.js';
-export { applyVaccineLockfile, compileVaccineLockfile, computeVaccineIntegrityHash, detectWorkspaceDNA, renderVaccineMarkdown, renderVaccineTerminal, verifyVaccineLockfile, writeVaccineLockfile, } from './vaccine.js';
+export { BUILTIN_GUARD_POLICIES, detectWorkspacePackageManager, evaluatePreFlightGuard, formatLiveGuardBanner, renderGuardHookDecision, renderGuardHostHookDecision, renderGuardMarkdown, renderGuardTerminal, } from './guard.js';
+export { applyVaccineLockfile, compileVaccineLockfile, computeVaccineIntegrityHash, detectWorkspaceDNA, hydrateVaccineLockfile, renderVaccineMarkdown, renderVaccineTerminal, verifyVaccineLockfile, writeVaccineLockfile, } from './vaccine.js';
+export { evaluateUiGuard, readFederationPreview, readGuardEvents, readInsights, } from './ui/query.js';
 export { federateSwarmRules, renderFederationMarkdown, renderFederationSvg, renderFederationTerminal, } from './federate.js';

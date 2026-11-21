@@ -251,6 +251,23 @@ export const DASHBOARD_CSS = `  :root {
   #toast.show { opacity: 1; transform: none; }
   #toast.bad { border-left-color: var(--bad); }
 
+  .v4-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; padding: 14px; }
+  .v4-card { background: var(--bg-soft); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 12px 14px; }
+  .v4-card h3 { margin: 0 0 8px; font-size: 12.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  .v4-kv { display: flex; justify-content: space-between; gap: 10px; font-size: 12.5px; padding: 3px 0; border-bottom: 1px solid var(--line-soft); }
+  .v4-kv:last-child { border-bottom: 0; }
+  .v4-bar-row { display: flex; align-items: center; gap: 8px; margin: 5px 0; font-size: 12px; }
+  .v4-bar-row span:first-child { flex: 0 0 118px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .v4-bar-track { flex: 1; height: 8px; background: var(--panel-2); border-radius: 999px; overflow: hidden; }
+  .v4-bar-fill { height: 100%; border-radius: 999px; background: var(--accent); transition: width .2s; }
+  .v4-bar-fill.hi { background: var(--ok); }
+  .v4-bar-fill.warn { background: var(--warn); }
+  .v4-bar-fill.bad { background: var(--bad); }
+  .v4-rewrite { margin-top: 8px; padding: 8px 10px; border-radius: var(--radius-sm); background: var(--ok-soft); border: 1px solid var(--ok); font-family: ui-monospace, Consolas, monospace; font-size: 12px; word-break: break-all; }
+  .v4-verdict { margin-top: 10px; padding: 10px 12px; border-radius: var(--radius-sm); background: var(--bg-soft); border: 1px solid var(--line); }
+  .v4-check { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); cursor: pointer; user-select: none; }
+  .v4-sec-title { padding: 10px 14px 4px; font-size: 11.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--faint); font-weight: 600; }
+
   @media (max-width: 780px) {
     .wrap { padding: 18px 14px 32px; }
     .meta { margin-left: 0; min-width: 0; width: 100%; }

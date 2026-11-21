@@ -5,16 +5,17 @@
  * Node.js / TypeScript coding agents, frameworks (Vercel AI SDK, LangChain.js,
  * Mastra, OpenCode), and CI tooling.
  */
-export type { Antibody, AntibodyStatus, DeliveryReceipt, DistillResult, FailureSnapshot, NewAntibody, RootCauseType, RuleQualityGrade, TriageBucket, TriageEvent, WorkspaceProfile, } from './types.js';
+export type { Antibody, AntibodyStatus, DeliveryReceipt, DistillResult, FailureSnapshot, GuardEvent, GuardEventSummary, NewAntibody, RootCauseType, RuleQualityGrade, TriageBucket, TriageEvent, WorkspaceProfile, } from './types.js';
 export type { ReceiptOutcome } from './receipts.js';
+export { canonicalToolName, isFileToolName, isPassiveReadToolName, isRepairToolName, isShellToolName, type CanonicalToolName, } from './tools.js';
 export { ImmuneStore, GlobalStore, globalDbPathFor, isPromotable, type DistillJob, type MatchOptions, type StoreOptions, } from './store/index.js';
-export { ImmuneRuntime, DRAIN_BATCH_SIZE, clampBudgetMs, resolveDrainBudgetMs, type DrainSummary, type PreToolOutcome, } from './runtime.js';
+export { ImmuneRuntime, DRAIN_BATCH_SIZE, clampBudgetMs, resolveDrainBudgetMs, type DrainSummary, type LiveGuardResult, type PreToolOutcome, } from './runtime.js';
 export { distillEpisode, distillBatch } from './distiller.js';
 export { scoreAntibodyRubric, inferRootCause, type RubricScore } from './rubric.js';
 export { abstractMachinePaths, canonicalizeSymptom, classifyRuleQuality, deriveProjectScope, repairLibraryHygiene, type HygieneReport, type QualityVerdict, } from './hygiene.js';
 export { triagePostInjectionFailure, summarizeTriage, type TriageSummary } from './triage.js';
-export { recordDeliveryReceipt, summarizeReceipts, type ReceiptSummary } from './receipts.js';
-export { expandConceptQuery, lexicalTriggerAffinity } from './retrieval.js';
+export { DEFAULT_HELD_TOKENS_EST, recordDeliveryReceipt, recordHeldReceiptsForSession, summarizeReceipts, type ReceiptSummary, } from './receipts.js';
+export { expandConceptQuery, lexicalTriggerAffinity, prepareLexicalQuery, type PreparedLexicalQuery, } from './retrieval.js';
 export { explainRecall, type ExplainRecallReport, type ExplainedCandidate } from './explain.js';
 export { ciCheck, parseManagedBlock, shareSanityCheck, type CiCheckFinding, type CiCheckReport, } from './share-guard.js';
 export { BUILTIN_PACKS, type SeedPack, type SeedPackRule } from './packs.js';
@@ -26,6 +27,7 @@ export { canonicalRuleHash, hydrateTeamRules, isTeamShareSafe, maybeSyncTeamRule
 export { classifyRuleDomain, diagnoseAgentArchetype, renderDiagnosisMarkdown, renderDiagnosisSvg, renderDiagnosisTerminal, type AgentArchetype, type AgentDiagnosisReport, type DiagnosableRule, type DomainRadarAxis, type PitfallDomainId, } from './diagnose.js';
 export { IDE_TARGET_PATHS, compileIdeRules, inferRuleGlobs, mergeFencedContent, renderCursorMdc, renderFencedRuleBlock, selectCompilableRules, type CompiledIdeFile, type IdeRuleTarget, } from './compile-rules.js';
 export { renderAutopsyMarkdown, renderAutopsyTerminal, runPitfallAutopsy, type AutopsyBucket, type AutopsyReport, type FragileScar, } from './autopsy.js';
-export { BUILTIN_GUARD_POLICIES, evaluatePreFlightGuard, renderGuardHookDecision, renderGuardHostHookDecision, renderGuardMarkdown, renderGuardTerminal, type BuiltinGuardPolicySpec, type GuardDecision, type GuardEvaluationOptions, type GuardHookHost, type GuardMatchedPolicy, type GuardSeverity, type GuardVerdict, } from './guard.js';
-export { applyVaccineLockfile, compileVaccineLockfile, computeVaccineIntegrityHash, detectWorkspaceDNA, renderVaccineMarkdown, renderVaccineTerminal, verifyVaccineLockfile, writeVaccineLockfile, type DetectedPackageManager, type VaccineAntibodySpec, type VaccineLockfile, type VaccineVerificationReport, type WorkspaceDNA, } from './vaccine.js';
+export { BUILTIN_GUARD_POLICIES, detectWorkspacePackageManager, evaluatePreFlightGuard, formatLiveGuardBanner, renderGuardHookDecision, renderGuardHostHookDecision, renderGuardMarkdown, renderGuardTerminal, type BuiltinGuardPolicySpec, type GuardDecision, type GuardEvaluationOptions, type GuardHookHost, type GuardMatchedPolicy, type GuardSeverity, type GuardVerdict, } from './guard.js';
+export { applyVaccineLockfile, compileVaccineLockfile, computeVaccineIntegrityHash, detectWorkspaceDNA, hydrateVaccineLockfile, renderVaccineMarkdown, renderVaccineTerminal, verifyVaccineLockfile, writeVaccineLockfile, type DetectedPackageManager, type VaccineAntibodySpec, type VaccineLockfile, type VaccineVerificationReport, type WorkspaceDNA, } from './vaccine.js';
+export { evaluateUiGuard, readFederationPreview, readGuardEvents, readInsights, type InsightsPayload, } from './ui/query.js';
 export { federateSwarmRules, renderFederationMarkdown, renderFederationSvg, renderFederationTerminal, type FederatedAntibodyCluster, type SwarmConsensusTier, type SwarmFederationReport, type SwarmRuleSource, } from './federate.js';

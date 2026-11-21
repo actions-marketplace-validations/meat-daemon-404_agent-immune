@@ -14,6 +14,8 @@
  *    `./src/a.ts` and a success in `<cwd>/src/a.ts` still match.
  */
 
+import { canonicalToolName } from './tools.js';
+
 export interface TargetSignature {
   /** Stable identity used for compatibility checks. */
   signature: string;
@@ -128,10 +130,13 @@ export function targetSignature(
   cwd?: string,
 ): TargetSignature {
   const obj = asRecord(input);
-  // Hosts differ in tool-name casing (the DSH harness emits "bash", ZCode
-  // emits "Bash"): the branch checks are case-insensitive, the SIGNATURE
-  // casing stays verbatim so stored signatures keep matching their producers.
-  const tool = toolName.trim().toLowerCase();
+  // Hosts differ in tool-name casing and aliases (DSH emits "bash", ZCode
+  // emits "Bash", Antigravity emits "run_command"/"edit_file"/"view_file",
+  // Codex emits "shell_command"/"apply_patch"): branch checks use the
+  // canonical taxonomy while preserving original casing in file/search
+  // signatures so stored rows stay backward-compatible with their producers.
+  const canon = canonicalToolName(toolName);
+  const tool = canon.toLowerCase();
 
   if (FILE_TOOLS.has(tool)) {
     const raw = pickString(obj, ['file_path', 'path', 'notebook_path', 'TargetFile', 'AbsolutePath', 'Path']);

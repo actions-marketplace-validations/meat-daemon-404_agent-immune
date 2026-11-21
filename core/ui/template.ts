@@ -105,6 +105,8 @@ ${css}
       <button role="tab" id="tabQuarantined" aria-selected="false">${esc(t.tabsQuarantined)}<b id="nQuarantined"></b></button>
       <button role="tab" id="tabWorkspaces" aria-selected="false">${esc(t.tabsWorkspaces)}<b id="nWorkspaces"></b></button>
       <button role="tab" id="tabExplain" aria-selected="false">${esc(t.tabsExplain)}</button>
+      <button role="tab" id="tabGuard" aria-selected="false">${esc(t.tabsGuard)}<b id="nGuard"></b></button>
+      <button role="tab" id="tabInsights" aria-selected="false">${esc(t.tabsInsights)}</button>
     </div>
     <label class="select">
       <select id="sort" aria-label="${esc(t.sort)}">

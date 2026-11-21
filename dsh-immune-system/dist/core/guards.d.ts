@@ -16,7 +16,7 @@
  * The value checked is the tool's own input text, redacted and length-capped by
  * the caller.
  */
-export type GuardMode = 'off' | 'warn' | 'deny';
+export type GuardMode = 'off' | 'warn' | 'ask' | 'deny';
 export interface GuardRule {
     /** Stable id, shown to the model so it can be referenced. */
     id: string;

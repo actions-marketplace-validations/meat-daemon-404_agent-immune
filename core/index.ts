@@ -11,6 +11,8 @@ export type {
   DeliveryReceipt,
   DistillResult,
   FailureSnapshot,
+  GuardEvent,
+  GuardEventSummary,
   NewAntibody,
   RootCauseType,
   RuleQualityGrade,
@@ -20,6 +22,14 @@ export type {
 } from './types.js';
 
 export type { ReceiptOutcome } from './receipts.js';
+export {
+  canonicalToolName,
+  isFileToolName,
+  isPassiveReadToolName,
+  isRepairToolName,
+  isShellToolName,
+  type CanonicalToolName,
+} from './tools.js';
 
 export {
   ImmuneStore,
@@ -37,6 +47,7 @@ export {
   clampBudgetMs,
   resolveDrainBudgetMs,
   type DrainSummary,
+  type LiveGuardResult,
   type PreToolOutcome,
 } from './runtime.js';
 
@@ -52,8 +63,19 @@ export {
   type QualityVerdict,
 } from './hygiene.js';
 export { triagePostInjectionFailure, summarizeTriage, type TriageSummary } from './triage.js';
-export { recordDeliveryReceipt, summarizeReceipts, type ReceiptSummary } from './receipts.js';
-export { expandConceptQuery, lexicalTriggerAffinity } from './retrieval.js';
+export {
+  DEFAULT_HELD_TOKENS_EST,
+  recordDeliveryReceipt,
+  recordHeldReceiptsForSession,
+  summarizeReceipts,
+  type ReceiptSummary,
+} from './receipts.js';
+export {
+  expandConceptQuery,
+  lexicalTriggerAffinity,
+  prepareLexicalQuery,
+  type PreparedLexicalQuery,
+} from './retrieval.js';
 export { explainRecall, type ExplainRecallReport, type ExplainedCandidate } from './explain.js';
 export {
   ciCheck,
@@ -133,7 +155,9 @@ export {
 } from './autopsy.js';
 export {
   BUILTIN_GUARD_POLICIES,
+  detectWorkspacePackageManager,
   evaluatePreFlightGuard,
+  formatLiveGuardBanner,
   renderGuardHookDecision,
   renderGuardHostHookDecision,
   renderGuardMarkdown,
@@ -151,6 +175,7 @@ export {
   compileVaccineLockfile,
   computeVaccineIntegrityHash,
   detectWorkspaceDNA,
+  hydrateVaccineLockfile,
   renderVaccineMarkdown,
   renderVaccineTerminal,
   verifyVaccineLockfile,
@@ -161,6 +186,13 @@ export {
   type VaccineVerificationReport,
   type WorkspaceDNA,
 } from './vaccine.js';
+export {
+  evaluateUiGuard,
+  readFederationPreview,
+  readGuardEvents,
+  readInsights,
+  type InsightsPayload,
+} from './ui/query.js';
 export {
   federateSwarmRules,
   renderFederationMarkdown,

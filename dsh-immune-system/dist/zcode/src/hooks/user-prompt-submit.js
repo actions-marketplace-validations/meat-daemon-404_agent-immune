@@ -3,7 +3,8 @@
  */
 import { ImmuneStore } from '../../../core/store/index.js';
 import { ImmuneRuntime } from '../../../core/runtime.js';
-import { runHook, sessionIdOf } from '../hook-io.js';
+import { isSubstantiveHint } from '../../../core/distiller.js';
+import { isCursorEvent, runHook, sessionIdOf } from '../hook-io.js';
 import { formatImmuneContext } from '../format.js';
 await runHook('UserPromptSubmit', (event) => {
     if (typeof event.invocationNum === 'number' && event.invocationNum > 1)
@@ -19,6 +20,16 @@ await runHook('UserPromptSubmit', (event) => {
         const sessionId = sessionIdOf(event);
         if (!store.claimPromptTurn(sessionId, prompt))
             return null;
+        // Cursor's beforeSubmitPrompt protocol only accepts `{ continue: true }`
+        // and discards prompt-level context. Attach any human hint for episode
+        // pairing, but skip `match()` so we never inflate hit_count or write
+        // phantom delivery_receipts for undelivered context (AGENTS.md #9).
+        if (isCursorEvent(event)) {
+            if (isSubstantiveHint(prompt.trim())) {
+                store.attachHumanHint(sessionId, prompt.trim());
+            }
+            return null;
+        }
         const hits = new ImmuneRuntime(store).userPrompt({
             sessionId,
             prompt,

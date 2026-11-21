@@ -97,6 +97,7 @@ test('MCP handshake and tool listing follow the wire protocol', async (t) => {
       'immune_federate',
       'immune_forget',
       'immune_guard',
+      'immune_guard_log',
       'immune_hygiene',
       'immune_ingest_disk',
       'immune_learn',

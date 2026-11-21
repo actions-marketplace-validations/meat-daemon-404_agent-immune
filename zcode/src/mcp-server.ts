@@ -38,6 +38,8 @@ import { diagnoseAgentArchetype } from '../../core/diagnose.js';
 import { runPitfallAutopsy } from '../../core/autopsy.js';
 import { federateSwarmRules, type SwarmRuleSource } from '../../core/federate.js';
 import { parseTeamRulesJsonl } from '../../core/team-sync.js';
+import { redactOutbound } from '../../core/redact.js';
+import { computeImmunityScore } from '../../core/wrapped.js';
 import { packageVersion } from '../../core/version.js';
 import { runDoctor } from './doctor.js';
 
@@ -307,7 +309,75 @@ const TOOLS = [
       },
     },
   },
+  {
+    name: 'immune_guard_log',
+    description:
+      'Inspect recent live Pre-Flight Blast-Radius Guard interceptions (redacted command previews, decisions, policy IDs, blast scores, and safe rewrites). READ-ONLY.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        limit: { type: 'number', description: 'Max recent guard events to return (1-200, default 25).' },
+      },
+    },
+  },
 ];
+
+export const RESOURCES = [
+  {
+    uri: 'immune://library/active',
+    name: 'Active Pitfall Antibodies',
+    description: 'Redacted JSON snapshot of active pitfall antibodies in the current project store.',
+    mimeType: 'application/json',
+  },
+  {
+    uri: 'immune://stats/summary',
+    name: 'Immunity Telemetry Summary',
+    description: 'Live counts, SHA-256 receipt chain status, Red-3 triage summary, and Pre-Flight Guard totals.',
+    mimeType: 'application/json',
+  },
+  {
+    uri: 'immune://workspace/dna',
+    name: 'Workspace DNA & Vaccine Lockfile',
+    description: 'Detected stack markers, package manager, recommended packs, and .immune/vaccine.lock.json verification.',
+    mimeType: 'application/json',
+  },
+  {
+    uri: 'immune://guard/events',
+    name: 'Pre-Flight Guard Audit Ledger',
+    description: 'Recent live Pre-Flight Guard interceptions (redacted) and policy breakdown.',
+    mimeType: 'application/json',
+  },
+  {
+    uri: 'immune://insights/report',
+    name: 'Diagnosis & Forensic Autopsy Report',
+    description: 'Real-telemetry Immunity Score, Agent Pitfall Archetype, 5-domain radar, and Forensic Autopsy.',
+    mimeType: 'application/json',
+  },
+] as const;
+
+export const PROMPTS = [
+  {
+    name: 'immune_review_pitfalls',
+    description: 'Inject relevant workspace pitfall antibodies and a pre-flight safety checklist before editing or running risky commands.',
+    arguments: [
+      { name: 'query', description: 'Optional task, file path, or error keyword to filter relevant antibodies.', required: false },
+      { name: 'limit', description: 'Maximum number of antibodies to include (default 8).', required: false },
+    ],
+  },
+  {
+    name: 'immune_triage_failure',
+    description: 'Build a structured Red-3 root-cause triage prompt for a failing command or stack trace, grounded in existing antibodies.',
+    arguments: [
+      { name: 'error', description: 'The error message or failing command trace.', required: true },
+      { name: 'tool', description: 'Optional tool name (Bash, Edit, Write).', required: false },
+    ],
+  },
+  {
+    name: 'immune_rewrite_echoes',
+    description: 'Prepare a host-delegated rewrite prompt for up to 3 echo-grade antibodies so the host model can upgrade them into clean advice.',
+    arguments: [],
+  },
+] as const;
 
 function positiveInt(raw: unknown, fallback: number, max: number): number {
   return typeof raw === 'number' && Number.isFinite(raw) && raw > 0
@@ -643,8 +713,193 @@ export function callTool(store: ImmuneStore, name: string, args: Record<string, 
       return JSON.stringify(federateSwarmRules(sources, { minConsensusScore }), null, 2);
     }
 
+    case 'immune_guard_log': {
+      const limit = positiveInt(args.limit, 25, 200);
+      return JSON.stringify(store.guardEventSummary(limit), null, 2);
+    }
+
     default:
       return `error: unknown tool ${name}`;
+  }
+}
+
+/** Read one MCP resource URI (strictly read-only; never bumps hit counts). */
+export function readResource(
+  store: ImmuneStore,
+  uri: string,
+  workspace = process.cwd(),
+): { uri: string; mimeType: string; text: string } | null {
+  switch (uri) {
+    case 'immune://library/active': {
+      const rows = store.listAll(false).slice(0, 100).map((r) => ({
+        id: r.id,
+        tool_name: r.tool_name,
+        trigger_pattern: redactOutbound(r.trigger_pattern),
+        symptom: redactOutbound(r.symptom),
+        prescription: redactOutbound(r.prescription),
+        hit_count: r.hit_count,
+        fail_count: r.fail_count,
+        rubric_score: r.rubric_score ?? 70,
+        project_scope: r.project_scope ?? '*',
+      }));
+      return { uri, mimeType: 'application/json', text: JSON.stringify({ count: rows.length, antibodies: rows }, null, 2) };
+    }
+    case 'immune://stats/summary': {
+      return {
+        uri,
+        mimeType: 'application/json',
+        text: JSON.stringify(
+          {
+            stats: store.stats(),
+            receipts: store.receiptSummary(500),
+            triage: store.triageSummary(20),
+            guard: store.guardEventSummary(15),
+          },
+          null,
+          2,
+        ),
+      };
+    }
+    case 'immune://workspace/dna': {
+      const dna = detectWorkspaceDNA(workspace);
+      const lockPath = join(workspace, '.immune', 'vaccine.lock.json');
+      const lockfile = existsSync(lockPath)
+        ? { exists: true, ...verifyVaccineLockfile(readFileSync(lockPath, 'utf8')) }
+        : { exists: false, valid: false, reason: 'lockfile not found' };
+      return { uri, mimeType: 'application/json', text: JSON.stringify({ dna, lockfile }, null, 2) };
+    }
+    case 'immune://guard/events': {
+      return { uri, mimeType: 'application/json', text: JSON.stringify(store.guardEventSummary(50), null, 2) };
+    }
+    case 'immune://insights/report': {
+      const active = store.listAll(false);
+      const receipts = store.receiptSummary(500);
+      const stats = store.stats();
+      const totalInjections = active.reduce((s, r) => s + r.hit_count, 0);
+      const heldCount = receipts.byOutcome.held ?? 0;
+      const failedCount = receipts.byOutcome.failed ?? 0;
+      const totalObserved = heldCount + failedCount + stats.suppressedRepeats;
+      const immunityScore = computeImmunityScore({
+        totalCalls: Math.max(totalObserved, totalInjections),
+        repeatFailures: stats.suppressedRepeats + heldCount,
+        avoidableTokens: receipts.estimatedTokensSaved,
+        activeRules: active.length,
+        totalInjections,
+      });
+      return {
+        uri,
+        mimeType: 'application/json',
+        text: JSON.stringify(
+          {
+            immunityScore,
+            receipts,
+            diagnosis: diagnoseAgentArchetype(active),
+            autopsy: runPitfallAutopsy(active),
+          },
+          null,
+          2,
+        ),
+      };
+    }
+    default:
+      return null;
+  }
+}
+
+/** Render one MCP prompt template with live read-only workspace pitfalls. */
+export function getPrompt(
+  store: ImmuneStore,
+  name: string,
+  args: Record<string, unknown> = {},
+): { description: string; messages: Array<{ role: 'user'; content: { type: 'text'; text: string } }> } | null {
+  switch (name) {
+    case 'immune_review_pitfalls': {
+      const query = typeof args.query === 'string' ? args.query.trim() : '';
+      const rawLimit = Number(args.limit ?? 8);
+      const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(20, Math.trunc(rawLimit)) : 8;
+      const rows = query ? store.peek(query, limit) : store.listAll(false).slice(0, limit);
+      const bullets =
+        rows.length > 0
+          ? rows
+              .map(
+                (r, idx) =>
+                  `${idx + 1}. [${redactOutbound(r.trigger_pattern)}] Avoid: ${redactOutbound(r.symptom)} -> Do: ${redactOutbound(r.prescription)}`,
+              )
+              .join('\n')
+          : '(No matching project pitfalls recorded yet.)';
+      return {
+        description: 'Pre-flight pitfall review checklist for the current workspace',
+        messages: [
+          {
+            role: 'user',
+            content: {
+              type: 'text',
+              text:
+                `Review these verified workspace pitfall antibodies before modifying files or running destructive shell commands:\n\n${bullets}\n\n` +
+                `Confirm your proposed plan avoids every pitfall above and uses safe non-destructive commands.`,
+            },
+          },
+        ],
+      };
+    }
+    case 'immune_triage_failure': {
+      const errorText = typeof args.error === 'string' ? args.error.trim() : '';
+      if (!errorText) return null;
+      const tool = typeof args.tool === 'string' && args.tool.trim() ? args.tool.trim() : 'Bash';
+      const matches = store.peek(`${tool} ${errorText}`, 5);
+      const related =
+        matches.length > 0
+          ? matches
+              .map(
+                (r) =>
+                  `- #${r.id} [${redactOutbound(r.trigger_pattern)}]: Avoid "${redactOutbound(r.symptom)}" -> Do "${redactOutbound(r.prescription)}"`,
+              )
+              .join('\n')
+          : '- (No existing antibody matched this error.)';
+      return {
+        description: 'Red-3 root-cause triage workflow for a failing tool call',
+        messages: [
+          {
+            role: 'user',
+            content: {
+              type: 'text',
+              text:
+                `Apply Red-3 Triage to this ${tool} failure:\n\`\`\`\n${redactOutbound(errorText).slice(0, 1500)}\n\`\`\`\n\n` +
+                `Matching known antibodies:\n${related}\n\n` +
+                `Classify the failure into one of the 5 Red-3 buckets (flake_or_transient, wrong_scope_leak, ignored_by_agent, stale_or_bad_advice, coverage_blindspot) and state the minimal verified fix.`,
+            },
+          },
+        ],
+      };
+    }
+    case 'immune_rewrite_echoes': {
+      const candidates = hostRewriteCandidates(store, HOST_REWRITE_BATCH);
+      const listText =
+        candidates.length > 0
+          ? candidates
+              .map(
+                (c) =>
+                  `- #${c.id} (${c.tool_name ?? 'any'}, hits=${c.hit_count}): trigger="${c.trigger_pattern}" | symptom="${c.symptom}" | current="${c.prescription}"`,
+              )
+              .join('\n')
+          : '(No echo-grade antibodies currently need rewriting.)';
+      return {
+        description: 'Host-delegated rewrite pass for echo-grade antibodies',
+        messages: [
+          {
+            role: 'user',
+            content: {
+              type: 'text',
+              text:
+                `${REWRITE_PROMPT}\n\nCandidates (max ${HOST_REWRITE_BATCH}):\n${listText}\n\n` +
+                `After drafting concise model-neutral advice for each candidate, call \`immune_apply_rewrite\` with \`{ rewrites: [{ id, prescription }] }\`.`,
+            },
+          },
+        ],
+      };
+    }
+    default:
+      return null;
   }
 }
 
@@ -684,7 +939,7 @@ export function runMcpServer(env: NodeJS.ProcessEnv = process.env): Promise<void
             result: {
               protocolVersion:
                 typeof params.protocolVersion === 'string' ? params.protocolVersion : '2024-11-05',
-              capabilities: { tools: {} },
+              capabilities: { tools: {}, resources: {}, prompts: {} },
               serverInfo: SERVER_INFO,
             },
           });
@@ -693,6 +948,53 @@ export function runMcpServer(env: NodeJS.ProcessEnv = process.env): Promise<void
         case 'tools/list':
           write({ jsonrpc: '2.0', id, result: { tools: TOOLS } });
           break;
+
+        case 'resources/list':
+          write({ jsonrpc: '2.0', id, result: { resources: RESOURCES } });
+          break;
+
+        case 'resources/read': {
+          const uri = typeof (params as { uri?: unknown }).uri === 'string' ? (params as { uri: string }).uri : '';
+          const resource = uri ? readResource(store, uri) : null;
+          if (!resource) {
+            write({
+              jsonrpc: '2.0',
+              id,
+              error: { code: -32602, message: `unknown resource uri: ${uri || '(none)'}` },
+            });
+            break;
+          }
+          write({ jsonrpc: '2.0', id, result: { contents: [resource] } });
+          break;
+        }
+
+        case 'prompts/list':
+          write({ jsonrpc: '2.0', id, result: { prompts: PROMPTS } });
+          break;
+
+        case 'prompts/get': {
+          const promptName = typeof params.name === 'string' ? params.name : '';
+          const promptArgs = (params.arguments ?? {}) as Record<string, unknown>;
+          if (!promptName || !PROMPTS.some((p) => p.name === promptName)) {
+            write({
+              jsonrpc: '2.0',
+              id,
+              error: { code: -32602, message: `unknown prompt: ${promptName || '(none)'}` },
+            });
+            break;
+          }
+          const rendered = getPrompt(store, promptName, promptArgs);
+          if (!rendered) {
+            write({
+              jsonrpc: '2.0',
+              id,
+              error: { code: -32602, message: `missing required arguments for prompt: ${promptName}` },
+            });
+            break;
+          }
+          write({ jsonrpc: '2.0', id, result: rendered });
+          break;
+        }
 
         case 'ping':
           write({ jsonrpc: '2.0', id, result: {} });

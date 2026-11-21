@@ -1,11 +1,45 @@
+/**
+ * v3.0 Pre-Flight Blast-Radius Guard & Destructive Command Interceptor (`immune guard`).
+ *
+ * Evaluates proposed agent tool invocations (Bash, Edit, Write, Git, SQL)
+ * BEFORE execution against built-in catastrophic blast-radius signatures,
+ * workspace lockfile constraints, and high-confidence learned antibodies.
+ * Computes a 0-100 Blast-Radius Score, emits a deterministic safe command
+ * rewrite when possible, and formats hook protocol decisions for Claude Code,
+ * Cursor, Codex, and CI gates.
+ */
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { redact } from './redact.js';
 import { signals } from './relevance.js';
 import { cjkBigrams } from './store/tokenize.js';
+import { isShellToolName } from './tools.js';
 import { packageVersion } from './version.js';
 const MAX_GUARD_PAYLOAD_LEN = 8192;
 function isShellTool(toolName) {
-    return /^(?:bash|sh|shell|zsh|powershell|pwsh|terminal|run_command|exec_command|shell_command|run_terminal_cmd)$/i.test(toolName.trim());
+    return isShellToolName(toolName);
 }
+/** Lightweight lockfile probe (<0.05 ms) for live PreToolUse lockfile-drift guard. */
+export function detectWorkspacePackageManager(workspace) {
+    if (!workspace)
+        return null;
+    try {
+        if (existsSync(join(workspace, 'pnpm-lock.yaml')))
+            return 'pnpm';
+        if (existsSync(join(workspace, 'yarn.lock')))
+            return 'yarn';
+        if (existsSync(join(workspace, 'bun.lock')) || existsSync(join(workspace, 'bun.lockb')))
+            return 'bun';
+        if (existsSync(join(workspace, 'uv.lock')))
+            return 'uv';
+    }
+    catch {
+        // Ignore unreadable directories.
+    }
+    return null;
+}
+const NON_SQL_PROSE_CMD = /^\s*(?:git\s+(?:commit|tag|log|notes|branch)\b|grep\b|egrep\b|fgrep\b|rg\b|ag\b|ack\b|findstr\b|Select-String\b|echo\b|printf\b|Write-Output\b)/i;
+const SQL_DDL_RE = /\b(?:DROP\s+(?:TABLE|DATABASE|SCHEMA)\s+(?:IF\s+EXISTS\s+)?[`"'\w]|TRUNCATE\s+(?:TABLE\s+)?[`"'\w])/i;
 /** Mask single/double-quoted string bodies with spaces so flag checks ignore commit messages. */
 function maskQuotedText(input) {
     return input.replace(/(["'])(?:\\.|(?!\1)[^\\\r\n])*\1/g, (m) => m[0] + ' '.repeat(Math.max(0, m.length - 2)) + m[0]);
@@ -91,9 +125,42 @@ export const BUILTIN_GUARD_POLICIES = [
         blastRadiusScore: 95,
         defaultDecision: 'block',
         shellOnly: true,
-        pattern: /\b(?:DROP\s+(?:TABLE|DATABASE|SCHEMA)\s+(?:IF\s+EXISTS\s+)?[`"'\w]|TRUNCATE\s+(?:TABLE\s+)?[`"'\w])/i,
+        pattern: SQL_DDL_RE,
+        customMatch: (payload) => {
+            if (!SQL_DDL_RE.test(payload))
+                return false;
+            // Allow quoted DDL mentions inside non-SQL search/VCS/echo commands
+            // (e.g. `git commit -m "fix DROP TABLE"`, `grep "DROP TABLE" migrations/`),
+            // while still blocking `psql -c "DROP TABLE users;"` and unquoted SQL.
+            if (NON_SQL_PROSE_CMD.test(payload) && !SQL_DDL_RE.test(maskQuotedText(payload))) {
+                return false;
+            }
+            return true;
+        },
         reason: 'Direct destructive SQL DDL detected outside a reviewed migration rollback transaction.',
         prescription: 'Generate a versioned reversible migration file and test against a disposable branch DB first.',
+    },
+    {
+        id: 'raw-disk-dd',
+        title: 'Raw Block-Device Overwrite / Filesystem Format (dd / mkfs)',
+        severity: 'critical',
+        blastRadiusScore: 100,
+        defaultDecision: 'block',
+        shellOnly: true,
+        pattern: /(?:\bdd\b[^\r\n;&|]*\bof=\/dev\/(?:sd|nvme|hd|vd|xvd|disk)\w*|\bmkfs(?:\.[a-z0-9]+)?\b[^\r\n;&|]*\/dev\/\w+)/i,
+        reason: 'Writing raw bytes or formatting a /dev/ block device causes irreversible disk data loss.',
+        prescription: 'Verify target path against lsblk/diskutil and target an image file rather than a live host device.',
+    },
+    {
+        id: 'pipe-to-shell',
+        title: 'Unverified Remote Script Piped Directly to Shell (curl | sh)',
+        severity: 'high',
+        blastRadiusScore: 86,
+        defaultDecision: 'warn',
+        shellOnly: true,
+        pattern: /\b(?:curl|wget)\b[^\r\n;&|]*\|\s*(?:sudo\s+)?(?:(?:\/usr)?\/bin\/)?(?:ba|z|da|a)?sh\b/i,
+        reason: 'Piping remote HTTP output directly into a shell executes unreviewed code with current user/sudo privileges.',
+        prescription: 'Download the script to a file first, inspect or verify its SHA-256 checksum, then execute it.',
     },
     {
         id: 'non-tty-prisma-dev',
@@ -307,9 +374,7 @@ export function evaluatePreFlightGuard(payload, learnedRules = [], opts = {}) {
                     specificOverlap += 1;
             }
         }
-        const ratio = overlap / trigTokens.size;
-        if (specificOverlap >= 1 &&
-            (overlap >= 2 || (trigTokens.size === 1 && overlap === 1) || (overlap >= 2 && ratio >= 0.65))) {
+        if (specificOverlap >= 1 && (overlap >= 2 || (trigTokens.size === 1 && overlap === 1))) {
             const escalated = fails >= 2;
             const score = escalated ? 84 : Math.min(74, 55 + hits * 2);
             if (score > maxScore)
@@ -468,4 +533,34 @@ export function renderGuardHostHookDecision(verdict, host = 'claude-code') {
         };
     }
     return {};
+}
+/**
+ * Render a concise, sanitized `<immune_guard>` banner for live PreToolUse hooks
+ * (both warn and deny modes). Includes legacy `(force-push-main)` tag when a
+ * force push targets main/master and surfaces deterministic safe rewrites.
+ */
+export function formatLiveGuardBanner(verdict) {
+    if (verdict.matches.length === 0)
+        return '';
+    const safe = (v) => redact(v).replace(/[<>]/g, ' ').replace(/\s+/g, ' ').trim();
+    const top = verdict.matches[0];
+    const isForcePushMain = top.id === 'git-force-push' && /\b(?:main|master)\b/i.test(verdict.payload);
+    const tag = isForcePushMain ? `${top.id} / force-push-main` : top.id;
+    const lines = [
+        '<immune_guard>',
+        `[${tag}] (blast ${verdict.blastRadiusScore}/100 · ${verdict.severity.toUpperCase()}) ${safe(top.reason)}`,
+        `请改用 / Do instead: ${safe(top.prescription)}`,
+    ];
+    if (verdict.suggestedRewrite) {
+        lines.push(`安全改写 / Safe rewrite: ${safe(verdict.suggestedRewrite)}`);
+    }
+    if (verdict.matches.length > 1) {
+        const others = verdict.matches
+            .slice(1, 3)
+            .map((m) => m.id)
+            .join(', ');
+        lines.push(`Additional triggers: ${others}`);
+    }
+    lines.push('</immune_guard>');
+    return lines.join('\n');
 }

@@ -1,4 +1,4 @@
-import { lexicalTriggerAffinity } from '../retrieval.js';
+import { lexicalTriggerAffinity, prepareLexicalQuery } from '../retrieval.js';
 /** Path-ish tokens in the query: names with an extension, or dotted dirs. */
 function queryPathTokens(query) {
     const tokens = new Set();
@@ -36,6 +36,7 @@ export function timeDecay(ageMs) {
  */
 export function rerank(candidates, opts) {
     const tokens = queryPathTokens(opts.query);
+    const preparedLex = prepareLexicalQuery(opts.query);
     const now = opts.now ?? Date.now();
     const sharedIds = opts.sharedIds;
     const scored = candidates.map((antibody) => {
@@ -46,7 +47,7 @@ export function rerank(candidates, opts) {
         if (hasPathAffinity(antibody.trigger_pattern, tokens))
             score *= 1.5;
         // Reward concrete trigger/symptom lexical+concept overlap over short-field BM25 rank ties.
-        const lex = lexicalTriggerAffinity(opts.query, antibody);
+        const lex = lexicalTriggerAffinity(preparedLex, antibody);
         if (lex > 0)
             score *= 1 + Math.min(4.5, lex * 0.65);
         // Mild quality boost: generalized advice outranks raw command tactics on ties.

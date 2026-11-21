@@ -1,12 +1,12 @@
 import { applyDistillResult } from './commit.js';
 import { distillBatch, distillEpisode, isSubstantiveHint } from './distiller.js';
 import { currentFingerprint } from './env-fingerprint.js';
-import { extractGuardInput, findGuardHit, guardMode } from './guards.js';
+import { detectWorkspacePackageManager, evaluatePreFlightGuard, formatLiveGuardBanner, } from './guard.js';
+import { extractGuardInput, guardMode } from './guards.js';
 import { deriveProjectScope } from './hygiene.js';
 import { readLlmConfig } from './llm.js';
 import { normaliseTargetPath, targetSignature } from './pairing.js';
 import { prewarmStacks } from './prewarm.js';
-import { redact } from './redact.js';
 import { isRelated } from './relevance.js';
 import { isRepairTool } from './repair-tools.js';
 import { looksEchoPrescription } from './rewrite.js';
@@ -14,6 +14,8 @@ import { isSelfEpisode } from './selfnoise.js';
 import { maybeSleepConsolidate } from './sleep-consolidate.js';
 import { stuckHypothesisText } from './store/stuck.js';
 import { maybeSyncDocAfterDrain } from './sync-doc.js';
+import { isPassiveReadToolName } from './tools.js';
+import { hydrateVaccineLockfile } from './vaccine.js';
 export const DRAIN_BATCH_SIZE = 4;
 /** Canonical 1-60 s clamp shared by every host drain and UI display. */
 export function clampBudgetMs(value) {
@@ -41,6 +43,12 @@ export class ImmuneRuntime {
         }
         catch {
             // Best-effort bookkeeping.
+        }
+        try {
+            hydrateVaccineLockfile(this.store, workspace);
+        }
+        catch {
+            // Best-effort verified vaccine lockfile hydration; never break SessionStart.
         }
         if (prewarm && process.env.IMMUNE_PREWARM !== 'off') {
             try {
@@ -86,7 +94,57 @@ export class ImmuneRuntime {
             suppressRepeats: opts.suppressRepeats,
         });
     }
-    /** Pre-tool check: probe thrash, antibody recall, stuck hypothesis, deterministic guard. */
+    /**
+     * Unified live Pre-Flight Guard evaluator shared by every host adapter
+     * (ZCode/Claude/Codex/Cursor/Antigravity/Gemini CLI + DSH `tools/pre-execute`).
+     *
+     * Strictly enforces AGENTS.md #8 (off by default; only code-owned policies
+     * and workspace lockfile rules may fire on live execution — never DB text)
+     * and AGENTS.md #10 (all persisted audit previews and returned banners are redacted).
+     */
+    evaluateLiveGuard(opts) {
+        const mode = guardMode(opts.env);
+        if (mode === 'off')
+            return null;
+        const rawInput = extractGuardInput(opts.toolInput);
+        if (!rawInput || rawInput.trim().length < 2)
+            return null;
+        const pm = detectWorkspacePackageManager(opts.workspace);
+        // Learned DB rules are intentionally omitted on live guard evaluation
+        // (AGENTS.md #8); they reach the agent as advisory `<immune_memory>`.
+        const verdict = evaluatePreFlightGuard(rawInput, [], {
+            toolName: opts.toolName,
+            strict: false,
+            workspacePackageManager: pm,
+        });
+        if (verdict.decision === 'allow' || verdict.matches.length === 0)
+            return null;
+        const scope = opts.workspace ? deriveProjectScope(opts.workspace) : '*';
+        this.store.recordGuardEvent({
+            sessionId: opts.sessionId ?? '',
+            toolName: opts.toolName,
+            decision: verdict.decision,
+            severity: verdict.severity,
+            blastRadius: verdict.blastRadiusScore,
+            policyIds: verdict.matches.map((m) => m.id),
+            payloadPreview: verdict.payload,
+            suggestedRewrite: verdict.suggestedRewrite,
+            projectScope: scope,
+        });
+        const banner = formatLiveGuardBanner(verdict);
+        const highRisk = verdict.decision === 'block' ||
+            verdict.decision === 'rewrite' ||
+            verdict.severity === 'critical' ||
+            verdict.severity === 'high';
+        return {
+            mode,
+            verdict,
+            banner,
+            shouldDeny: mode === 'deny' && highRisk,
+            shouldAsk: mode === 'ask' && highRisk,
+        };
+    }
+    /** Pre-tool check: probe thrash, antibody recall, stuck hypothesis, unified Pre-Flight Guard. */
     preToolUse(opts) {
         let input = '';
         try {
@@ -104,7 +162,7 @@ export class ImmuneRuntime {
                 '同一目标已连续探测两次，这是第 3 次：换一条精确命令（grep -n 关键词、单次 Read）通常一步到位。' +
                     ' / Third consecutive probe of the same target — one precise command usually lands it.';
         }
-        const isPassiveReadTool = /^(?:read|glob|grep)$/i.test(opts.toolName);
+        const isPassiveReadTool = isPassiveReadToolName(opts.toolName);
         const recallRows = this.store.match(input, {
             limit: 2,
             sessionId: opts.sessionId,
@@ -120,20 +178,29 @@ export class ImmuneRuntime {
             stuckNote = stuckHypothesisText(target.signature);
             this.store.markHypothesized(opts.sessionId, target.signature);
         }
-        const mode = guardMode();
-        if (mode !== 'off') {
-            const inspected = redact(extractGuardInput(opts.toolInput)).slice(0, 2000);
-            const hit = findGuardHit(inspected);
-            if (hit) {
-                const banner = `<immune_guard>\n[${hit.rule.id}] ${hit.rule.what}\n` +
-                    `请改用：${hit.rule.instead}\n</immune_guard>`;
-                if (mode === 'deny') {
-                    return { denyBanner: banner, recallRows };
-                }
-                return { warnBanner: banner, thrashNote, stuckNote, recallRows };
+        const guard = this.evaluateLiveGuard({
+            sessionId: opts.sessionId,
+            toolName: opts.toolName,
+            toolInput: opts.toolInput,
+            workspace: opts.workspace,
+        });
+        if (guard) {
+            if (guard.shouldDeny) {
+                return { denyBanner: guard.banner, guardVerdict: guard.verdict, recallRows };
             }
+            if (guard.shouldAsk) {
+                return { askBanner: guard.banner, warnBanner: guard.banner, guardVerdict: guard.verdict, thrashNote, stuckNote, recallRows };
+            }
+            return { warnBanner: guard.banner, guardVerdict: guard.verdict, thrashNote, stuckNote, recallRows };
         }
         return { thrashNote, stuckNote, recallRows };
+    }
+    /** Settle verified `'held'` receipts at turn end for rules that held up without failure. */
+    settleTurn(sessionId, workspace) {
+        if (!sessionId)
+            return 0;
+        const scope = workspace ? deriveProjectScope(workspace) : '*';
+        return this.store.recordHeldReceipts(sessionId, scope);
     }
     /** Post-tool outcome processing: repair action diff, probes/detours, failure/success pairing. */
     postToolUse(opts) {

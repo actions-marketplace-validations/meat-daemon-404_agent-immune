@@ -45,4 +45,4 @@
 
 ## 验证
 
-见仓库 `dsh/README.md` 与 `docs/EVALUATION.md`：`npm run build` 0 错误、`npm test` 302 条全绿、全部 `scripts/verify-*.mjs` 宿主与跨端契约断言全过（含真实 Cordis 宿主跨会话注入、Shadow-DOM 设置页路由及 6 种 Hook 协议子进程验证）。
+见仓库 `dsh/README.md` 与 `docs/EVALUATION.md`：`npm run build` 0 错误、`npm test` 308 条全绿、全部 `scripts/verify-*.mjs` 宿主与跨端契约断言全过（含真实 Cordis 宿主跨会话注入、Shadow-DOM 设置页路由及 6 种 Hook 协议子进程验证）。

@@ -47,5 +47,17 @@ export declare function applyVaccineLockfile(store: TeamRuleImportStore, lockfil
     readonly applied: number;
     readonly total: number;
 };
+/**
+ * Best-effort SessionStart auto-hydration of a repository's committed
+ * `.immune/vaccine.lock.json`. Strictly verifies SHA-256 integrity first so a
+ * tampered or malformed lockfile is never imported, and uses `skipIfExists` so
+ * repeat sessions never inflate `hit_count` (AGENTS.md #9).
+ */
+export declare function hydrateVaccineLockfile(store: TeamRuleImportStore, workspaceDir: string): {
+    readonly present: boolean;
+    readonly verified: boolean;
+    readonly applied: number;
+    readonly total: number;
+};
 export declare function renderVaccineTerminal(lockfile: VaccineLockfile, lockfilePath?: string): string;
 export declare function renderVaccineMarkdown(lockfile: VaccineLockfile): string;

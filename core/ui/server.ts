@@ -22,7 +22,11 @@ import { renderPage } from './page.js';
 import { resolveLocale } from '../i18n.js';
 import {
   applyAction,
+  evaluateUiGuard,
   evolutionStats,
+  readFederationPreview,
+  readGuardEvents,
+  readInsights,
   readState,
   readWorkspaces,
   resolveBudgetMs,
@@ -33,11 +37,6 @@ import { renderSkillMarkdown } from '../export.js';
 import { shareSanityCheck } from '../share-guard.js';
 import { scanMagpieTelemetry } from '../audit/magpie.js';
 import { explainRecall } from '../explain.js';
-import { diagnoseAgentArchetype } from '../diagnose.js';
-import { runPitfallAutopsy } from '../autopsy.js';
-import { evaluatePreFlightGuard } from '../guard.js';
-import { detectWorkspaceDNA } from '../vaccine.js';
-import { computeImmunityScore } from '../wrapped.js';
 
 export interface UiServerOptions {
   /** Database to open. Defaults to the host's resolution. */
@@ -196,28 +195,19 @@ export async function startUiServer(options: UiServerOptions = {}): Promise<UiSe
     }
 
     if (path === '/api/insights' && req.method === 'GET') {
-      const active = store.listAll(false);
-      const s = store.stats();
-      const totalInjections = active.reduce((sum, r) => sum + r.hit_count, 0);
-      const totalFails = active.reduce((sum, r) => sum + r.fail_count, 0);
-      const repeatFailures =
-        active.length === 0 && totalInjections === 0 ? 0 : Math.max(s.suppressedRepeats + totalInjections, active.length);
-      const totalCalls =
-        repeatFailures === 0 && totalFails === 0
-          ? 0
-          : Math.max((repeatFailures + totalFails) * 18, totalInjections * 4, active.length * 25);
-      sendJson(res, 200, {
-        immunityScore: computeImmunityScore({
-          totalCalls,
-          repeatFailures,
-          avoidableTokens: (s.suppressedRepeats + totalInjections) * 2400,
-          activeRules: active.length,
-          totalInjections,
-        }),
-        diagnosis: diagnoseAgentArchetype(active),
-        autopsy: runPitfallAutopsy(active),
-        workspaceDna: detectWorkspaceDNA(process.cwd()),
-      });
+      sendJson(res, 200, readInsights(store, process.cwd()));
+      return;
+    }
+
+    if (path === '/api/guard-events' && req.method === 'GET') {
+      const rawLimit = Number(url.searchParams.get('limit') ?? '25');
+      const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(200, Math.trunc(rawLimit)) : 25;
+      sendJson(res, 200, readGuardEvents(store, limit));
+      return;
+    }
+
+    if (path === '/api/federate' && req.method === 'GET') {
+      sendJson(res, 200, readFederationPreview(store, process.cwd()));
       return;
     }
 
@@ -235,23 +225,12 @@ export async function startUiServer(options: UiServerOptions = {}): Promise<UiSe
           sendJson(res, 400, { error: 'payload is required' });
           return;
         }
-        const toolName = typeof parsed.toolName === 'string' && parsed.toolName.trim() ? parsed.toolName.trim() : 'Bash';
-        const strict = parsed.strict === true;
-        const dna = detectWorkspaceDNA(process.cwd());
-        const pm =
-          dna.packageManager === 'pnpm' ||
-          dna.packageManager === 'yarn' ||
-          dna.packageManager === 'bun' ||
-          dna.packageManager === 'uv'
-            ? dna.packageManager
-            : null;
         sendJson(
           res,
           200,
-          evaluatePreFlightGuard(payload, store.listAll(false), {
-            toolName,
-            strict,
-            workspacePackageManager: pm,
+          evaluateUiGuard(store, payload, {
+            toolName: typeof parsed.toolName === 'string' ? parsed.toolName : 'Bash',
+            strict: parsed.strict === true,
           }),
         );
       });

@@ -29,8 +29,23 @@ export function resolveGitDir(startDir = process.cwd()) {
                 if (st.isFile()) {
                     const content = readFileSync(dotGit, 'utf8').trim();
                     const m = content.match(/^gitdir:\s*(.+)$/i);
-                    if (m?.[1])
-                        return resolve(current, m[1].trim());
+                    if (m?.[1]) {
+                        const gitDir = resolve(current, m[1].trim());
+                        // Worktree `.git` files point to `.git/worktrees/<name>`, whose hooks
+                        // live in the shared common dir named by `<gitdir>/commondir`.
+                        const commonFile = join(gitDir, 'commondir');
+                        if (existsSync(commonFile)) {
+                            try {
+                                const relCommon = readFileSync(commonFile, 'utf8').trim();
+                                if (relCommon)
+                                    return resolve(gitDir, relCommon);
+                            }
+                            catch {
+                                // Fall back to gitDir if commondir cannot be read.
+                            }
+                        }
+                        return gitDir;
+                    }
                 }
             }
             catch {

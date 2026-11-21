@@ -65,6 +65,19 @@ export declare function normaliseHookEvent(event: HookEvent): HookEvent;
 export declare function readEvent(): Promise<HookEvent>;
 export declare function eventNameOf(event: HookEvent, fallback: string): string;
 export declare function sessionIdOf(event: HookEvent): string;
+/**
+ * Host tool names, normalised to the vocabulary the engine speaks.
+ *
+ * Codex emits `shell_command` / `exec_command` / `apply_patch`; Antigravity
+ * emits `run_command` / `edit_file` / `replace_file_content` / `write_file` /
+ * `read_file` / `view_file` / `grep_search` / `find_by_name` / `list_dir`.
+ * The pairing loop, REPAIR_TOOLS and program-family matching all key on ZCode's
+ * Bash/Edit names. Keep the map here — one entry point every hook already
+ * calls — so no adapter code is duplicated per host.
+ */
+/**
+ * Normalise host tool names via the single canonical taxonomy in `core/tools.ts`.
+ */
 export declare function normaliseToolName(name: string): string;
 export declare function toolNameOf(event: HookEvent): string;
 /**

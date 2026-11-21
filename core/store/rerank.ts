@@ -5,7 +5,7 @@
  * rubric quality boost, shared-library discount, and time decay.
  */
 import type { Antibody } from '../types.js';
-import { lexicalTriggerAffinity } from '../retrieval.js';
+import { lexicalTriggerAffinity, prepareLexicalQuery } from '../retrieval.js';
 
 export interface RerankOptions {
   /** The current prompt or tool input, used to detect path affinity. */
@@ -60,6 +60,7 @@ export function timeDecay(ageMs: number): number {
  */
 export function rerank(candidates: Antibody[], opts: RerankOptions): Antibody[] {
   const tokens = queryPathTokens(opts.query);
+  const preparedLex = prepareLexicalQuery(opts.query);
   const now = opts.now ?? Date.now();
   const sharedIds = opts.sharedIds;
 
@@ -71,7 +72,7 @@ export function rerank(candidates: Antibody[], opts: RerankOptions): Antibody[] 
         : 1 + Math.log1p(Math.max(0, antibody.hit_count));
     if (hasPathAffinity(antibody.trigger_pattern, tokens)) score *= 1.5;
     // Reward concrete trigger/symptom lexical+concept overlap over short-field BM25 rank ties.
-    const lex = lexicalTriggerAffinity(opts.query, antibody);
+    const lex = lexicalTriggerAffinity(preparedLex, antibody);
     if (lex > 0) score *= 1 + Math.min(4.5, lex * 0.65);
     // Mild quality boost: generalized advice outranks raw command tactics on ties.
     const rubric = antibody.rubric_score ?? 70;

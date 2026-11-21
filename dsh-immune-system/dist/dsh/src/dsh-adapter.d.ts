@@ -295,7 +295,7 @@ export declare function normaliseToolEvent(exec: DshToolExecution, result: DshTo
  * `node_modules` layout.
  */
 export declare function createPluginMessage(text: string): DshUserMessage;
-/** Log through the host logger. */
+/** Log through the host logger (null-safe if a minimal/synthetic host omits `logger`). */
 export declare function makeLogger(ctx: DshContext): {
     info: (message: string) => void;
     warn: (message: string) => void;

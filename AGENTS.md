@@ -443,6 +443,38 @@ identical-retry note).
     state (probation) and one decay (superseded_by_env_upgrade when the new
     environment re-learns the same lesson) — no third tunable (#19's lesson).
 
+43. **Live Pre-Flight Guard is one engine (`core/guard.ts`), still code-owned.**
+    In v3.x, live hooks still ran legacy 5-rule `core/guards.ts` while CLI/MCP
+    ran 12-policy `core/guard.ts`. v4.0 unifies every live hook (`runtime.ts`,
+    DSH `tools/pre-execute`) onto `evaluatePreFlightGuard()` with `learnedRules=[]`
+    so Decision #8 holds strictly (never blocking live execution on unreviewed DB
+    text), inspects raw bounded input before redacting banners & `guard_events`
+    (so live secrets are caught AND never echoed/persisted), and masks quoted SQL
+    only for non-SQL prose/search/VCS commands (`git commit`, `grep`, `echo`) so
+    `psql -c "DROP TABLE"` stays blocked while commit messages pass.
+
+44. **Schema version gates hook cold-start; clean tool calls write zero WAL rows.**
+    Every hook is a fresh process; running 50+ DDL/`PRAGMA table_info` queries and
+    9 `pruneStale` DELETEs per clean tool call wasted wall time and WAL churn.
+    `openDatabase()` now short-circuits on `PRAGMA user_version = SCHEMA_VERSION`
+    (4), `claimFailure()` checks `SELECT 1 FROM pending_failures LIMIT 1` before
+    touching the disk, and `GlobalStore` promotion stamps `antibodies.promoted_at`
+    so hit 5 promotes once instead of reopening `global.sqlite` on hits 6..500.
+
+45. **Receipt chains serialize on `BEGIN IMMEDIATE` and settle real `'held'` ROI.**
+    Parallel tool calls reading the last digest without a write lock forked
+    `delivery_receipts` (`chainValid = false`), and nothing ever emitted `'held'`.
+    `recordDeliveryReceipt()` now runs inside `BEGIN IMMEDIATE` and `settleTurn()`
+    at turn end emits idempotent `'held'` receipts for injected rules that did not
+    fail in the window. Never invent synthetic multipliers in `/api/insights`.
+
+46. **Bilingual hybrid retrieval never starves CJK bigrams behind English FTS5 hits.**
+    On mixed prompts (`"npm run dev 跨域报错"`), English tokens fill FTS5 `limit`
+    and used to skip `cjkBigrams()` altogether. `findMatches()` now unions CJK
+    bigram candidates whenever `cjkBigrams(expanded).length > 0`, and `core/tools.ts`
+    is the single canonical tool taxonomy shared by pairing, repair tracking,
+    passive-read filtering, guards, and hook I/O.
+
 ## Verification
 
 ```bash

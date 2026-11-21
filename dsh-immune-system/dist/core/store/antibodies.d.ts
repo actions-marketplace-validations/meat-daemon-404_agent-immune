@@ -45,6 +45,8 @@ export declare function insertAntibody(db: DatabaseSync, ab: NewAntibody, option
 export declare function findMatches(db: DatabaseSync, text: string, limit: number, projectScope?: string): Antibody[];
 /** Bump hit counters for injected antibodies. */
 export declare function bumpHits(db: DatabaseSync, ids: number[]): void;
+/** Record single-shot shared-library promotion timestamp so hot-path matches never re-open global.sqlite. */
+export declare function markPromoted(db: DatabaseSync, id: number, now?: number): void;
 export declare function listAntibodies(db: DatabaseSync, includeRetired?: boolean): Antibody[];
 export declare function removeAntibody(db: DatabaseSync, id: number): boolean;
 export declare function setAntibodyStatus(db: DatabaseSync, id: number, status: AntibodyStatus): boolean;

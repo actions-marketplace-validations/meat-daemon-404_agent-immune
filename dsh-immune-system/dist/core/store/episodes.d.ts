@@ -22,6 +22,7 @@ export interface PruneCounts {
     probes: number;
     stuck: number;
     detours: number;
+    guardEvents: number;
 }
 /** Remember which antibodies were injected on this session's current window (accumulating unexpired deliveries). */
 export declare function recordInjection(db: DatabaseSync, sessionId: string, ids: number[], prescriptions?: string[]): void;
@@ -99,9 +100,7 @@ export declare function claimFailure(db: DatabaseSync, sessionId: string, toolNa
     probeOnly: boolean;
 }): FailureSnapshot | null;
 /**
- * Drop expired rows before any episode pairing runs. Called on every episode
- * close, so the database cannot grow without bound even if the agent runs for
- * months: terminal distill jobs and dead sessions are reclaimed on a weekly
- * retention window, pending state on the tighter 30-minute TTLs.
+ * Drop expired rows on session start / turn end / explicit maintenance so the
+ * database cannot grow without bound even over months of continuous operation.
  */
 export declare function pruneStale(db: DatabaseSync, now?: number): PruneCounts;

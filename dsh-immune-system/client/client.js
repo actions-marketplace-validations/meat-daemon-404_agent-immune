@@ -147,6 +147,21 @@ window.__ModuleLoader__.load({
       '.imm select{color:var(--i-text)}',
       '.imm select option{color:var(--i-text);background:var(--i-panel)}',
       '.imm .shield{display:block;width:100%;min-width:0}',
+      '.imm .v4-box{padding:12px 13px;border-bottom:1px solid var(--i-line-soft);display:flex;flex-direction:column;gap:8px}',
+      '.imm .v4-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}',
+      '.imm .v4-row input[type=text]{flex:1 1 220px;min-width:160px;padding:7px 10px;border-radius:8px;border:1px solid var(--i-line);background:var(--i-panel2);color:inherit;font-size:12.5px}',
+      '.imm .v4-pre{margin:0;padding:9px 11px;border-radius:8px;background:var(--i-panel2);border:1px solid var(--i-line);font-family:ui-monospace,Consolas,monospace;font-size:11.5px;white-space:pre-wrap;word-break:break-word}',
+      '.imm .v4-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px;padding:12px}',
+      '.imm .v4-card{background:var(--i-panel2);border:1px solid var(--i-line);border-radius:9px;padding:11px 12px}',
+      '.imm .v4-card h4{margin:0 0 7px;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--i-muted)}',
+      '.imm .v4-kv{display:flex;justify-content:space-between;gap:8px;font-size:12px;padding:3px 0;border-bottom:1px solid var(--i-line-soft)}',
+      '.imm .v4-kv:last-child{border-bottom:0}',
+      '.imm .v4-bar{display:flex;align-items:center;gap:8px;margin:4px 0;font-size:11.5px}',
+      '.imm .v4-bar span:first-child{flex:0 0 110px;color:var(--i-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+      '.imm .v4-track{flex:1;height:7px;background:var(--i-panel);border-radius:999px;overflow:hidden}',
+      '.imm .v4-fill{height:100%;border-radius:999px;background:var(--i-accent)}',
+      '.imm .v4-fill.ok{background:var(--i-ok)}.imm .v4-fill.warn{background:var(--i-warn)}.imm .v4-fill.bad{background:var(--i-bad)}',
+      '.imm .v4-rewrite{padding:7px 9px;border-radius:7px;background:rgba(55,201,138,.12);border:1px solid var(--i-ok);font-family:ui-monospace,Consolas,monospace;font-size:11.5px;word-break:break-all}',
     ].join('');
 
     function request(path, init) {
@@ -175,10 +190,24 @@ window.__ModuleLoader__.load({
     }
 
     function ImmunePanel() {
-      var state = React.useState({ loading: true, error: '', stats: null, evolution: null, rows: [], workspaces: [], budgetMs: null });
+      var state = React.useState({
+        loading: true,
+        error: '',
+        stats: null,
+        evolution: null,
+        rows: [],
+        workspaces: [],
+        explain: null,
+        guardEvents: null,
+        guardVerdict: null,
+        insights: null,
+        federate: null,
+        budgetMs: null,
+      });
       var view = React.useState('project');
       var query = React.useState('');
       var order = React.useState('recent');
+      var guardInputState = React.useState({ payload: '', tool: 'Bash', strict: false });
 
       var data = state[0];
       var setData = state[1];
@@ -188,6 +217,8 @@ window.__ModuleLoader__.load({
       var setQ = query[1];
       var sort = order[0];
       var setSort = order[1];
+      var gInp = guardInputState[0];
+      var setGInp = guardInputState[1];
 
       var load = React.useCallback(
         function (nextTab, nextQuery) {
@@ -208,6 +239,55 @@ window.__ModuleLoader__.load({
               });
             return;
           }
+          if (nextTab === 'explain') {
+            var trimmed = (nextQuery || '').trim();
+            if (!trimmed) {
+              setData(function (prev) {
+                return Object.assign({}, prev, { loading: false, error: '', explain: null });
+              });
+              return;
+            }
+            request('/explain?q=' + encodeURIComponent(trimmed))
+              .then(function (body) {
+                setData(function (prev) {
+                  return Object.assign({}, prev, { loading: false, error: '', explain: body });
+                });
+              })
+              .catch(function (error) {
+                setData(function (prev) {
+                  return Object.assign({}, prev, { loading: false, error: String(error.message || error) });
+                });
+              });
+            return;
+          }
+          if (nextTab === 'guard') {
+            request('/guard-events?limit=25')
+              .then(function (body) {
+                setData(function (prev) {
+                  return Object.assign({}, prev, { loading: false, error: '', guardEvents: body });
+                });
+              })
+              .catch(function (error) {
+                setData(function (prev) {
+                  return Object.assign({}, prev, { loading: false, error: String(error.message || error) });
+                });
+              });
+            return;
+          }
+          if (nextTab === 'insights') {
+            Promise.all([request('/insights'), request('/federate')])
+              .then(function (pair) {
+                setData(function (prev) {
+                  return Object.assign({}, prev, { loading: false, error: '', insights: pair[0], federate: pair[1] });
+                });
+              })
+              .catch(function (error) {
+                setData(function (prev) {
+                  return Object.assign({}, prev, { loading: false, error: String(error.message || error) });
+                });
+              });
+            return;
+          }
           var path =
             '/?view=' +
             encodeURIComponent(nextTab) +
@@ -215,33 +295,46 @@ window.__ModuleLoader__.load({
           request(path)
             .then(function (body) {
               setData(function (prev) {
-                return {
+                return Object.assign({}, prev, {
                   loading: false,
                   error: '',
                   stats: body.stats,
                   evolution: body.evolution || null,
                   rows: body.antibodies,
-                  workspaces: prev.workspaces || [],
                   budgetMs: body.budgetMs,
-                };
+                });
               });
             })
             .catch(function (error) {
               setData(function (prev) {
-                return {
+                return Object.assign({}, prev, {
                   loading: false,
                   error: String(error.message || error),
-                  stats: null,
-                  evolution: null,
-                  rows: [],
-                  workspaces: prev.workspaces || [],
-                  budgetMs: null,
-                };
+                });
               });
             });
         },
         [setData],
       );
+
+      function runGuardSim() {
+        if (!gInp.payload.trim()) return;
+        setSyncMsg('评估中 / evaluating…');
+        request('/guard', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ payload: gInp.payload, toolName: gInp.tool, strict: gInp.strict }),
+        })
+          .then(function (verdict) {
+            setSyncMsg('');
+            setData(function (prev) {
+              return Object.assign({}, prev, { guardVerdict: verdict });
+            });
+          })
+          .catch(function (error) {
+            setSyncMsg('预检失败 / guard failed: ' + String(error.message || error));
+          });
+      }
 
       React.useEffect(
         function () {
@@ -495,6 +588,187 @@ window.__ModuleLoader__.load({
                 }),
               ),
             );
+      } else if (tab === 'explain') {
+        var exp = data.explain;
+        var cands = (exp && exp.candidates) || [];
+        body = h(
+          'div',
+          null,
+          h(
+            'div',
+            { className: 'v4-box' },
+            h(
+              'div',
+              { className: 'v4-row' },
+              h('input', {
+                type: 'text',
+                placeholder: '输入报错日志或提问诊断召回打分… / simulate recall…',
+                value: q,
+                onChange: function (e) { setQ(e.target.value); },
+                onKeyDown: function (e) { if (e.key === 'Enter') load('explain', q); },
+              }),
+              h('button', { className: 'act', type: 'button', onClick: function () { load('explain', q); } }, '模拟 / Simulate'),
+            ),
+            exp && exp.addedConcepts && exp.addedConcepts.length > 0
+              ? h('div', { className: 'tags' }, h('span', { className: 'tag hi' }, '概念扩展 / concepts: ' + exp.addedConcepts.join(' ')))
+              : null,
+            exp && exp.renderedBlock ? h('pre', { className: 'v4-pre' }, exp.renderedBlock) : null,
+          ),
+          cands.length === 0
+            ? h('div', { className: 'empty' }, h('div', { className: 't' }, '召回模拟器 / Recall Simulator'), h('div', { className: 'hd' }, '输入关键词或错误日志后回车即可查看概念扩展与打分拆解（只读，不虚增命中数）。'))
+            : h(
+                'table',
+                null,
+                h('thead', null, h('tr', null, ['#', '触发 / trigger', '处方 / do', '打分 / score'].map(function (lbl) { return h('th', { key: lbl }, lbl); }))),
+                h(
+                  'tbody',
+                  null,
+                  cands.map(function (c) {
+                    var b = c.breakdown || {};
+                    return h(
+                      'tr',
+                      { key: (c.source || '') + '-' + c.id },
+                      h('td', { className: 'id' }, (c.source === 'shared' ? 'S#' : '#') + c.id),
+                      h('td', { className: 'trigger' }, c.trigger_pattern),
+                      h('td', { className: 'txt do' }, c.prescription),
+                      h('td', { className: 'counts' }, h('b', null, String(b.finalScore != null ? b.finalScore : '—'))),
+                    );
+                  }),
+                ),
+              ),
+        );
+      } else if (tab === 'guard') {
+        var gv = data.guardVerdict;
+        var gev = data.guardEvents;
+        var evRows = (gev && gev.recent) || [];
+        body = h(
+          'div',
+          null,
+          h(
+            'div',
+            { className: 'v4-box' },
+            h(
+              'div',
+              { className: 'v4-row' },
+              h('input', {
+                type: 'text',
+                placeholder: '输入命令预检爆炸半径与安全改写… / evaluate command…',
+                value: gInp.payload,
+                onChange: function (e) { setGInp(Object.assign({}, gInp, { payload: e.target.value })); },
+                onKeyDown: function (e) { if (e.key === 'Enter') runGuardSim(); },
+              }),
+              h(
+                'select',
+                {
+                  value: gInp.tool,
+                  onChange: function (e) { setGInp(Object.assign({}, gInp, { tool: e.target.value })); },
+                },
+                h('option', { value: 'Bash' }, 'Bash'),
+                h('option', { value: 'Edit' }, 'Edit'),
+                h('option', { value: 'Write' }, 'Write'),
+              ),
+              h(
+                'label',
+                { className: 'note' },
+                h('input', {
+                  type: 'checkbox',
+                  checked: gInp.strict,
+                  onChange: function (e) { setGInp(Object.assign({}, gInp, { strict: e.target.checked })); },
+                }),
+                ' strict',
+              ),
+              h('button', { className: 'act', type: 'button', onClick: runGuardSim }, '预检 / Guard'),
+            ),
+            gv
+              ? h(
+                  'div',
+                  { className: 'v4-card' },
+                  h(
+                    'div',
+                    { className: 'tags' },
+                    h('span', { className: 'tag ' + (gv.decision === 'block' ? 'crit' : gv.decision === 'allow' ? 'hi' : 'low') }, String(gv.decision).toUpperCase()),
+                    h('span', { className: 'tag' }, 'blast ' + (gv.blastRadiusScore || 0) + '/100'),
+                    h('span', { className: 'tag' }, String(gv.severity || 'low').toUpperCase()),
+                  ),
+                  h('div', { className: 'note', style: { marginTop: '6px' } }, gv.summary || ''),
+                  gv.suggestedRewrite ? h('div', { className: 'v4-rewrite', style: { marginTop: '6px' } }, 'Safe rewrite: ' + gv.suggestedRewrite) : null,
+                )
+              : null,
+          ),
+          evRows.length === 0
+            ? h('div', { className: 'empty' }, h('div', { className: 't' }, '预检审计日志 / Guard Audit Ledger'), h('div', { className: 'hd' }, '启用 IMMUNE_GUARD=warn|ask|deny 后，实时拦截记录将自动落库展示于此。'))
+            : h(
+                'table',
+                null,
+                h('thead', null, h('tr', null, ['#', '裁决 / decision', '策略 / policies', '命令 / payload'].map(function (lbl) { return h('th', { key: lbl }, lbl); }))),
+                h(
+                  'tbody',
+                  null,
+                  evRows.map(function (ev) {
+                    return h(
+                      'tr',
+                      { key: ev.id },
+                      h('td', { className: 'id' }, String(ev.id)),
+                      h('td', null, h('span', { className: 'pill ' + (ev.decision === 'block' ? 'quarantined' : ev.decision === 'rewrite' ? 'retired' : 'active') }, String(ev.decision).toUpperCase() + ' ' + ev.blast_radius)),
+                      h('td', { className: 'trigger' }, ev.tool_name + ' · ' + (ev.policy_ids || []).join(', ')),
+                      h('td', { className: 'txt do' }, ev.payload_preview, ev.suggested_rewrite ? h('div', { className: 'repair' }, '-> ' + ev.suggested_rewrite) : null),
+                    );
+                  }),
+                ),
+              ),
+        );
+      } else if (tab === 'insights') {
+        var ins = data.insights;
+        var fed = data.federate;
+        if (!ins) {
+          body = h('div', { className: 'empty' }, h('div', { className: 't' }, '加载洞察中… / loading insights…'));
+        } else {
+          var diag = ins.diagnosis || {};
+          var aut = ins.autopsy || {};
+          var dna = ins.workspaceDna || {};
+          var lf = ins.lockfile || {};
+          var rec = ins.receipts || {};
+          body = h(
+            'div',
+            { className: 'v4-grid' },
+            h(
+              'div',
+              { className: 'v4-card' },
+              h('h4', null, '踩坑画像与五维雷达 / Archetype & Radar'),
+              h('div', { className: 'v4-kv' }, h('span', null, 'Immunity Score'), h('b', null, String(ins.immunityScore || 0) + ' / 100')),
+              h('div', { className: 'v4-kv' }, h('span', null, 'Archetype'), h('b', null, (diag.archetype && diag.archetype.title) || '—')),
+              (diag.radar || []).map(function (ax) {
+                var pct = Number(ax.immunityPct || 0);
+                return h(
+                  'div',
+                  { className: 'v4-bar', key: ax.id },
+                  h('span', null, ax.label),
+                  h('div', { className: 'v4-track' }, h('div', { className: 'v4-fill ' + (pct >= 70 ? 'ok' : pct >= 40 ? 'warn' : 'bad'), style: { width: Math.max(4, Math.min(100, pct)) + '%' } })),
+                  h('span', null, String(pct) + '%'),
+                );
+              }),
+            ),
+            h(
+              'div',
+              { className: 'v4-card' },
+              h('h4', null, '法医尸检与回执 / Autopsy & Receipts'),
+              h('div', { className: 'v4-kv' }, h('span', null, 'Prevented Loops'), h('b', null, String(aut.savedLoops || 0))),
+              h('div', { className: 'v4-kv' }, h('span', null, 'Verified Held Tokens'), h('b', null, String(rec.estimatedTokensSaved || 0))),
+              h('div', { className: 'v4-kv' }, h('span', null, 'Receipt Chain'), h('b', null, rec.chainValid === false ? 'BROKEN' : 'VERIFIED')),
+              h('div', { className: 'v4-kv' }, h('span', null, 'API Dollars Saved'), h('b', null, '$' + Number(aut.usdSaved || 0).toFixed(2))),
+              h('div', { className: 'v4-kv' }, h('span', null, 'Guard Interceptions'), h('b', null, String((ins.guardSummary && ins.guardSummary.total) || 0))),
+            ),
+            h(
+              'div',
+              { className: 'v4-card' },
+              h('h4', null, '工作区 DNA 与疫苗锁 / Workspace DNA'),
+              h('div', { className: 'v4-kv' }, h('span', null, 'Package Manager'), h('b', null, dna.packageManager || 'unknown')),
+              h('div', { className: 'v4-kv' }, h('span', null, 'Stacks'), h('b', null, (dna.stacks || []).join(', ') || '—')),
+              h('div', { className: 'v4-kv' }, h('span', null, 'Vaccine Lockfile'), h('b', null, lf.exists ? (lf.valid ? 'VERIFIED (' + (lf.antibodyCount || 0) + ')' : 'INVALID') : 'Not generated')),
+              h('div', { className: 'v4-kv' }, h('span', null, 'Swarm Laws'), h('b', null, String(fed && Array.isArray(fed.universalLaws) ? fed.universalLaws.length : 0) + ' / ' + String((fed && fed.clusters && fed.clusters.length) || 0))),
+            ),
+          );
+        }
       } else if (data.loading && data.rows.length === 0) {
         body = h(
           'div',
@@ -741,6 +1015,40 @@ window.__ModuleLoader__.load({
               },
               '工作区 / workspaces',
               h('b', null, stats ? String(stats.workspaces || 0) : ''),
+            ),
+            h(
+              'button',
+              {
+                className: tab === 'explain' ? 'on' : '',
+                type: 'button',
+                role: 'tab',
+                'aria-selected': tab === 'explain' ? 'true' : 'false',
+                onClick: function () { setTab('explain'); },
+              },
+              '模拟 / explain',
+            ),
+            h(
+              'button',
+              {
+                className: tab === 'guard' ? 'on' : '',
+                type: 'button',
+                role: 'tab',
+                'aria-selected': tab === 'guard' ? 'true' : 'false',
+                onClick: function () { setTab('guard'); },
+              },
+              '预检 / guard',
+              h('b', null, stats ? String(stats.guardInterceptions || 0) : ''),
+            ),
+            h(
+              'button',
+              {
+                className: tab === 'insights' ? 'on' : '',
+                type: 'button',
+                role: 'tab',
+                'aria-selected': tab === 'insights' ? 'true' : 'false',
+                onClick: function () { setTab('insights'); },
+              },
+              '洞察 / insights',
             ),
           ),
           h(

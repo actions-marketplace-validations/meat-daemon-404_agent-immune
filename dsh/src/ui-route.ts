@@ -13,7 +13,11 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { ImmuneStore } from '../../core/store/index.js';
 import {
   applyAction,
+  evaluateUiGuard,
   evolutionStats,
+  readFederationPreview,
+  readGuardEvents,
+  readInsights,
   readState,
   readWorkspaces,
   resolveBudgetMs,
@@ -24,11 +28,6 @@ import { renderSkillMarkdown } from '../../core/export.js';
 import { shareSanityCheck } from '../../core/share-guard.js';
 import { scanMagpieTelemetry } from '../../core/audit/magpie.js';
 import { explainRecall } from '../../core/explain.js';
-import { diagnoseAgentArchetype } from '../../core/diagnose.js';
-import { runPitfallAutopsy } from '../../core/autopsy.js';
-import { evaluatePreFlightGuard } from '../../core/guard.js';
-import { detectWorkspaceDNA } from '../../core/vaccine.js';
-import { computeImmunityScore } from '../../core/wrapped.js';
 
 /** The slice of the host's `webServer` service this needs. */
 interface WebServerLike {
@@ -158,28 +157,19 @@ export function registerImmuneUiRoute(
           }
 
           if (req.method === 'GET' && path.endsWith('/insights')) {
-            const active = store.listAll(false);
-            const s = store.stats();
-            const totalInjections = active.reduce((sum, r) => sum + r.hit_count, 0);
-            const totalFails = active.reduce((sum, r) => sum + r.fail_count, 0);
-            const repeatFailures =
-              active.length === 0 && totalInjections === 0 ? 0 : Math.max(s.suppressedRepeats + totalInjections, active.length);
-            const totalCalls =
-              repeatFailures === 0 && totalFails === 0
-                ? 0
-                : Math.max((repeatFailures + totalFails) * 18, totalInjections * 4, active.length * 25);
-            sendJson(res, 200, {
-              immunityScore: computeImmunityScore({
-                totalCalls,
-                repeatFailures,
-                avoidableTokens: (s.suppressedRepeats + totalInjections) * 2400,
-                activeRules: active.length,
-                totalInjections,
-              }),
-              diagnosis: diagnoseAgentArchetype(active),
-              autopsy: runPitfallAutopsy(active),
-              workspaceDna: detectWorkspaceDNA(process.cwd()),
-            });
+            sendJson(res, 200, readInsights(store, process.cwd()));
+            return;
+          }
+
+          if (req.method === 'GET' && path.endsWith('/guard-events')) {
+            const rawLimit = Number(url.searchParams.get('limit') ?? '25');
+            const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(200, Math.trunc(rawLimit)) : 25;
+            sendJson(res, 200, readGuardEvents(store, limit));
+            return;
+          }
+
+          if (req.method === 'GET' && path.endsWith('/federate')) {
+            sendJson(res, 200, readFederationPreview(store, process.cwd()));
             return;
           }
 
@@ -270,23 +260,12 @@ export function registerImmuneUiRoute(
               sendJson(res, 400, { error: 'payload is required' });
               return;
             }
-            const toolName = typeof parsed.toolName === 'string' && parsed.toolName.trim() ? parsed.toolName.trim() : 'Bash';
-            const strict = parsed.strict === true;
-            const dna = detectWorkspaceDNA(process.cwd());
-            const pm =
-              dna.packageManager === 'pnpm' ||
-              dna.packageManager === 'yarn' ||
-              dna.packageManager === 'bun' ||
-              dna.packageManager === 'uv'
-                ? dna.packageManager
-                : null;
             sendJson(
               res,
               200,
-              evaluatePreFlightGuard(payload, store.listAll(false), {
-                toolName,
-                strict,
-                workspacePackageManager: pm,
+              evaluateUiGuard(store, payload, {
+                toolName: typeof parsed.toolName === 'string' ? parsed.toolName : 'Bash',
+                strict: parsed.strict === true,
               }),
             );
             return;

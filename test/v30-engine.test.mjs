@@ -45,7 +45,7 @@ test('v3.0 all 7 manifests are synchronized across all 10 version fields', () =>
   const claudeMarket = JSON.parse(readFileSync(join(ROOT, '.claude-plugin/marketplace.json'), 'utf8'));
   const serverJson = JSON.parse(readFileSync(join(ROOT, 'server.json'), 'utf8'));
 
-  assert.match(rootPkg.version, /^3\.\d+\.\d+$/);
+  assert.match(rootPkg.version, /^\d+\.\d+\.\d+$/);
   for (const v of [
     rootPkg.version,
     rootPkg.dsh?.version,

@@ -1,13 +1,3 @@
-/**
- * v3.0 Pre-Flight Blast-Radius Guard & Destructive Command Interceptor (`immune guard`).
- *
- * Evaluates proposed agent tool invocations (Bash, Edit, Write, Git, SQL)
- * BEFORE execution against built-in catastrophic blast-radius signatures,
- * workspace lockfile constraints, and high-confidence learned antibodies.
- * Computes a 0-100 Blast-Radius Score, emits a deterministic safe command
- * rewrite when possible, and formats hook protocol decisions for Claude Code,
- * Cursor, Codex, and CI gates.
- */
 import type { DiagnosableRule } from './diagnose.js';
 export type GuardSeverity = 'low' | 'medium' | 'high' | 'critical';
 export type GuardDecision = 'allow' | 'warn' | 'rewrite' | 'block';
@@ -51,6 +41,8 @@ export interface BuiltinGuardPolicySpec {
     readonly prescription: string;
     readonly rewrite?: (payload: string) => string | null;
 }
+/** Lightweight lockfile probe (<0.05 ms) for live PreToolUse lockfile-drift guard. */
+export declare function detectWorkspacePackageManager(workspace?: string): 'pnpm' | 'yarn' | 'bun' | 'uv' | null;
 export declare const BUILTIN_GUARD_POLICIES: ReadonlyArray<BuiltinGuardPolicySpec>;
 /**
  * Evaluate a proposed tool command or file edit payload before execution.
@@ -75,3 +67,9 @@ export declare function renderGuardHookDecision(verdict: GuardVerdict): {
  * Format a strict host-schema PreToolUse hook payload without unknown keys (AGENTS.md #2).
  */
 export declare function renderGuardHostHookDecision(verdict: GuardVerdict, host?: GuardHookHost): Record<string, unknown>;
+/**
+ * Render a concise, sanitized `<immune_guard>` banner for live PreToolUse hooks
+ * (both warn and deny modes). Includes legacy `(force-push-main)` tag when a
+ * force push targets main/master and surfaces deterministic safe rewrites.
+ */
+export declare function formatLiveGuardBanner(verdict: GuardVerdict): string;

@@ -12,8 +12,16 @@ await runHook('Stop', async (event) => {
         process.cwd();
     const store = new ImmuneStore({ cwd: workspace });
     try {
-        store.clearPromptTurn(sessionIdOf(event));
-        await new ImmuneRuntime(store).drain({
+        const sessionId = sessionIdOf(event);
+        const runtime = new ImmuneRuntime(store);
+        try {
+            runtime.settleTurn(sessionId, workspace);
+        }
+        catch {
+            // Best-effort verified 'held' receipt settlement.
+        }
+        store.clearPromptTurn(sessionId);
+        await runtime.drain({
             selfMarkers: selfMarkers(),
             runPostDrainHooks: true,
         });

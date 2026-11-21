@@ -36,7 +36,13 @@ function computeDigest(
   return createHash('sha256').update(raw).digest('hex').slice(0, 24);
 }
 
-/** Append one chained delivery receipt (best-effort; never throws on hook paths). */
+/** Conservative default token-saving estimate per verified held delivery when no measured retry median exists. */
+export const DEFAULT_HELD_TOKENS_EST = 420;
+
+/**
+ * Append one chained delivery receipt inside `BEGIN IMMEDIATE` so concurrent
+ * hook processes serialize their digest link and never fork the SHA-256 chain.
+ */
 export function recordDeliveryReceipt(
   db: DatabaseSync,
   entry: {
@@ -48,7 +54,14 @@ export function recordDeliveryReceipt(
     tokensEst?: number;
   },
 ): void {
+  let began = false;
   try {
+    try {
+      db.exec('BEGIN IMMEDIATE');
+      began = true;
+    } catch {
+      // Caller already holds a transaction; proceed inline.
+    }
     const last = db
       .prepare('SELECT digest FROM delivery_receipts ORDER BY id DESC LIMIT 1')
       .get() as { digest?: string } | undefined;
@@ -79,9 +92,67 @@ export function recordDeliveryReceipt(
       digest,
       createdAt,
     );
+    if (began) db.exec('COMMIT');
   } catch {
+    if (began) {
+      try {
+        db.exec('ROLLBACK');
+      } catch {
+        // ignore
+      }
+    }
     // Non-fatal telemetry.
   }
+}
+
+/**
+ * Emit verified `'held'` receipts at turn close for antibodies that were
+ * delivered in `sessionId` during the current window and were NOT followed
+ * by a `'failed'` receipt or already credited `'held'` in that window.
+ *
+ * Returns how many new `'held'` receipts were appended.
+ */
+export function recordHeldReceiptsForSession(
+  db: DatabaseSync,
+  opts: {
+    sessionId: string;
+    ruleIds: ReadonlyArray<number>;
+    model: string;
+    projectScope?: string;
+    tokensPerHold?: number;
+    windowMs?: number;
+  },
+): number {
+  const uniqueIds = [...new Set(opts.ruleIds.filter((id) => Number.isInteger(id) && id > 0))];
+  if (!opts.sessionId || uniqueIds.length === 0) return 0;
+
+  const since = Date.now() - (opts.windowMs ?? 30 * 60 * 1000);
+  const tokensEst = Math.max(0, Math.trunc(opts.tokensPerHold ?? DEFAULT_HELD_TOKENS_EST));
+  let credited = 0;
+
+  for (const ruleId of uniqueIds) {
+    try {
+      const prior = db
+        .prepare(
+          `SELECT outcome FROM delivery_receipts
+            WHERE session_id = ? AND rule_id = ? AND created_at >= ?`,
+        )
+        .all(opts.sessionId, ruleId, since) as Array<{ outcome?: string }>;
+      if (prior.some((r) => r.outcome === 'failed' || r.outcome === 'held')) continue;
+      recordDeliveryReceipt(db, {
+        ruleId,
+        sessionId: opts.sessionId,
+        model: opts.model,
+        projectScope: opts.projectScope ?? '*',
+        outcome: 'held',
+        tokensEst,
+      });
+      credited += 1;
+    } catch {
+      // Best-effort turn-end receipt settlement.
+    }
+  }
+  return credited;
 }
 
 export interface ReceiptSummary {

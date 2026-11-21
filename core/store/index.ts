@@ -12,6 +12,7 @@ import type {
   Antibody,
   AntibodyStatus,
   FailureSnapshot,
+  GuardEventSummary,
   NewAntibody,
   WorkspaceProfile,
 } from '../types.js';
@@ -21,7 +22,17 @@ import { GlobalStore, globalDbPathFor, isPromotable } from './global.js';
 import { rerank } from './rerank.js';
 import { bumpMeta, readMeta, setMeta } from './meta.js';
 import { deriveProjectScope, repairLibraryHygiene, type HygieneReport } from '../hygiene.js';
-import { recordDeliveryReceipt, summarizeReceipts, type ReceiptSummary } from '../receipts.js';
+import {
+  recordDeliveryReceipt,
+  recordHeldReceiptsForSession,
+  summarizeReceipts,
+  type ReceiptSummary,
+} from '../receipts.js';
+import {
+  recordGuardEvent,
+  summarizeGuardEvents,
+  type NewGuardEvent,
+} from './guard-events.js';
 import { summarizeTriage, type TriageSummary } from '../triage.js';
 import { buildModelImmunityReport } from '../model-intel.js';
 import type { MagpieTelemetryReport } from '../audit/magpie.js';
@@ -47,6 +58,7 @@ import {
   getAntibodyById,
   insertAntibody,
   listAntibodies,
+  markPromoted,
   mutateRule,
   penalizeAntibodies,
   removeAntibody,
@@ -197,6 +209,7 @@ export class ImmuneStore {
           prescription: ab.prescription,
           tool_name: ab.tool_name ?? null,
         });
+        markPromoted(this.db, id);
       }
     } catch {
       // Sharing is an optimisation; never let it cost the caller an insert.
@@ -222,8 +235,9 @@ export class ImmuneStore {
   match(queryText: string, opts: MatchOptions = {}): Antibody[] {
     const limit = opts.limit ?? 3;
     // Retrieve wide, then rerank: BM25 answers "is the text related", not "is
-    // this about the file I am touching right now".
-    const wide = limit * 2;
+    // this about the file I am touching right now", and wide >= 12 keeps enough
+    // headroom for bilingual FTS5 + CJK bigram union candidates.
+    const wide = Math.max(limit * 4, 12);
 
     const sent =
       opts.excludeInjected && opts.sessionId
@@ -300,28 +314,27 @@ export class ImmuneStore {
     if (rankedOwn.length > 0) {
       bumpHits(this.db, rankedOwn.map((r) => r.id));
 
-      // Promote on the turn a rule crosses five successful injections: that is
-      // the proof-of-generality the promotion rule asks for. isPromotable
-      // judges the POST-bump count (>= 5), so pass hit_count + 1: the original
-      // code fed the pre-bump count into that predicate, which made the whole
-      // crossing check dead — nothing could ever promote at match time. The
-      // >= form also lets pre-existing rules (hit counts already past the
-      // threshold when promotion shipped) promote on their next injection;
-      // GlobalStore.insert deduplicates by prescription, so repeated crossings
-      // just count the shared copy's hits.
+      // Promote once when a rule crosses five successful injections: `promoted_at`
+      // prevents re-opening global.sqlite on every subsequent match (hit 6..500).
       const crossed = rankedOwn.filter(
-        (r) => r.hit_count + 1 >= 5 && isPromotable({ ...r, hit_count: r.hit_count + 1 }, false),
+        (r) =>
+          (r.promoted_at ?? 0) === 0 &&
+          r.hit_count + 1 >= 5 &&
+          isPromotable({ ...r, hit_count: r.hit_count + 1 }, false),
       );
       if (crossed.length > 0) {
         const global = this.global();
         for (const row of crossed) {
           try {
-            global?.insert({
-              trigger_pattern: row.trigger_pattern,
-              symptom: row.symptom,
-              prescription: row.prescription,
-              tool_name: row.tool_name,
-            });
+            if (global) {
+              global.insert({
+                trigger_pattern: row.trigger_pattern,
+                symptom: row.symptom,
+                prescription: row.prescription,
+                tool_name: row.tool_name,
+              });
+              markPromoted(this.db, row.id);
+            }
           } catch {
             // Sharing is best-effort.
           }
@@ -745,6 +758,33 @@ export class ImmuneStore {
   /** Verify and summarize SHA-256 chained delivery receipts. */
   receiptSummary(limit = 500): ReceiptSummary {
     return summarizeReceipts(this.db, limit);
+  }
+
+  /**
+   * Settle verified `'held'` receipts at turn end for rules injected in
+   * `sessionId` that survived without a related failure in this window.
+   */
+  recordHeldReceipts(sessionId: string, projectScope = '*', tokensPerHold?: number): number {
+    const ids = injectedIds(this.db, sessionId);
+    if (ids.length === 0) return 0;
+    const model = resolveModel(this.db, sessionId);
+    return recordHeldReceiptsForSession(this.db, {
+      sessionId,
+      ruleIds: ids,
+      model,
+      projectScope,
+      tokensPerHold,
+    });
+  }
+
+  /** Persist a redacted live Pre-Flight Guard interception into the audit ledger. */
+  recordGuardEvent(entry: NewGuardEvent): void {
+    recordGuardEvent(this.db, entry);
+  }
+
+  /** Read-only summary and recent rows from the live Pre-Flight Guard audit ledger. */
+  guardEventSummary(limit = 25): GuardEventSummary {
+    return summarizeGuardEvents(this.db, limit);
   }
 
   /** Build per-model immunity matrix + adaptive escalation targets. */

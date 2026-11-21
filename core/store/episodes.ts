@@ -4,6 +4,7 @@ import { redactAndClamp } from '../redact.js';
 import { canCloseEpisode } from '../pairing.js';
 import { pruneStuck } from './stuck.js';
 import { pruneDetours } from './detours.js';
+import { pruneGuardEvents } from './guard-events.js';
 
 /** A failure is abandoned if no success follows within this window. */
 export const PENDING_TTL_MS = 30 * 60 * 1000;
@@ -31,6 +32,7 @@ export interface PruneCounts {
   probes: number;
   stuck: number;
   detours: number;
+  guardEvents: number;
 }
 
 function parseIds(raw: string): number[] {
@@ -115,16 +117,16 @@ export function recordFailure(
     created_at: now,
   };
 
-  // A repeat failure keeps any hint already attached: the human explanation for
-  // this failure may already have arrived, and it must not be wiped by a second
-  // failing call in the same turn.
+  // A repeat failure on the same target keeps any hint already attached: the
+  // human explanation for this failure may already have arrived, and it must
+  // not be wiped by a second failing call in the same turn. Distinct targets
+  // under the same tool coexist without clobbering each other (v4 multi-target PK).
   db.prepare(
     `INSERT INTO pending_failures (session_id, tool_name, trace, injected_ids, target_signature, created_at)
      VALUES (?, ?, ?, ?, ?, ?)
-     ON CONFLICT(session_id, tool_name) DO UPDATE SET
+     ON CONFLICT(session_id, tool_name, target_signature) DO UPDATE SET
        trace = excluded.trace,
        injected_ids = excluded.injected_ids,
-       target_signature = excluded.target_signature,
        created_at = excluded.created_at`,
   ).run(sessionId, toolName, snapshot.trace, JSON.stringify(injected), targetSignature, now);
 
@@ -281,7 +283,14 @@ export function claimFailure(
   toolName: string,
   incoming?: { signature: string; probeOnly: boolean },
 ): FailureSnapshot | null {
-  pruneStale(db);
+  // Fast-path: 95%+ of tool calls succeed with zero open failures. Skip all 9
+  // WAL DELETE statements in `pruneStale` when `pending_failures` is empty.
+  const anyPending = db.prepare('SELECT 1 FROM pending_failures LIMIT 1').get();
+  if (!anyPending) return null;
+
+  if (incoming?.probeOnly) return null;
+
+  const cutoff = Date.now() - PENDING_TTL_MS;
   type PendingRow = {
     session_id: string;
     tool_name: string;
@@ -291,35 +300,48 @@ export function claimFailure(
     target_signature?: string;
     created_at: number;
   };
-  let row = db
+  const ownRows = db
     .prepare(
       `SELECT * FROM pending_failures
-        WHERE session_id = ? AND LOWER(tool_name) = LOWER(?)
-        ORDER BY CASE WHEN tool_name = ? THEN 0 ELSE 1 END, created_at DESC LIMIT 1`,
+        WHERE session_id = ? AND LOWER(tool_name) = LOWER(?) AND created_at >= ?
+        ORDER BY CASE WHEN tool_name = ? THEN 0 ELSE 1 END, created_at DESC
+        LIMIT 12`,
     )
-    .get(sessionId, toolName, toolName) as PendingRow | undefined;
-  if (!row) {
-    row = db
-      .prepare(
-        `SELECT * FROM pending_failures
-          WHERE LOWER(tool_name) = LOWER(?) AND session_id != ?
-          ORDER BY CASE WHEN tool_name = ? THEN 0 ELSE 1 END, created_at DESC LIMIT 1`,
-      )
-      .get(toolName, sessionId, toolName) as PendingRow | undefined;
-  }
+    .all(sessionId, toolName, cutoff, toolName) as PendingRow[];
+  const crossRows = db
+    .prepare(
+      `SELECT * FROM pending_failures
+        WHERE LOWER(tool_name) = LOWER(?) AND session_id != ? AND created_at >= ?
+        ORDER BY CASE WHEN tool_name = ? THEN 0 ELSE 1 END, created_at DESC
+        LIMIT 12`,
+    )
+    .all(toolName, sessionId, cutoff, toolName) as PendingRow[];
+
+  const pickMatch = (rows: PendingRow[]): PendingRow | undefined => {
+    if (rows.length === 0) return undefined;
+    if (!incoming) return rows[0];
+    const exact = rows.find((r) => (r.target_signature ?? '') === incoming.signature);
+    if (exact && canCloseEpisode(exact.target_signature ?? '', incoming)) return exact;
+    return rows.find((r) => canCloseEpisode(r.target_signature ?? '', incoming));
+  };
+
+  const row = pickMatch(ownRows) ?? pickMatch(crossRows);
   if (!row) return null;
 
-  const failedSignature = typeof row.target_signature === 'string' ? row.target_signature : '';
-  if (incoming && !canCloseEpisode(failedSignature, incoming)) return null;
+  const targetSig = typeof row.target_signature === 'string' ? row.target_signature : '';
+  db.prepare(
+    'DELETE FROM pending_failures WHERE session_id = ? AND tool_name = ? AND target_signature = ?',
+  ).run(row.session_id, row.tool_name, targetSig);
 
-  db.prepare('DELETE FROM pending_failures WHERE session_id = ? AND tool_name = ?').run(
-    row.session_id,
-    row.tool_name,
-  );
-  // The action-diff belongs to this episode wherever it closes: read and clear
-  // the buffer even when the closing tool differs from the failing one.
+  // Read repair actions; only clear the session buffer if no sibling pending
+  // failures remain open in that session.
   const repairPath = readRepairActions(db, row.session_id);
-  db.prepare('DELETE FROM repair_actions WHERE session_id = ?').run(row.session_id);
+  const siblingOpen = db
+    .prepare('SELECT 1 FROM pending_failures WHERE session_id = ? AND created_at >= ? LIMIT 1')
+    .get(row.session_id, cutoff);
+  if (!siblingOpen) {
+    db.prepare('DELETE FROM repair_actions WHERE session_id = ?').run(row.session_id);
+  }
 
   return {
     session_id: row.session_id,
@@ -333,10 +355,8 @@ export function claimFailure(
 }
 
 /**
- * Drop expired rows before any episode pairing runs. Called on every episode
- * close, so the database cannot grow without bound even if the agent runs for
- * months: terminal distill jobs and dead sessions are reclaimed on a weekly
- * retention window, pending state on the tighter 30-minute TTLs.
+ * Drop expired rows on session start / turn end / explicit maintenance so the
+ * database cannot grow without bound even over months of continuous operation.
  */
 export function pruneStale(db: DatabaseSync, now = Date.now()): PruneCounts {
   const pendingFailures = db
@@ -344,7 +364,7 @@ export function pruneStale(db: DatabaseSync, now = Date.now()): PruneCounts {
     .run(now - PENDING_TTL_MS);
   const sessionInjections = db
     .prepare('DELETE FROM session_injections WHERE created_at < ?')
-  .run(now - INJECTION_TTL_MS);
+    .run(now - INJECTION_TTL_MS);
   const jobs = db
     .prepare(
       "DELETE FROM distill_jobs WHERE status IN ('done','failed','skipped') AND updated_at < ?",
@@ -364,6 +384,7 @@ export function pruneStale(db: DatabaseSync, now = Date.now()): PruneCounts {
     .run(now - PENDING_TTL_MS);
   const stuck = pruneStuck(db, PENDING_TTL_MS, now);
   const detours = pruneDetours(db, SESSION_RETENTION_MS, now);
+  const guardEvents = pruneGuardEvents(db, now);
   return {
     pendingFailures: Number(pendingFailures.changes),
     sessionInjections: Number(sessionInjections.changes),
@@ -373,5 +394,6 @@ export function pruneStale(db: DatabaseSync, now = Date.now()): PruneCounts {
     probes: Number(probes.changes),
     stuck,
     detours,
+    guardEvents,
   };
 }

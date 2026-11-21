@@ -212,11 +212,16 @@ export function insertAntibody(
 
   const now = Date.now();
 
-  // 1. Exact prescription match within compatible scope.
+  // 1. Exact prescription match within compatible active scope.
+  //    Inactive (retired / quarantined) rows are excluded so re-learning a
+  //    previously retired lesson creates a fresh active antibody rather than
+  //    silently bumping counters on a dead row.
   const exact = db
     .prepare(
       `SELECT id, trigger_pattern, project_scope FROM antibodies
-        WHERE prescription = ? AND (project_scope = '*' OR project_scope = ?)
+        WHERE status = 'active'
+          AND prescription = ?
+          AND (project_scope = '*' OR project_scope = ?)
         LIMIT 1`,
     )
     .get(prescription, effectiveScope) as
@@ -352,10 +357,11 @@ export function findMatches(
     }
   }
 
-  if (rows.length >= limit) return rows.slice(0, limit);
-
+  // Hybrid bilingual union (v4.0): FTS5 trigram cannot index 2-char CJK terms
+  // (AGENTS.md #5). Never short-circuit CJK bigram lookup just because FTS5
+  // already filled `limit` rows with generic English tokens (e.g. "npm run dev 跨域").
   const bigrams = cjkBigrams(expanded);
-  if (bigrams.length === 0) return rows;
+  if (bigrams.length === 0) return rows.slice(0, limit);
 
   try {
     const clause = '(trigger_pattern LIKE ? OR symptom LIKE ? OR prescription LIKE ?)';
@@ -390,10 +396,24 @@ export function findMatches(
       .filter((entry) => entry.score >= 1)
       .sort((a, b) => b.score - a.score || b.row.hit_count - a.row.hit_count);
 
-    for (const entry of scored) {
-      if (rows.length >= limit) break;
-      rows.push(entry.row);
-      seen.add(entry.row.id);
+    if (scored.length > 0) {
+      const freeSlots = Math.max(0, limit - rows.length);
+      if (freeSlots >= scored.length) {
+        for (const entry of scored) {
+          rows.push(entry.row);
+          seen.add(entry.row.id);
+        }
+      } else {
+        // Reserve up to half the candidate slots (min 2 when limit >= 2) for
+        // CJK bigram hits so downstream rerank sees bilingual exact matches.
+        const cjkBudget = Math.min(scored.length, Math.max(freeSlots, limit >= 2 ? Math.max(2, Math.floor(limit / 2)) : 1));
+        const ftsKeep = Math.max(0, limit - cjkBudget);
+        const merged: Antibody[] = rows.slice(0, ftsKeep);
+        for (const entry of scored.slice(0, cjkBudget)) {
+          merged.push(entry.row);
+        }
+        return merged.slice(0, limit);
+      }
     }
   } catch {
     // The fallback is an optimisation; never let it cost the caller a turn.
@@ -406,6 +426,15 @@ export function findMatches(
 export function bumpHits(db: DatabaseSync, ids: number[]): void {
   const stmt = db.prepare('UPDATE antibodies SET hit_count = hit_count + 1 WHERE id = ?');
   for (const id of ids) stmt.run(id);
+}
+
+/** Record single-shot shared-library promotion timestamp so hot-path matches never re-open global.sqlite. */
+export function markPromoted(db: DatabaseSync, id: number, now = Date.now()): void {
+  try {
+    db.prepare('UPDATE antibodies SET promoted_at = ? WHERE id = ?').run(now, id);
+  } catch {
+    // Non-fatal on legacy DBs before migration.
+  }
 }
 
 export function listAntibodies(db: DatabaseSync, includeRetired = true): Antibody[] {
@@ -475,6 +504,7 @@ export function penalizeAntibodies(
     const before = rowToAntibody(rawBefore);
     if (ctx && !isRelated(before.trigger_pattern, ctx.failureText, ctx.toolName)) continue;
 
+    let nextBucket: string = ctx ? 'stale_or_bad_advice' : '';
     if (ctx) {
       const verdict = triagePostInjectionFailure(
         before,
@@ -508,6 +538,7 @@ export function penalizeAntibodies(
         continue;
       }
       if (verdict.bucket === 'ignored_by_agent') {
+        nextBucket = verdict.bucket;
         bumpIgnored.run(verdict.bucket, now, id);
         recordTriageEvent(db, {
           ruleId: id,
@@ -519,6 +550,7 @@ export function penalizeAntibodies(
         });
         if (!verdict.shouldPenalize) continue;
       } else {
+        nextBucket = verdict.bucket;
         recordTriageEvent(db, {
           ruleId: id,
           sessionId: ctx.sessionId,
@@ -530,7 +562,7 @@ export function penalizeAntibodies(
       }
     }
 
-    bumpFail.run(ctx ? 'stale_or_bad_advice' : '', now, id);
+    bumpFail.run(nextBucket, now, id);
     penalized.push(id);
     if (!shouldRetire(before.hit_count, before.fail_count + 1)) continue;
     setAntibodyStatus(db, id, 'retired');

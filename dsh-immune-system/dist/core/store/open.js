@@ -1,14 +1,15 @@
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { SCHEMA_STATEMENTS } from './schema.js';
+import { SCHEMA_STATEMENTS, SCHEMA_VERSION } from './schema.js';
 import { repairLibraryHygiene } from '../hygiene.js';
 /**
  * Open (and initialise) the immune database.
  *
  * WAL and a busy timeout matter here because several hook processes may open
- * the same file at nearly the same moment. Statements run one at a time so a
- * broken migration names the DDL that failed instead of a wall of SQL.
+ * the same file at nearly the same moment. Once a database reaches
+ * `SCHEMA_VERSION`, `PRAGMA user_version` short-circuits the ~50 DDL &
+ * `PRAGMA table_info` setup checks so short-lived hooks stay sub-millisecond.
  */
 export function openDatabase(dbPath) {
     if (dbPath !== ':memory:')
@@ -18,6 +19,11 @@ export function openDatabase(dbPath) {
         db.prepare('PRAGMA journal_mode = WAL').get();
     }
     db.prepare('PRAGMA busy_timeout = 5000').get();
+    const currentVersion = Number(db.prepare('PRAGMA user_version').get()
+        ?.user_version ?? 0);
+    if (dbPath !== ':memory:' && currentVersion === SCHEMA_VERSION) {
+        return db;
+    }
     for (const statement of SCHEMA_STATEMENTS) {
         // Index on a column that only exists after `migrate` runs on legacy DBs must
         // not abort opening; `migrate` ensures those columns and indexes exist.
@@ -31,6 +37,12 @@ export function openDatabase(dbPath) {
     }
     catch {
         // Non-fatal if opened read-only or restricted.
+    }
+    try {
+        db.prepare(`PRAGMA user_version = ${SCHEMA_VERSION}`).run();
+    }
+    catch {
+        // Read-only databases still work without stamping user_version.
     }
     return db;
 }
@@ -62,11 +74,59 @@ const COLUMNS = [
     { table: 'antibodies', column: 'root_cause', ddl: "TEXT NOT NULL DEFAULT ''" },
     { table: 'antibodies', column: 'triage_bucket', ddl: "TEXT NOT NULL DEFAULT ''" },
     { table: 'antibodies', column: 'ignored_count', ddl: 'INTEGER NOT NULL DEFAULT 0' },
+    // V4 schema columns
+    { table: 'antibodies', column: 'promoted_at', ddl: 'INTEGER NOT NULL DEFAULT 0' },
     { table: 'distill_jobs', column: 'project_scope', ddl: "TEXT NOT NULL DEFAULT '*'" },
     { table: 'distill_jobs', column: 'cwd', ddl: "TEXT NOT NULL DEFAULT ''" },
     { table: 'session_turns', column: 'last_prompt_sig', ddl: "TEXT NOT NULL DEFAULT ''" },
     { table: 'session_turns', column: 'prompt_at', ddl: 'INTEGER NOT NULL DEFAULT 0' },
 ];
+/**
+ * Upgrade legacy v1-v3 `pending_failures` whose PRIMARY KEY was `(session_id, tool_name)`
+ * to v4's multi-target `(session_id, tool_name, target_signature)` without losing rows.
+ */
+function migratePendingFailuresPrimaryKey(db) {
+    try {
+        const info = db.prepare('PRAGMA table_info(pending_failures)').all();
+        const targetCol = info.find((row) => row.name === 'target_signature');
+        if (!targetCol || Number(targetCol.pk ?? 0) > 0)
+            return;
+        db.exec('BEGIN IMMEDIATE');
+        try {
+            db.exec(`
+        CREATE TABLE pending_failures_v4 (
+          session_id       TEXT    NOT NULL,
+          tool_name        TEXT    NOT NULL,
+          trace            TEXT    NOT NULL,
+          injected_ids     TEXT    NOT NULL DEFAULT '[]',
+          human_hint       TEXT    NOT NULL DEFAULT '',
+          target_signature TEXT    NOT NULL DEFAULT '',
+          created_at       INTEGER NOT NULL,
+          PRIMARY KEY (session_id, tool_name, target_signature)
+        );
+        INSERT OR REPLACE INTO pending_failures_v4
+          (session_id, tool_name, trace, injected_ids, human_hint, target_signature, created_at)
+        SELECT session_id, tool_name, trace, COALESCE(injected_ids, '[]'),
+               COALESCE(human_hint, ''), COALESCE(target_signature, ''), created_at
+          FROM pending_failures;
+        DROP TABLE pending_failures;
+        ALTER TABLE pending_failures_v4 RENAME TO pending_failures;
+      `);
+            db.exec('COMMIT');
+        }
+        catch {
+            try {
+                db.exec('ROLLBACK');
+            }
+            catch {
+                // ignore rollback error
+            }
+        }
+    }
+    catch {
+        // Non-fatal on read-only or synthetic DBs.
+    }
+}
 function migrate(db) {
     let addedV2Quality = false;
     for (const { table, column, ddl } of COLUMNS) {
@@ -82,6 +142,7 @@ function migrate(db) {
             // A migration must never prevent the host from starting.
         }
     }
+    migratePendingFailuresPrimaryKey(db);
     if (addedV2Quality) {
         try {
             repairLibraryHygiene(db);

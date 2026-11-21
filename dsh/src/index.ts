@@ -15,9 +15,8 @@ import { renderSkillMarkdown } from '../../core/export.js';
 import { formatShareViolations, shareSanityCheck } from '../../core/share-guard.js';
 import { isSubstantiveHint } from '../../core/distiller.js';
 import { strings } from '../../core/i18n.js';
-import { extractGuardInput, findGuardHit, guardMode } from '../../core/guards.js';
-import { redact } from '../../core/redact.js';
 import { ImmuneRuntime, clampBudgetMs, resolveDrainBudgetMs } from '../../core/runtime.js';
+import { hydrateTeamRules, maybeSyncTeamRulesAfterDrain } from '../../core/team-sync.js';
 import { registerImmuneUiRoute } from './ui-route.js';
 import {
   DSH_EVENTS,
@@ -194,6 +193,23 @@ export function apply(ctx: DshContext): void {
 function startPlugin(ctx: DshContext): void {
   const log = makeLogger(ctx);
   const store = new ImmuneStore({ dbPath: resolveStorePath() });
+  try {
+    startPluginWithStore(ctx, store, log);
+  } catch (error) {
+    try {
+      store.close();
+    } catch {
+      // ignore close failure on abort
+    }
+    throw error;
+  }
+}
+
+function startPluginWithStore(
+  ctx: DshContext,
+  store: ImmuneStore,
+  log: ReturnType<typeof makeLogger>,
+): void {
   const runtime = new ImmuneRuntime(store);
   log.info(`[immune] storage: ${store.dbPath}`);
 
@@ -210,7 +226,13 @@ function startPlugin(ctx: DshContext): void {
   });
 
   ctx.on(DSH_EVENTS.sessionStart, ({ agent, source }) => {
-    const top = runtime.sessionStart({ sessionId: agent.id, source, workspace: process.cwd() });
+    const workspace = process.cwd();
+    try {
+      hydrateTeamRules(store, workspace);
+    } catch {
+      // Best-effort team rule hydration; never break session-start.
+    }
+    const top = runtime.sessionStart({ sessionId: agent.id, source, workspace, prewarm: true });
     const block = renderMemory(top, t.promptPreamble, 1400);
     if (block) agent.inject(createPluginMessage(block));
     log.info(`[immune] session-start (${source}): ${store.listAll(false).length} active antibody/queries`);
@@ -258,11 +280,18 @@ function startPlugin(ctx: DshContext): void {
   });
 
   ctx.on(DSH_EVENTS.preToolExecute, async (exec, next): Promise<DshPreToolDecision> => {
-    if (guardMode() === 'deny') {
-      const argsText = redact(extractGuardInput(exec?.arguments ?? {})).slice(0, 2000);
-      const hit = findGuardHit(argsText);
-      if (hit) {
-        return { kind: 'deny', reason: `[${hit.rule.id}] ${hit.rule.what} → ${hit.rule.instead}` };
+    const guard = runtime.evaluateLiveGuard({
+      sessionId: exec?.agent?.id ?? '',
+      toolName: exec?.name ?? 'Bash',
+      toolInput: exec?.arguments ?? {},
+      workspace: process.cwd(),
+    });
+    if (guard) {
+      if (guard.shouldDeny) {
+        return { kind: 'deny', reason: guard.banner };
+      }
+      if (guard.shouldAsk) {
+        return { kind: 'ask', reason: guard.banner };
       }
     }
     return next();
@@ -287,12 +316,26 @@ function startPlugin(ctx: DshContext): void {
     return downstream;
   });
 
-  ctx.on(DSH_EVENTS.turnStopping, async () => {
+  ctx.on(DSH_EVENTS.turnStopping, async (ev?: { agent?: { id?: string } }) => {
+    const workspace = process.cwd();
+    const sid = ev?.agent?.id ?? '';
+    if (sid) {
+      try {
+        runtime.settleTurn(sid, workspace);
+      } catch {
+        // Best-effort turn receipt settlement.
+      }
+    }
     await runtime.drain({
       budgetMs: drainBudgetMs(),
       selfMarkers: selfMarkers(),
       runPostDrainHooks: true,
     });
+    try {
+      maybeSyncTeamRulesAfterDrain(store, workspace);
+    } catch {
+      // Best-effort team rule sync.
+    }
   });
 
   ctx.effect(

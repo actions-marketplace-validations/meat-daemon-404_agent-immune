@@ -203,6 +203,25 @@ export const HOSTS = {
         dialect: 'mcp',
         notes: ['wires MCP server in Cline VS Code extension'],
     },
+    opencode: {
+        id: 'opencode',
+        label: 'OpenCode',
+        relativeConfigPath: join('.config', 'opencode', 'opencode.json'),
+        eventsKey: 'mcp',
+        includesFailureHook: false,
+        dialect: 'mcp',
+        mcpFormat: 'opencode',
+        notes: ['wires local MCP server in ~/.config/opencode/opencode.json; restart OpenCode to activate'],
+    },
+    kiro: {
+        id: 'kiro',
+        label: 'Kiro',
+        relativeConfigPath: join('.kiro', 'settings', 'mcp.json'),
+        eventsKey: 'mcpServers',
+        includesFailureHook: false,
+        dialect: 'mcp',
+        notes: ['wires MCP server in ~/.kiro/settings/mcp.json; reload Kiro to activate'],
+    },
 };
 /** Events in wiring order; timeouts in seconds (Gemini CLI converts to ms). */
 const HOOK_SPECS = [
@@ -417,7 +436,7 @@ function assertScriptsExist(host, scriptDir) {
         throw new Error(`hook scripts missing under ${scriptDir}: ${missing.join(', ')} — the install looks broken`);
     }
 }
-function wireMcpConfigFile(mcpConfigPath, mcpScriptPath, serversKey = 'mcpServers') {
+function wireMcpConfigFile(mcpConfigPath, mcpScriptPath, serversKey = 'mcpServers', mcpFormat = 'standard') {
     const { existed, config } = readConfig(mcpConfigPath);
     const serversRaw = config[serversKey];
     if (serversRaw !== undefined && (typeof serversRaw !== 'object' || serversRaw === null || Array.isArray(serversRaw))) {
@@ -426,12 +445,21 @@ function wireMcpConfigFile(mcpConfigPath, mcpScriptPath, serversKey = 'mcpServer
     const servers = serversRaw ?? {};
     config[serversKey] = servers;
     const existing = servers[MCP_SERVER_ID];
-    const wantedEntry = { command: 'node', args: [mcpScriptPath] };
-    const isSame = existing &&
-        existing.command === 'node' &&
-        Array.isArray(existing.args) &&
-        existing.args.length === 1 &&
-        existing.args[0] === mcpScriptPath;
+    const wantedEntry = mcpFormat === 'opencode'
+        ? { type: 'local', command: ['node', mcpScriptPath], enabled: true }
+        : { command: 'node', args: [mcpScriptPath] };
+    const isSame = mcpFormat === 'opencode'
+        ? Boolean(existing &&
+            existing.type === 'local' &&
+            Array.isArray(existing.command) &&
+            existing.command.length === 2 &&
+            existing.command[0] === 'node' &&
+            existing.command[1] === mcpScriptPath)
+        : Boolean(existing &&
+            existing.command === 'node' &&
+            Array.isArray(existing.args) &&
+            existing.args.length === 1 &&
+            existing.args[0] === mcpScriptPath);
     if (isSame) {
         return { added: 0, upgraded: 0, alreadyPresent: 1, backupPath: null };
     }
@@ -467,7 +495,7 @@ export function connectHost(hostId, options) {
     if (host.dialect === 'mcp') {
         const serversKey = host.eventsKey ?? 'mcpServers';
         const mcpPath = mcpServerPathOf(scriptDir);
-        const mcpRes = wireMcpConfigFile(configPath, mcpPath, serversKey);
+        const mcpRes = wireMcpConfigFile(configPath, mcpPath, serversKey, host.mcpFormat ?? 'standard');
         return {
             host: host.id,
             label: host.label,
@@ -564,6 +592,10 @@ export function listImmuneCommands(hostId, home) {
             const serversKey = host.eventsKey ?? 'mcpServers';
             const servers = config[serversKey];
             const entry = servers?.[MCP_SERVER_ID];
+            if (host.mcpFormat === 'opencode') {
+                const script = Array.isArray(entry?.command) && typeof entry.command[1] === 'string' ? entry.command[1] : '';
+                return script ? [`node "${script}"`] : [];
+            }
             const arg0 = Array.isArray(entry?.args) && typeof entry.args[0] === 'string' ? entry.args[0] : '';
             return arg0 ? [`node "${arg0}"`] : [];
         }
@@ -817,6 +849,12 @@ export function detectHosts(home) {
     const zedSettings = join(home, HOSTS.zed.relativeConfigPath);
     if (existsSync(zedSettings)) {
         detected.push({ host: 'zed', label: 'Zed', marker: zedSettings, wired: true });
+    }
+    if (existsSync(join(home, '.config', 'opencode'))) {
+        detected.push({ host: 'opencode', label: 'OpenCode', marker: '~/.config/opencode', wired: true });
+    }
+    if (existsSync(join(home, '.kiro'))) {
+        detected.push({ host: 'kiro', label: 'Kiro', marker: '~/.kiro', wired: true });
     }
     if (existsSync(join(home, '.zcode'))) {
         detected.push({

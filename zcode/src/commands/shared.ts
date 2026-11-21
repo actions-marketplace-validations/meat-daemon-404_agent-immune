@@ -135,10 +135,10 @@ export const style = {
 
 const COMMAND_HELP: Record<string, string> = {
   demo: 'immune demo\n  Run an end-to-end distill -> score -> recall -> inject simulation entirely in memory.',
-  mcp: 'immune mcp\n  Start the zero-dependency JSON-RPC 2.0 MCP server over stdio (26 tools).',
+  mcp: 'immune mcp\n  Start the zero-dependency JSON-RPC 2.0 MCP server over stdio (27 tools, 5 live resources, 3 workflow prompts).',
   connect:
     'immune connect [host] [--status] [--refresh] [--remove] [--json]\n' +
-    '  Auto-detect and wire coding agents (claude-code, codex, antigravity, gemini-cli, cursor, vscode, windsurf, zed, roo-code, claude-desktop, cline).\n' +
+    '  Auto-detect and wire coding agents (claude-code, codex, antigravity, gemini-cli, cursor, vscode, windsurf, zed, roo-code, claude-desktop, cline, opencode, kiro).\n' +
     '  With no host, wires all detected agents. Pass --remove to uninstall cleanly.',
   doctor: 'immune doctor [--json]\n  Verify Node engine, SQLite+FTS5 trigram/CJK, hook paths, hygiene, and drain budget.',
   ui: 'immune ui [--port <port>]\n  Start the local-only offline Web Dashboard on 127.0.0.1 (default port 7788).',
@@ -156,7 +156,7 @@ const COMMAND_HELP: Record<string, string> = {
   detours: 'immune detours\n  List sessions that probed the same target 4+ times read-only before fixing.',
   rewrite: 'immune rewrite [--dry-run] [--max <n>] [--id <a,b>]\n  Rewrite echo-grade command dumps into concise imperative advice via configured LLM.',
   consolidate: 'immune consolidate [--dry-run]\n  Merge near-duplicate rules (>=70% similarity, shared trigger & symptom) while preserving counters.',
-  seed: 'immune seed [<pack>] [--baseline widely|newly] [--remove]\n  List or install 9 builtin starter packs (git-safety, node-ts, python-uv, rust-cargo, go-mod, docker, modern-web, dsh-ecosystem, patrol-triage).',
+  seed: 'immune seed [<pack>] [--baseline widely|newly] [--remove]\n  List or install 12 builtin starter packs (git-safety, node-ts, python-uv, rust-cargo, go-mod, docker, modern-web, dsh-ecosystem, patrol-triage, sql-migrations, nextjs-react, windows-shell).',
   'ingest-skill': 'immune ingest-skill <path...> [--pack <name>] [--baseline widely|newly] [--remove]\n  Index external SKILL.md / Markdown playbooks into FTS5 for zero-bloat on-demand recall.',
   'ingest-disk': 'immune ingest-disk [<root...>] [--dry-run] [--depth <n>] [--max-projects <n>] [--max-rules <n>] [--no-codex-skills]\n  Discover repositories & skills under root directories (defaults to cwd) and extract scoped/universal rules.',
   workspaces: 'immune workspaces [--json]\n  List discovered workspace profiles, tech stacks, Baselines, and rule counts.',
@@ -166,7 +166,7 @@ const COMMAND_HELP: Record<string, string> = {
   'export-json': 'immune export-json [outPath]\n  Export a share-gated JSON library snapshot for team or cross-machine sync.',
   'import-json': 'immune import-json <snapshot.json>\n  Merge a JSON library snapshot into the current database.',
   'sync-doc': 'immune sync-doc [--out <file>] [--min-hits <n>]\n  Sync proven rules into AGENTS.md (or existing CLAUDE.md) inside <!-- immune:generated --> markers.',
-  guard: 'immune guard "<command>" [--tool Bash|Edit|Write] [--strict] [--hook] [--hook-host claude-code|cursor|antigravity|gemini-cli|generic] [--markdown] [--json]\n  Pre-flight blast-radius interceptor: score (0-100), block, or safely rewrite destructive agent commands before execution.',
+  guard: 'immune guard "<command>" [--tool Bash|Edit|Write] [--strict] [--hook] [--hook-host claude-code|cursor|antigravity|gemini-cli|generic] [--markdown] [--json]\n  immune guard --log [--limit N] [--json]\n  Pre-flight blast-radius interceptor: score (0-100), block, or safely rewrite destructive agent commands, or audit recent live interceptions.',
   vaccinate: 'immune vaccinate [--check] [--apply] [--refresh] [--lockfile <path>] [--markdown] [--json]\n  Scan Workspace DNA manifests and compile, verify, or apply a declarative .immune/vaccine.lock.json for zero-shot immunity.',
   federate: 'immune federate [<rules.jsonl...>] [--out <bundle.jsonl>] [--min-consensus <0-100>] [--svg] [--markdown] [--json]\n  Federate antibodies across workspaces/agents and promote corroborated clusters into Universal Swarm Laws.',
   autopsy: 'immune autopsy [--markdown] [--json]\n  Run a forensic post-mortem on prevented debug loops, rescued tokens, API dollar savings, and fragile scars.',

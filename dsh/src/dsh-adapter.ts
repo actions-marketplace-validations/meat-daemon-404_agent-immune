@@ -491,14 +491,14 @@ export function createPluginMessage(text: string): DshUserMessage {
   });
 }
 
-/** Log through the host logger. */
+/** Log through the host logger (null-safe if a minimal/synthetic host omits `logger`). */
 export function makeLogger(ctx: DshContext) {
   return {
     info: (message: string) => {
-      ctx.logger.info(message);
+      ctx?.logger?.info?.(message);
     },
     warn: (message: string) => {
-      ctx.logger.warn(message);
+      ctx?.logger?.warn?.(message);
     },
   };
 }

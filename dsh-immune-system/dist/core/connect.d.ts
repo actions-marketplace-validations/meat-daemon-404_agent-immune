@@ -23,7 +23,7 @@ export interface VendorInfo {
 export declare function vendorDist(home: string, opts?: {
     force?: boolean;
 }): VendorInfo;
-export type ConnectHostId = 'claude-code' | 'codex' | 'antigravity' | 'gemini-cli' | 'cursor' | 'vscode' | 'windsurf' | 'zed' | 'roo-code' | 'claude-desktop' | 'cline';
+export type ConnectHostId = 'claude-code' | 'codex' | 'antigravity' | 'gemini-cli' | 'cursor' | 'vscode' | 'windsurf' | 'zed' | 'roo-code' | 'claude-desktop' | 'cline' | 'opencode' | 'kiro';
 /** One hook script wired into a host event, in the shared `command` dialect. */
 interface HookHandler {
     type: 'command';
@@ -53,6 +53,8 @@ export interface HostDefinition {
     /** Codex, Antigravity, Gemini CLI, and Cursor have no PostToolUseFailure event. */
     includesFailureHook: boolean;
     dialect?: 'standard' | 'antigravity' | 'gemini-cli' | 'cursor' | 'mcp';
+    /** MCP entry shape: standard `{ command, args }` vs OpenCode `{ type: 'local', command: [...] }`. */
+    mcpFormat?: 'standard' | 'opencode';
     /** Extra steps the user must take after connecting. */
     notes: string[];
 }
