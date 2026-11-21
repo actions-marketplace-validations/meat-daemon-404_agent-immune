@@ -2,6 +2,13 @@
 
 All notable changes to **agent-immune** (`dsh-immune-system`) are documented in this file.
 
+## [3.0.1] - 2026-11-21
+
+### Fixed
+- **Preserve Existing Lockfile in `immune vaccinate --apply` (`zcode/src/commands/library.ts`)**: When `.immune/vaccine.lock.json` already exists on disk (e.g. a fresh clone with team-committed proven scars), `immune vaccinate --apply` now verifies its SHA-256 integrity and applies it directly without overwriting the lockfile from an empty local SQLite store. Refuses tampered lockfiles (`exit 1`); pass `--refresh` to regenerate explicitly.
+- **Prevent `--tool` Value Leakage in `immune guard` (`zcode/src/commands/library.ts`)**: Excluded the value following `--tool` (and `--tool=...`) when building the command payload and preserved command-level flags (e.g. `--force`) so `immune guard --tool Bash "git push origin main --force"` evaluates and rewrites cleanly without a spurious tool-name prefix.
+- **TypeScript 5.9 Build & Publish Workflow (`core/guard.ts`, `.github/workflows/npm-publish.yml`)**: Annotated `candidateRewrite: string | null` to eliminate `TS7022`, normalized `package.json` `repository.url` (`git+https://...`), and upgraded `npm-publish.yml` actions to `v7`.
+
 ## [3.0.0] - 2026-11-20
 
 ### Added

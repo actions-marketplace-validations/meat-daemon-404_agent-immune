@@ -19,7 +19,7 @@ import { diagnoseAgentArchetype, renderDiagnosisMarkdown, renderDiagnosisSvg, re
 import { IDE_TARGET_PATHS, compileIdeRules, type IdeRuleTarget } from '../../../core/compile-rules.js';
 import { renderAutopsyMarkdown, renderAutopsyTerminal, runPitfallAutopsy } from '../../../core/autopsy.js';
 import { evaluatePreFlightGuard, renderGuardHookDecision, renderGuardMarkdown, renderGuardTerminal } from '../../../core/guard.js';
-import { applyVaccineLockfile, detectWorkspaceDNA, renderVaccineMarkdown, renderVaccineTerminal, verifyVaccineLockfile, writeVaccineLockfile } from '../../../core/vaccine.js';
+import { applyVaccineLockfile, detectWorkspaceDNA, renderVaccineMarkdown, renderVaccineTerminal, verifyVaccineLockfile, writeVaccineLockfile, type VaccineLockfile } from '../../../core/vaccine.js';
 import { federateSwarmRules, renderFederationMarkdown, renderFederationSvg, renderFederationTerminal, type SwarmRuleSource } from '../../../core/federate.js';
 import { dshDirOf } from '../root-marker.js';
 import { clamp, flagValue, pad } from './shared.js';
@@ -618,7 +618,27 @@ export function cmdGuard(store: ImmuneStore, args: string[]): number {
   const asHook = args.includes('--hook');
   const strict = args.includes('--strict');
   const toolName = flagValue(args, '--tool') ?? 'Bash';
-  const payload = args.filter((a) => !a.startsWith('-')).join(' ').trim();
+  const positional: string[] = [];
+  let afterSeparator = false;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]!;
+    if (afterSeparator) {
+      positional.push(a);
+      continue;
+    }
+    if (a === '--') {
+      afterSeparator = true;
+      continue;
+    }
+    if (a === '--tool') {
+      i++;
+      continue;
+    }
+    if (a.startsWith('--tool=')) continue;
+    if (a === '--json' || a === '--markdown' || a === '--hook' || a === '--strict') continue;
+    positional.push(a);
+  }
+  const payload = positional.join(' ').trim();
   if (!payload) {
     process.stderr.write('usage: immune guard "<command-or-payload>" [--tool Bash|Edit|Write] [--strict] [--hook] [--markdown] [--json]\n');
     return 2;
@@ -654,6 +674,7 @@ export function cmdVaccinate(store: ImmuneStore, args: string[]): number {
   const asMarkdown = args.includes('--markdown');
   const isCheck = args.includes('--check');
   const shouldApply = args.includes('--apply');
+  const shouldRefresh = args.includes('--refresh');
   const explicitLock = flagValue(args, '--lockfile');
   const lockfilePath = resolve(explicitLock ?? join('.immune', 'vaccine.lock.json'));
 
@@ -671,15 +692,33 @@ export function cmdVaccinate(store: ImmuneStore, args: string[]): number {
     return report.valid ? 0 : 1;
   }
 
-  const { lockfile } = writeVaccineLockfile(process.cwd(), store.listAll(false), { lockfilePath });
+  let lockfile: VaccineLockfile;
+  if (shouldApply && existsSync(lockfilePath) && !shouldRefresh) {
+    const raw = readFileSync(lockfilePath, 'utf8');
+    const report = verifyVaccineLockfile(raw);
+    if (!report.valid) {
+      if (asJson) {
+        process.stdout.write(`${JSON.stringify({ mode: 'apply', lockfilePath, valid: false, reason: report.reason }, null, 2)}\n`);
+      } else {
+        process.stderr.write(`vaccinate apply: lockfile integrity check failed (${report.reason})\n`);
+      }
+      return 1;
+    }
+    lockfile = JSON.parse(raw) as VaccineLockfile;
+  } else {
+    ({ lockfile } = writeVaccineLockfile(process.cwd(), store.listAll(false), { lockfilePath }));
+  }
+
   let appliedCount = 0;
+  let skippedCount = 0;
   if (shouldApply) {
     const res = applyVaccineLockfile(store, lockfile);
     appliedCount = res.applied;
+    skippedCount = Math.max(0, res.total - res.applied);
   }
 
   if (asJson) {
-    process.stdout.write(`${JSON.stringify({ lockfilePath, appliedCount, lockfile }, null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify({ lockfilePath, appliedCount, skippedCount, lockfile }, null, 2)}\n`);
     return 0;
   }
   if (asMarkdown) {
@@ -687,6 +726,9 @@ export function cmdVaccinate(store: ImmuneStore, args: string[]): number {
     return 0;
   }
   process.stdout.write(renderVaccineTerminal(lockfile, lockfilePath));
+  if (shouldApply) {
+    process.stdout.write(`  Applied to SQLite : ${appliedCount} new (${skippedCount} already present)\n`);
+  }
   return 0;
 }
 

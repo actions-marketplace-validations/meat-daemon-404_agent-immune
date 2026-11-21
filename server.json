@@ -6,12 +6,12 @@
     "url": "https://github.com/meat-daemon-404/agent-immune",
     "source": "github"
   },
-  "version": "3.0.0",
+  "version": "3.0.1",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "dsh-immune-system",
-      "version": "3.0.0",
+      "version": "3.0.1",
       "runtimeHint": "npx",
       "runtimeArguments": [
         {

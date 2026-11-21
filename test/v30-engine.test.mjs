@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -35,7 +36,7 @@ import {
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
-test('v3.0 all 7 manifests are synchronized to version 3.0.0', () => {
+test('v3.0 all 7 manifests are synchronized across all 10 version fields', () => {
   const rootPkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
   const nestedPkg = JSON.parse(readFileSync(join(ROOT, 'dsh-immune-system/package.json'), 'utf8'));
   const zcodePlugin = JSON.parse(readFileSync(join(ROOT, 'dsh-immune-system/.zcode-plugin/plugin.json'), 'utf8'));
@@ -44,6 +45,7 @@ test('v3.0 all 7 manifests are synchronized to version 3.0.0', () => {
   const claudeMarket = JSON.parse(readFileSync(join(ROOT, '.claude-plugin/marketplace.json'), 'utf8'));
   const serverJson = JSON.parse(readFileSync(join(ROOT, 'server.json'), 'utf8'));
 
+  assert.match(rootPkg.version, /^3\.\d+\.\d+$/);
   for (const v of [
     rootPkg.version,
     rootPkg.dsh?.version,
@@ -56,7 +58,7 @@ test('v3.0 all 7 manifests are synchronized to version 3.0.0', () => {
     serverJson.version,
     serverJson.packages?.[0]?.version,
   ]) {
-    assert.equal(v, '3.0.0');
+    assert.equal(v, rootPkg.version);
   }
 });
 
@@ -357,5 +359,115 @@ test('v3.0 CLI help, completions, and SDK barrel expose guard, vaccinate, and fe
     'federateSwarmRules',
   ]) {
     assert.ok(indexJs.includes(sym), `dist/core/index.js exports ${sym}`);
+  }
+});
+
+test('v3.0.1 CLI guard excludes --tool value from payload and preserves command flags', () => {
+  const cli = join(ROOT, 'dsh-immune-system', 'dist', 'zcode', 'src', 'cli.js');
+  const tmp = mkdtempSync(join(tmpdir(), 'immune-v301-guard-'));
+  try {
+    const env = {
+      ...process.env,
+      IMMUNE_DB_PATH: join(tmp, 'test.sqlite'),
+      IMMUNE_SHARED_DB_PATH: join(tmp, 'shared.sqlite'),
+    };
+    const r1 = spawnSync(process.execPath, [cli, 'guard', '--tool', 'Edit', 'rm -rf /', '--json'], {
+      cwd: tmp,
+      env,
+      encoding: 'utf8',
+    });
+    assert.equal(r1.status, 1);
+    const v1 = JSON.parse(r1.stdout);
+    assert.equal(v1.toolName, 'Edit');
+    assert.equal(v1.payload, 'rm -rf /');
+
+    const r2 = spawnSync(
+      process.execPath,
+      [cli, 'guard', '--tool', 'Bash', 'git push origin main --force', '--json'],
+      { cwd: tmp, env, encoding: 'utf8' },
+    );
+    assert.equal(r2.status, 0);
+    const v2 = JSON.parse(r2.stdout);
+    assert.equal(v2.toolName, 'Bash');
+    assert.equal(v2.payload, 'git push origin main --force');
+    assert.equal(v2.suggestedRewrite, 'git push origin main --force-with-lease');
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('v3.0.1 CLI vaccinate --apply preserves existing lockfile proven scars, rejects tampering, and supports --refresh', () => {
+  const cli = join(ROOT, 'dsh-immune-system', 'dist', 'zcode', 'src', 'cli.js');
+  const tmp = mkdtempSync(join(tmpdir(), 'immune-v301-vacc-'));
+  try {
+    const ws = join(tmp, 'repo');
+    mkdirSync(ws, { recursive: true });
+    writeFileSync(join(ws, 'package.json'), '{"name":"repo"}\n');
+    writeFileSync(join(ws, 'pnpm-lock.yaml'), "lockfileVersion: '9.0'\n");
+
+    const lockPath = join(ws, '.immune', 'vaccine.lock.json');
+    const teamScarRx = 'Use pnpm --filter @acme/api test instead of root npm test';
+    writeVaccineLockfile(
+      ws,
+      [
+        {
+          trigger_pattern: 'pnpm filter workspace test',
+          symptom: 'root npm test misses workspace package',
+          prescription: teamScarRx,
+          tool_name: 'Bash',
+          hit_count: 8,
+          fail_count: 0,
+          status: 'active',
+        },
+      ],
+      { lockfilePath: lockPath },
+    );
+    const originalLockRaw = readFileSync(lockPath, 'utf8');
+
+    // Fresh developer clone with empty SQLite DB runs `vaccinate --apply`
+    const freshEnv = {
+      ...process.env,
+      IMMUNE_DB_PATH: join(tmp, 'fresh.sqlite'),
+      IMMUNE_SHARED_DB_PATH: join(tmp, 'shared.sqlite'),
+    };
+    const applyOut = execFileSync(process.execPath, [cli, 'vaccinate', '--apply', '--json'], {
+      cwd: ws,
+      env: freshEnv,
+      encoding: 'utf8',
+    });
+    const applied = JSON.parse(applyOut);
+    assert.ok(applied.appliedCount >= 3);
+    assert.equal(readFileSync(lockPath, 'utf8'), originalLockRaw, 'existing lockfile must not be overwritten');
+
+    const listed = JSON.parse(
+      execFileSync(process.execPath, [cli, 'list', '--json'], { cwd: ws, env: freshEnv, encoding: 'utf8' }),
+    );
+    assert.ok(
+      listed.some((r) => r.prescription === teamScarRx),
+      'proven team scar from committed lockfile must be hydrated into fresh SQLite store',
+    );
+
+    // Tampered lockfile must be rejected by --apply
+    const tampered = JSON.parse(originalLockRaw);
+    tampered.antibodies[0].prescription = 'evil tampered command';
+    writeFileSync(lockPath, `${JSON.stringify(tampered, null, 2)}\n`);
+    const badApply = spawnSync(process.execPath, [cli, 'vaccinate', '--apply', '--json'], {
+      cwd: ws,
+      env: freshEnv,
+      encoding: 'utf8',
+    });
+    assert.equal(badApply.status, 1, 'tampered lockfile must fail integrity verification');
+
+    // Explicit --refresh regenerates a valid lockfile
+    const refreshOut = execFileSync(process.execPath, [cli, 'vaccinate', '--apply', '--refresh', '--json'], {
+      cwd: ws,
+      env: freshEnv,
+      encoding: 'utf8',
+    });
+    const refreshed = JSON.parse(refreshOut);
+    assert.equal(verifyVaccineLockfile(readFileSync(lockPath, 'utf8')).valid, true);
+    assert.ok(refreshed.lockfile.antibodies.length >= 2);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
   }
 });
