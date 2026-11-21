@@ -3,20 +3,13 @@ import { strings } from '../../core/i18n.js';
 function sanitize(value) {
     return value.replace(/[<>]/g, ' ').replace(/\s+/g, ' ').trim();
 }
-/** Clamp one field so a single antibody cannot dominate the block. */
+/**
+ * Clamp and sanitise one field so a single antibody cannot dominate the block
+ * or close/inject `</immune_memory>` markup (AGENTS.md #18).
+ */
 function clampField(value, max) {
     const text = sanitize(value);
     return text.length > max ? `${text.slice(0, max)}…` : text;
-}
-/**
- * Strip tag characters so injected text cannot close or open the wrapper.
- * Distilled fields come from raw error traces and model output; a trace line
- * containing `</immune_memory>` (or prompt-injection markup) must not escape
- * the block. Same contract as the DSH side's sanitize(): the database keeps
- * the faithful text, the renderer guarantees the delimiter.
- */
-function sanitizeField(value) {
-    return value.replace(/[<>]/g, ' ');
 }
 /**
  * Render at most a handful of antibodies as an `<immune_memory>` block.
@@ -30,9 +23,9 @@ export function formatImmuneContext(antibodies, maxChars = 1200) {
         return '';
     const t = strings();
     const lines = antibodies.map((ab, i) => `${i + 1}. ${(ab.ignored_count ?? 0) >= 2 ? `[CRITICAL · ignored ${ab.ignored_count}×] ` : ''}` +
-        `[${t.trigger}: ${clampField(sanitizeField(ab.trigger_pattern), 80)}] ` +
-        `${t.avoid}: ${clampField(sanitizeField(ab.symptom), 80)} -> ` +
-        `${t.do}: ${clampField(sanitizeField(ab.prescription), 100)}`);
+        `[${t.trigger}: ${clampField(ab.trigger_pattern, 80)}] ` +
+        `${t.avoid}: ${clampField(ab.symptom, 80)} -> ` +
+        `${t.do}: ${clampField(ab.prescription, 100)}`);
     const body = lines.join('\n');
     const clipped = body.length > maxChars ? `${body.slice(0, maxChars)}…` : body;
     return ['<immune_memory>', t.promptPreamble, clipped, '</immune_memory>'].join('\n');
@@ -47,7 +40,7 @@ export function formatToolWarning(antibodies, maxChars = 700) {
     if (antibodies.length === 0)
         return '';
     const t = strings();
-    const lines = antibodies.map((ab, i) => `${i + 1}. ${clampField(sanitizeField(ab.symptom), 70)} -> ${clampField(sanitizeField(ab.prescription), 90)}`);
+    const lines = antibodies.map((ab, i) => `${i + 1}. ${clampField(ab.symptom, 70)} -> ${clampField(ab.prescription, 90)}`);
     const body = lines.join('\n');
     const clipped = body.length > maxChars ? `${body.slice(0, maxChars)}…` : body;
     return `<immune_memory>\n${t.toolPreamble}\n${clipped}\n</immune_memory>`;

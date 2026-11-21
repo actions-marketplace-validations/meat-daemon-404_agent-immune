@@ -15,17 +15,35 @@
  */
 import { createServer } from 'node:http';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { basename, dirname } from 'node:path';
 import { ImmuneStore } from '../store/index.js';
 import { renderPage } from './page.js';
 import { resolveLocale } from '../i18n.js';
-import { applyAction, evolutionStats, readState, readWorkspaces, resolveBudgetMs, runHygieneAction, } from './query.js';
+import { applyAction, evaluateUiGuard, evolutionStats, readFederationPreview, readGuardEvents, readInsights, readState, readWorkspaces, resolveBudgetMs, runHygieneAction, } from './query.js';
 import { exportLibrary, importLibrary } from '../sync.js';
 import { renderSkillMarkdown } from '../export.js';
 import { shareSanityCheck } from '../share-guard.js';
 import { scanMagpieTelemetry } from '../audit/magpie.js';
 import { explainRecall } from '../explain.js';
+const LOOPBACK_HOST_RE = /^(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?$/i;
+function isLoopbackHost(req) {
+    const host = req.headers.host;
+    if (!host)
+        return true;
+    return LOOPBACK_HOST_RE.test(host.trim());
+}
+function workspaceDirForDb(dbPath) {
+    if (!dbPath || dbPath === ':memory:')
+        return process.cwd();
+    const parent = dirname(dbPath);
+    if (basename(parent).toLowerCase() === '.dsh') {
+        return dirname(parent);
+    }
+    return process.cwd();
+}
 export async function startUiServer(options = {}) {
     const store = new ImmuneStore(options.dbPath ? { dbPath: options.dbPath } : {});
+    const workspaceDir = workspaceDirForDb(store.dbPath);
     const token = randomBytes(24).toString('hex');
     const locale = resolveLocale() === 'en' ? 'en' : 'zh-CN';
     const server = createServer((req, res) => {
@@ -44,6 +62,12 @@ export async function startUiServer(options = {}) {
         return a.length === b.length && timingSafeEqual(a, b);
     }
     function handle(req, res) {
+        // Reject DNS-rebinding requests carrying a non-loopback Host header before
+        // serving the page containing the per-run API token.
+        if (!isLoopbackHost(req)) {
+            sendJson(res, 403, { error: 'forbidden host' });
+            return;
+        }
         const url = new URL(req.url ?? '/', 'http://127.0.0.1');
         const path = url.pathname;
         if (path === '/' || path === '/index.html') {
@@ -52,7 +76,7 @@ export async function startUiServer(options = {}) {
             res.writeHead(200, {
                 'content-type': 'text/html; charset=utf-8',
                 'cache-control': 'no-store',
-                'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'",
+                'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
                 'x-content-type-options': 'nosniff',
                 'referrer-policy': 'no-referrer',
             });
@@ -83,7 +107,8 @@ export async function startUiServer(options = {}) {
             // Token-gated like every /api path: the download link carries it.
             const format = url.searchParams.get('format') === 'json' ? 'json' : 'md';
             const snapshot = format === 'json' ? exportLibrary(store) : null;
-            const exportRows = snapshot ? snapshot.antibodies : store.exportable(3);
+            const mdRows = snapshot ? null : store.exportable(3);
+            const exportRows = snapshot ? snapshot.antibodies : mdRows;
             const violations = shareSanityCheck(exportRows);
             if (violations.length > 0) {
                 sendJson(res, 422, { error: 'export blocked by the share gate', violations });
@@ -95,7 +120,7 @@ export async function startUiServer(options = {}) {
                 'cache-control': 'no-store',
                 'x-content-type-options': 'nosniff',
             });
-            res.end(snapshot ? JSON.stringify(snapshot, null, 2) : renderSkillMarkdown(store.exportable(3)));
+            res.end(snapshot ? JSON.stringify(snapshot, null, 2) : renderSkillMarkdown(mdRows));
             return;
         }
         if (path === '/api/import' && req.method === 'POST') {
@@ -138,9 +163,46 @@ export async function startUiServer(options = {}) {
         if (path === '/api/explain' && req.method === 'GET') {
             const query = url.searchParams.get('q') ?? '';
             const rawLimit = Number(url.searchParams.get('limit') ?? '5');
-            const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(10, rawLimit) : 5;
+            const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(10, Math.trunc(rawLimit)) : 5;
             const toolName = url.searchParams.get('tool') ?? undefined;
             sendJson(res, 200, explainRecall(store, query, { limit, toolName }));
+            return;
+        }
+        if (path === '/api/insights' && req.method === 'GET') {
+            sendJson(res, 200, readInsights(store, workspaceDir));
+            return;
+        }
+        if (path === '/api/guard-events' && req.method === 'GET') {
+            const rawLimit = Number(url.searchParams.get('limit') ?? '25');
+            const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(200, Math.trunc(rawLimit)) : 25;
+            sendJson(res, 200, readGuardEvents(store, limit));
+            return;
+        }
+        if (path === '/api/federate' && req.method === 'GET') {
+            sendJson(res, 200, readFederationPreview(store, workspaceDir));
+            return;
+        }
+        if (path === '/api/guard' && req.method === 'POST') {
+            readBody(req, res, (body) => {
+                let parsed;
+                try {
+                    parsed = (body.trim() ? JSON.parse(body) : {});
+                }
+                catch {
+                    sendJson(res, 400, { error: 'invalid json' });
+                    return;
+                }
+                const payload = typeof parsed.payload === 'string' ? parsed.payload : '';
+                if (!payload.trim()) {
+                    sendJson(res, 400, { error: 'payload is required' });
+                    return;
+                }
+                sendJson(res, 200, evaluateUiGuard(store, payload, {
+                    toolName: typeof parsed.toolName === 'string' ? parsed.toolName : 'Bash',
+                    strict: parsed.strict === true,
+                    workspace: workspaceDir,
+                }));
+            }, 65536);
             return;
         }
         if (path === '/api/hygiene' && req.method === 'POST') {
@@ -178,18 +240,41 @@ export async function startUiServer(options = {}) {
         }
         sendJson(res, 404, { error: 'not found' });
     }
-    const port = await listen(server, options.port ?? 7788, options.portAttempts ?? 8);
+    let port;
+    try {
+        port = await listen(server, options.port ?? 7788, options.portAttempts ?? 8);
+    }
+    catch (error) {
+        try {
+            store.close();
+        }
+        catch {
+            // ignore close failure on bind error
+        }
+        throw error;
+    }
     const url = `http://127.0.0.1:${port}/`;
+    let closed = false;
     return {
         url,
         port,
-        close: () => new Promise((resolve) => {
-            server.close(() => {
-                store.close();
-                resolve();
+        close: () => {
+            if (closed)
+                return Promise.resolve();
+            closed = true;
+            return new Promise((resolve) => {
+                server.close(() => {
+                    try {
+                        store.close();
+                    }
+                    catch {
+                        // ignore double-close
+                    }
+                    resolve();
+                });
+                server.closeAllConnections?.();
             });
-            server.closeAllConnections?.();
-        }),
+        },
     };
 }
 /** Try successive ports until one binds, so a busy 7788 is not fatal. */
@@ -233,15 +318,30 @@ function readBody(req, res, done, max = 4096) {
         if (aborted)
             return;
         body += chunk.toString('utf8');
-        // Small action objects by default; import raises the cap for snapshots.
+        // Small action objects by default; import and guard raise the cap.
         if (body.length > max) {
             aborted = true;
-            sendJson(res, 413, { error: 'body too large' });
-            req.destroy();
+            res.writeHead(413, {
+                'content-type': 'application/json; charset=utf-8',
+                'cache-control': 'no-store',
+                'x-content-type-options': 'nosniff',
+                connection: 'close',
+            });
+            res.end(JSON.stringify({ error: 'body too large' }), () => {
+                req.destroy();
+            });
         }
     });
     req.on('end', () => {
-        if (!aborted)
+        if (aborted)
+            return;
+        try {
             done(body);
+        }
+        catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            if (!res.headersSent)
+                sendJson(res, 500, { error: message });
+        }
     });
 }

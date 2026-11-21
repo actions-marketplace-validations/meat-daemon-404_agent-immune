@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { basename, extname, join, resolve } from 'node:path';
 import { detectProjectBaseline, filterRulesByBaseline, inferRuleBaseline, } from './baseline.js';
 import { redact, redactOutbound } from './redact.js';
@@ -17,6 +17,8 @@ const BOILERPLATE_HEADINGS = new Set([
 ]);
 const SKIP_DIRS = new Set(['.git', 'node_modules', 'dist', 'build', '.next', '.turbo']);
 const MAX_SKILL_FILES = 200;
+const MAX_SKILL_FILE_BYTES = 512 * 1024;
+const MAX_SKILL_DEPTH = 12;
 function sanitizeText(raw, maxLen) {
     const scrubbed = redact(redactOutbound(raw))
         .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
@@ -305,31 +307,41 @@ export function parseSkillMarkdown(markdown, defaultTitle = 'guidance') {
 function collectMarkdownFiles(inputs, cwd) {
     const files = [];
     const seen = new Set();
-    const walk = (targetPath) => {
-        if (files.length >= MAX_SKILL_FILES)
+    const walk = (targetPath, depth) => {
+        if (files.length >= MAX_SKILL_FILES || depth > MAX_SKILL_DEPTH)
             return;
         const resolved = resolve(cwd, targetPath);
-        if (seen.has(resolved) || !existsSync(resolved))
+        if (!existsSync(resolved))
             return;
-        seen.add(resolved);
+        let canonical = resolved;
+        try {
+            canonical = realpathSync(resolved);
+        }
+        catch {
+            return;
+        }
+        if (seen.has(canonical))
+            return;
+        seen.add(canonical);
         let st;
         try {
-            st = statSync(resolved);
+            st = statSync(canonical);
         }
         catch {
             return;
         }
         if (st.isFile()) {
-            const ext = extname(resolved).toLowerCase();
-            if (ext === '.md' || ext === '.mdx' || ext === '.txt')
-                files.push(resolved);
+            const ext = extname(canonical).toLowerCase();
+            if ((ext === '.md' || ext === '.mdx' || ext === '.txt') && st.size <= MAX_SKILL_FILE_BYTES) {
+                files.push(canonical);
+            }
             return;
         }
         if (!st.isDirectory())
             return;
         let entries;
         try {
-            entries = readdirSync(resolved, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
+            entries = readdirSync(canonical, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
         }
         catch {
             return;
@@ -339,11 +351,11 @@ function collectMarkdownFiles(inputs, cwd) {
                 break;
             if (SKIP_DIRS.has(entry.name))
                 continue;
-            walk(join(resolved, entry.name));
+            walk(join(canonical, entry.name), depth + 1);
         }
     };
     for (const input of inputs)
-        walk(input);
+        walk(input, 0);
     return files;
 }
 /**

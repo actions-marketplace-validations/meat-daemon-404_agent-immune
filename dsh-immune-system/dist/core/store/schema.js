@@ -1,11 +1,12 @@
 /**
- * Schema for the immune database (v2), as individual statements.
+ * Schema for the immune database (v4), as individual statements.
  *
  * Statements run one at a time through `prepare().run()` so DDL stays portable
  * and a broken statement names itself cleanly.
  *
  * FTS5 uses the `trigram` tokenizer for mixed Chinese + English substring recall.
  */
+export const SCHEMA_VERSION = 4;
 export const SCHEMA_STATEMENTS = [
     `CREATE TABLE IF NOT EXISTS antibodies (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -30,7 +31,8 @@ export const SCHEMA_STATEMENTS = [
     rubric_score        INTEGER NOT NULL DEFAULT 70,
     root_cause          TEXT    NOT NULL DEFAULT '',
     triage_bucket       TEXT    NOT NULL DEFAULT '',
-    ignored_count       INTEGER NOT NULL DEFAULT 0
+    ignored_count       INTEGER NOT NULL DEFAULT 0,
+    promoted_at         INTEGER NOT NULL DEFAULT 0
   )`,
     `CREATE VIRTUAL TABLE IF NOT EXISTS antibodies_fts USING fts5(
     trigger_pattern,
@@ -62,7 +64,7 @@ export const SCHEMA_STATEMENTS = [
     human_hint       TEXT    NOT NULL DEFAULT '',
     target_signature TEXT    NOT NULL DEFAULT '',
     created_at       INTEGER NOT NULL,
-    PRIMARY KEY (session_id, tool_name)
+    PRIMARY KEY (session_id, tool_name, target_signature)
   )`,
     `CREATE TABLE IF NOT EXISTS stuck_state (
     session_id      TEXT    NOT NULL,
@@ -184,4 +186,20 @@ export const SCHEMA_STATEMENTS = [
     source          TEXT    NOT NULL DEFAULT '',
     last_scanned_at INTEGER NOT NULL
   )`,
+    // V4: Persistent Pre-Flight Guard interception audit log.
+    `CREATE TABLE IF NOT EXISTS guard_events (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id        TEXT    NOT NULL DEFAULT '',
+    tool_name         TEXT    NOT NULL DEFAULT 'Bash',
+    decision          TEXT    NOT NULL,
+    severity          TEXT    NOT NULL,
+    blast_radius      INTEGER NOT NULL DEFAULT 0,
+    policy_ids        TEXT    NOT NULL DEFAULT '[]',
+    payload_preview   TEXT    NOT NULL DEFAULT '',
+    suggested_rewrite TEXT    NOT NULL DEFAULT '',
+    project_scope     TEXT    NOT NULL DEFAULT '*',
+    created_at        INTEGER NOT NULL
+  )`,
+    `CREATE INDEX IF NOT EXISTS idx_guard_events_created ON guard_events(created_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_guard_events_decision ON guard_events(decision, created_at DESC)`,
 ];

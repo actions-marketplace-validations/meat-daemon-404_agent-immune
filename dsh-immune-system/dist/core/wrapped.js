@@ -22,13 +22,18 @@ export function formatCompactNumber(value) {
     if (value >= 10_000)
         return `${(value / 1_000).toFixed(1).replace(/\.0$/, '')}k`;
     if (value >= 1_000)
-        return value.toLocaleString('en-US');
+        return Math.round(value).toLocaleString('en-US');
     return String(Math.round(value));
 }
 /**
  * Compute an overall 0-100 Immunity Score from active rules, injections, and repeat failure rate.
  */
 export function computeImmunityScore(input) {
+    if (Math.max(0, input.activeRules) === 0 &&
+        Math.max(0, input.totalCalls) === 0 &&
+        Math.max(0, input.totalInjections) === 0) {
+        return 0;
+    }
     const calls = Math.max(1, input.totalCalls);
     const repeatRate = Math.min(1, Math.max(0, input.repeatFailures / calls));
     const baseFromLowRepeat = Math.round((1 - Math.min(1, repeatRate * 5)) * 55);
@@ -45,7 +50,7 @@ export function renderImmunityBadgeSvg(input) {
     const leftText = 'agent-immune';
     const rightText = `${score}/100 · ${formatCompactNumber(input.activeRules)} rules`;
     const leftWidth = 92;
-    const rightWidth = Math.max(96, rightText.length * 6 + 18);
+    const rightWidth = Math.max(108, Math.ceil(rightText.length * 7.2) + 20);
     const totalWidth = leftWidth + rightWidth;
     return `<svg xmlns="http://www.w3.org/2000/svg" width="${totalWidth}" height="20" role="img" aria-label="${escapeSvgText(`${leftText}: ${rightText}`)}">
   <title>${escapeSvgText(`${leftText}: ${rightText}`)}</title>
@@ -76,7 +81,9 @@ export function renderWrappedMarkdown(input) {
     const repeatPct = input.totalCalls > 0 ? `${((input.repeatFailures / input.totalCalls) * 100).toFixed(1)}%` : '0.0%';
     const nemeses = (input.topNemeses ?? []).slice(0, 3);
     const nemesisLines = nemeses.length > 0
-        ? nemeses.map((n, idx) => `| #${idx + 1} | \`${n.label.replace(/\|/g, '\\|')}\` | ${formatCompactNumber(n.count)} |`).join('\n')
+        ? nemeses
+            .map((n, idx) => `| #${idx + 1} | \`${n.label.replace(/[\r\n]+/g, ' ').replace(/`/g, "'").replace(/\|/g, '\\|')}\` | ${formatCompactNumber(n.count)} |`)
+            .join('\n')
         : '| #1 | `(no recurring nemeses recorded)` | 0 |';
     return [
         `### 🛡️ Agent Pitfall Immunity Scorecard — **${score}/100** (${grade})`,
@@ -111,29 +118,29 @@ export function renderWrappedSvg(input) {
         .slice(0, 6)
         .map(escapeSvgText)
         .join(' · ');
-    const nemeses = (input.topNemeses && input.topNemeses.length > 0
-        ? input.topNemeses
-        : [
-            { label: 'Edit: Target file not read in session before edit', count: 142 },
-            { label: 'Bash: Interactive prompt / missing non-TTY flag', count: 98 },
-            { label: 'TypeScript: Cross-OS path separator mismatch', count: 64 },
-        ]).slice(0, 3);
+    const nemeses = (input.topNemeses ?? []).slice(0, 3);
     const scoreColor = score >= 85 ? '#34d399' : score >= 65 ? '#fbbf24' : '#f87171';
     const repeatPct = input.totalCalls > 0 ? `${((input.repeatFailures / input.totalCalls) * 100).toFixed(1)}%` : '0.0%';
-    const nemesisRows = nemeses
-        .map((item, idx) => {
-        const y = 418 + idx * 46;
-        const label = escapeSvgText(item.label.length > 68 ? `${item.label.slice(0, 65)}...` : item.label);
-        const count = escapeSvgText(`${formatCompactNumber(item.count)}x`);
-        return `
+    const nemesisRows = nemeses.length > 0
+        ? nemeses
+            .map((item, idx) => {
+            const y = 418 + idx * 46;
+            const label = escapeSvgText(item.label.length > 68 ? `${item.label.slice(0, 65)}...` : item.label);
+            const count = escapeSvgText(`${formatCompactNumber(item.count)}x`);
+            return `
     <g transform="translate(56, ${y})">
       <rect width="730" height="36" rx="8" fill="#111827" stroke="#1f2937" stroke-width="1"/>
       <text x="16" y="23" fill="#f87171" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" font-weight="700">#${idx + 1}</text>
       <text x="48" y="23" fill="#e5e7eb" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13">${label}</text>
       <text x="712" y="23" fill="#9ca3af" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" font-weight="700" text-anchor="end">${count}</text>
     </g>`;
-    })
-        .join('');
+        })
+            .join('')
+        : `
+    <g transform="translate(56, 418)">
+      <rect width="730" height="44" rx="8" fill="#111827" stroke="#1f2937" stroke-width="1"/>
+      <text x="365" y="27" fill="#94a3b8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" text-anchor="middle">No recurring pitfall nemeses recorded yet — run immune audit or seed.</text>
+    </g>`;
     return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630" role="img" aria-label="${title}">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">

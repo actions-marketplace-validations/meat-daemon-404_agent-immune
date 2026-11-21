@@ -216,14 +216,14 @@ export function createPluginMessage(text) {
         source: Object.freeze({ kind: `plugin:${PLUGIN_NAME}` }),
     });
 }
-/** Log through the host logger. */
+/** Log through the host logger (null-safe if a minimal/synthetic host omits `logger`). */
 export function makeLogger(ctx) {
     return {
         info: (message) => {
-            ctx.logger.info(message);
+            ctx?.logger?.info?.(message);
         },
         warn: (message) => {
-            ctx.logger.warn(message);
+            ctx?.logger?.warn?.(message);
         },
     };
 }

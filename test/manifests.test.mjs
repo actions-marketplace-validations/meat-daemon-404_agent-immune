@@ -64,10 +64,15 @@ test('the installable package references only files inside itself', () => {
   const pkg = readJson('dsh-immune-system/package.json');
   assert.equal(pkg.name, 'dsh-immune-system');
   assert.equal(pkg.main, './dist/dsh/src/index.js');
-  assert.equal(pkg.exports?.['.'], './dist/dsh/src/index.js');
+  assert.equal(pkg.types, './dist/dsh/src/index.d.ts');
+  const rootExport = pkg.exports?.['.'];
+  const rootDefault = typeof rootExport === 'string' ? rootExport : rootExport?.default;
+  const rootTypes = typeof rootExport === 'string' ? undefined : rootExport?.types;
+  assert.equal(rootDefault, './dist/dsh/src/index.js');
+  assert.equal(rootTypes, './dist/dsh/src/index.d.ts');
   assert.equal(pkg.dsh?.bundle?.patch, './cordis.patch.yml');
 
-  for (const relative of [pkg.main, pkg.exports['.'], pkg.dsh.bundle.patch]) {
+  for (const relative of [pkg.main, pkg.types, rootDefault, rootTypes, pkg.dsh.bundle.patch]) {
     assert.ok(!relative.startsWith('..'), `${relative} escapes the package root`);
     assert.ok(
       existsSync(join(ROOT, 'dsh-immune-system', relative)),

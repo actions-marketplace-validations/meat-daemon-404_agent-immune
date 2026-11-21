@@ -10,6 +10,7 @@ import { dirname, isAbsolute, join } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import type { CallRow } from '../backfill.js';
 import { resolveWorkspaceRoot } from '../hygiene.js';
+import { canonicalToolName } from '../tools.js';
 import { pickSalientErrorLine } from '../trace.js';
 import { clampText, type AuditSession } from './types.js';
 
@@ -101,13 +102,13 @@ function safeJson(text: string): unknown {
 }
 
 // ------------------------------------------------------------------- Codex
-const CODEX_TOOL_MAP: Record<string, string> = {
-  shell_command: 'Bash',
-  exec_command: 'Bash',
-  shell: 'Bash',
-  local_shell: 'Bash',
-  apply_patch: 'Edit',
-};
+const CODEX_AUDITED_TOOLS = new Set(['Bash', 'Edit']);
+
+function safeTimestamp(raw: string | undefined): number {
+  if (!raw) return Date.now();
+  const parsed = Date.parse(raw);
+  return Number.isFinite(parsed) ? parsed : Date.now();
+}
 
 function codexStatusOf(output: string): { status: 'completed' | 'error'; error?: string } {
   const match = output.match(/^Exit code: (\d+)/);
@@ -170,7 +171,7 @@ function parseCodexFile(path: string, since: number): AuditSession {
       return;
     }
     if (record.type !== 'response_item') return;
-    const timestamp = record.timestamp ? Date.parse(record.timestamp) : Date.now();
+    const timestamp = safeTimestamp(record.timestamp);
     if ((payload.type === 'function_call' || payload.type === 'custom_tool_call') && payload.call_id) {
       callIndex.set(payload.call_id, {
         name: payload.name ?? 'unknown',
@@ -180,7 +181,8 @@ function parseCodexFile(path: string, since: number): AuditSession {
     } else if ((payload.type === 'function_call_output' || payload.type === 'custom_tool_call_output') && payload.call_id) {
       const call = callIndex.get(payload.call_id);
       if (!call) return;
-      const tool = CODEX_TOOL_MAP[call.name] ?? null;
+      const canon = canonicalToolName(call.name);
+      const tool = CODEX_AUDITED_TOOLS.has(canon) ? canon : null;
       if (!tool) return;
       const output = typeof payload.output === 'string' ? payload.output : '';
       const verdict = codexStatusOf(output);
@@ -327,7 +329,7 @@ function parseClaudeFile(path: string, since: number): AuditSession {
       const total = Number(record.message.usage.input_tokens ?? 0) + Number(record.message.usage.output_tokens ?? 0);
       if (total > 0) tokenSamples.push(total);
     }
-    const timestamp = record.timestamp ? Date.parse(record.timestamp) : Date.now();
+    const timestamp = safeTimestamp(record.timestamp);
     const blocks = Array.isArray(record.message?.content) ? record.message.content : [];
     for (const block of blocks as Array<Record<string, unknown>>) {
       if (block.type === 'tool_use' && typeof block.id === 'string') {
@@ -373,9 +375,20 @@ export function loadClaudeSessions(
 ): { sessions: AuditSession[]; present: boolean; note?: string } {
   if (!existsSync(dir)) return { sessions: [], present: false, note: 'no ~/.claude/projects directory' };
   const sessions: AuditSession[] = [];
-  for (const project of readdirSync(dir)) {
+  let projects: string[] = [];
+  try {
+    projects = readdirSync(dir);
+  } catch {
+    return { sessions: [], present: true, note: 'unreadable ~/.claude/projects directory' };
+  }
+  for (const project of projects) {
     const projectDir = join(dir, project);
     for (const file of listClaudeTranscripts(projectDir)) {
+      try {
+        if (statSync(file).mtimeMs < since - 86_400_000) continue;
+      } catch {
+        continue;
+      }
       const parsed = parseClaudeFile(file, since);
       if (parsed.calls.length > 0) sessions.push(parsed);
     }
@@ -384,21 +397,6 @@ export function loadClaudeSessions(
 }
 
 // ------------------------------------------------------------------- Antigravity
-const ANTIGRAVITY_TOOL_MAP: Record<string, string> = {
-  run_command: 'Bash',
-  edit_file: 'Edit',
-  replace_file_content: 'Edit',
-  multi_replace_file_content: 'Edit',
-  write_file: 'Write',
-  write_to_file: 'Write',
-  read_file: 'Read',
-  view_file: 'Read',
-  view_file_outline: 'Read',
-  view_code_item: 'Read',
-  grep_search: 'Grep',
-  find_by_name: 'Glob',
-  list_dir: 'Glob',
-};
 
 function unwrapAntigravityArgs(raw: unknown): Record<string, unknown> {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return {};
@@ -528,7 +526,7 @@ function parseAntigravityFile(path: string, since: number): AuditSession {
           if (!rawName) continue;
           seq += 1;
           pendingCalls.push({
-            tool: ANTIGRAVITY_TOOL_MAP[rawName] ?? rawName,
+            tool: canonicalToolName(rawName),
             input: unwrapAntigravityArgs(tc.args),
             timestamp: Number.isFinite(timestamp) ? timestamp : Date.now(),
             callId: `agy-${record.step_index ?? 'x'}-${seq}`,

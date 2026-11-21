@@ -85,12 +85,43 @@ function isPrivateV4([a = 0, b = 0]: number[]): boolean {
 
 function isPrivateV6(host: string): boolean {
   const h = host.toLowerCase();
-  if (h === '::1' || h === '::') return true;
-  if (h.startsWith('fe80')) return true; // link-local
-  if (h.startsWith('fc') || h.startsWith('fd')) return true; // unique local
+  if (
+    h === '::1' ||
+    h === '::' ||
+    h === '0:0:0:0:0:0:0:0' ||
+    h === '0:0:0:0:0:0:0:1'
+  ) {
+    return true;
+  }
+  if (/^fe[89ab][0-9a-f]?:/i.test(h)) return true; // link-local fe80::/10
+  if (/^f[cd][0-9a-f]{2}:/i.test(h) || h.startsWith('fc') || h.startsWith('fd')) return true; // unique local fc00::/7
+  if (h.startsWith('ff')) return true; // multicast ff00::/8
+  if (h.startsWith('100:')) return true; // RFC 6666 discard 100::/64
+  if (h.startsWith('64:ff9b:')) return true; // NAT64 well-known/local prefixes
   if (h.startsWith('::ffff:')) {
-    const mapped = ipv4Octets(h.slice('::ffff:'.length));
-    return mapped ? isPrivateV4(mapped) : true;
+    const tail = h.slice('::ffff:'.length);
+    const mapped = ipv4Octets(tail);
+    if (mapped) return isPrivateV4(mapped);
+    // Node's WHATWG URL normalises ::ffff:127.0.0.1 to ::ffff:7f00:1.
+    const hexPair = /^([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i.exec(tail);
+    if (hexPair) {
+      const hi = Number.parseInt(hexPair[1]!, 16);
+      const lo = Number.parseInt(hexPair[2]!, 16);
+      return isPrivateV4([(hi >> 8) & 0xff, hi & 0xff, (lo >> 8) & 0xff, lo & 0xff]);
+    }
+    return true;
+  }
+  // Legacy IPv4-compatible IPv6 (e.g. ::127.0.0.1 or ::7f00:1).
+  if (h.startsWith('::')) {
+    const tail = h.slice(2);
+    const compat = ipv4Octets(tail);
+    if (compat) return isPrivateV4(compat);
+    const hexPair = /^([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i.exec(tail);
+    if (hexPair) {
+      const hi = Number.parseInt(hexPair[1]!, 16);
+      const lo = Number.parseInt(hexPair[2]!, 16);
+      return isPrivateV4([(hi >> 8) & 0xff, hi & 0xff, (lo >> 8) & 0xff, lo & 0xff]);
+    }
   }
   return false;
 }
@@ -111,7 +142,8 @@ export function assertSafeEndpoint(raw: string, allowPrivate = false): URL {
     throw new Error(`endpoint must use http or https, got ${url.protocol}`);
   }
 
-  const host = url.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  // Strip IPv6 brackets and DNS trailing dots (`localhost.`, `foo.local.`, `metadata.google.internal.`).
+  const host = url.hostname.replace(/^\[|\]$/g, '').replace(/\.+$/, '').toLowerCase();
   if (!host) throw new Error('endpoint has no host');
 
   if (allowPrivate) return url;
@@ -119,7 +151,13 @@ export function assertSafeEndpoint(raw: string, allowPrivate = false): URL {
   if (host === 'localhost' || host.endsWith('.localhost')) {
     throw new Error('endpoint host is loopback (localhost)');
   }
-  if (host.endsWith('.local') || host.endsWith('.internal')) {
+  if (
+    host.endsWith('.local') ||
+    host.endsWith('.internal') ||
+    host === 'metadata.goog' ||
+    host === 'metadata' ||
+    host === 'instance-data'
+  ) {
     throw new Error(`endpoint host is a private name: ${host}`);
   }
 
@@ -167,11 +205,30 @@ function looksRateLimited(status: number, bodyText: string): boolean {
   return /rate.?limit|exceeds.*(?:tpm|rpm)|too many requests/i.test(bodyText);
 }
 
+/** Abortable sleep so turn-end budgets and cancellation never hang on backoff/cooldown timers. */
+function sleepAbortable(ms: number, signal?: AbortSignal): Promise<void> {
+  if (ms <= 0) return Promise.resolve();
+  if (signal?.aborted) {
+    return Promise.reject(new Error('aborted while waiting for rate-limit/backoff timer'));
+  }
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new Error('aborted while waiting for rate-limit/backoff timer'));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
 async function waitForGate(signal: AbortSignal | undefined): Promise<void> {
   const wait = cooldownUntil - Date.now();
   if (wait <= 0) return;
   if (signal?.aborted) throw new Error('aborted before rate-limit cooldown ended');
-  await new Promise((resolve) => setTimeout(resolve, wait));
+  await sleepAbortable(wait, signal);
 }
 
 /** Backoff ladder in ms; overridable for tests via IMMUNE_LLM_BACKOFF_MS. */
@@ -195,11 +252,10 @@ export async function chat(
   signal?: AbortSignal,
 ): Promise<string> {
   const base = assertSafeEndpoint(cfg.endpoint, cfg.allowPrivate);
-  const url = new URL(
-    base.pathname.endsWith('/chat/completions')
-      ? base.toString()
-      : `${base.toString().replace(/\/$/, '')}/chat/completions`,
-  );
+  const url = new URL(base.toString());
+  if (!url.pathname.endsWith('/chat/completions')) {
+    url.pathname = `${url.pathname.replace(/\/+$/, '')}/chat/completions`;
+  }
 
   const headers: Record<string, string> = { 'content-type': 'application/json' };
   if (cfg.apiKey) headers.authorization = `Bearer ${cfg.apiKey}`;
@@ -219,12 +275,24 @@ export async function chat(
   for (let attempt = 0; ; attempt += 1) {
     await waitForGate(signal);
     const gap = minCallIntervalMs();
-    if (gap > 0) await new Promise((resolve) => setTimeout(resolve, gap));
+    if (gap > 0) await sleepAbortable(gap, signal);
 
     const timeout = AbortSignal.timeout(cfg.timeoutMs);
     const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
 
-    const response = await fetch(url, { method: 'POST', headers, body, signal: combined });
+    // Never auto-follow HTTP 3xx redirects: a public allowlisted endpoint
+    // redirecting to 169.254.169.254 or 127.0.0.1 would otherwise bypass SSRF validation.
+    const response = await fetch(url, {
+      method: 'POST',
+      headers,
+      body,
+      signal: combined,
+      redirect: 'manual',
+    });
+
+    if (response.status >= 300 && response.status < 400) {
+      throw new Error(`model endpoint returned redirect ${response.status} (redirects refused for SSRF safety)`);
+    }
 
     if (response.ok) {
       const data = (await response.json()) as {
@@ -247,7 +315,10 @@ export async function chat(
     const errBody = await response.text().catch(() => '');
     const permanent = response.status === 401 || response.status === 403;
     const rateLimited = looksRateLimited(response.status, errBody);
-    const retryable = !permanent && response.status >= 400 && response.status < 500;
+    // Retry transient server/timeout responses (408/503/504), never permanent 400/404/422.
+    const retryable =
+      !permanent &&
+      (response.status === 408 || response.status === 503 || response.status === 504);
 
     if (rateLimited && attempt < backoff.length) {
       // Honour the server's own hint when it gives one; otherwise back off
@@ -258,7 +329,7 @@ export async function chat(
       continue;
     }
     if (retryable && attempt < 2) {
-      await new Promise((resolve) => setTimeout(resolve, backoff[attempt] ?? 12_000));
+      await sleepAbortable(backoff[attempt] ?? 12_000, signal);
       continue;
     }
     throw new Error(`model endpoint returned ${response.status}: ${redactOutbound(errBody).slice(0, 200)}`);

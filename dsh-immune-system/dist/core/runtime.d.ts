@@ -8,6 +8,8 @@
  */
 import type { Antibody } from './types.js';
 import type { ImmuneStore } from './store/index.js';
+import { type GuardVerdict } from './guard.js';
+import { type GuardMode } from './guards.js';
 import { type LlmConfig } from './llm.js';
 export declare const DRAIN_BATCH_SIZE = 4;
 /** Canonical 1-60 s clamp shared by every host drain and UI display. */
@@ -19,11 +21,20 @@ export interface DrainSummary {
     deferred: number;
     remaining: number;
 }
+export interface LiveGuardResult {
+    mode: Exclude<GuardMode, 'off'>;
+    verdict: GuardVerdict;
+    banner: string;
+    shouldDeny: boolean;
+    shouldAsk: boolean;
+}
 export interface PreToolOutcome {
     denyBanner?: string;
     warnBanner?: string;
+    askBanner?: string;
     thrashNote?: string;
     stuckNote?: string;
+    guardVerdict?: GuardVerdict;
     recallRows: Antibody[];
 }
 export declare class ImmuneRuntime {
@@ -54,13 +65,32 @@ export declare class ImmuneRuntime {
         suppressRepeats?: boolean;
         limit?: number;
     }): Antibody[];
-    /** Pre-tool check: probe thrash, antibody recall, stuck hypothesis, deterministic guard. */
+    /**
+     * Unified live Pre-Flight Guard evaluator shared by every host adapter
+     * (ZCode/Claude/Codex/Cursor/Antigravity/Gemini CLI + DSH `tools/pre-execute`).
+     *
+     * Strictly enforces AGENTS.md #8 (off by default; only code-owned policies
+     * and workspace lockfile rules may fire on live execution — never DB text)
+     * and AGENTS.md #10 (all persisted audit previews and returned banners are redacted).
+     */
+    evaluateLiveGuard(opts: {
+        sessionId?: string;
+        toolName: string;
+        toolInput: unknown;
+        workspace?: string;
+        env?: NodeJS.ProcessEnv;
+        /** Set false when the host surface cannot emit warn-only guidance (e.g. DSH PreToolDecision). */
+        recordEvent?: boolean;
+    }): LiveGuardResult | null;
+    /** Pre-tool check: probe thrash, antibody recall, stuck hypothesis, unified Pre-Flight Guard. */
     preToolUse(opts: {
         sessionId: string;
         toolName: string;
         toolInput: unknown;
         workspace?: string;
     }): PreToolOutcome;
+    /** Settle verified `'held'` receipts at turn end for rules that held up without failure. */
+    settleTurn(sessionId: string, workspace?: string): number;
     /** Post-tool outcome processing: repair action diff, probes/detours, failure/success pairing. */
     postToolUse(opts: {
         sessionId: string;

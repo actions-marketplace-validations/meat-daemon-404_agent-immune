@@ -16,7 +16,7 @@
  * The value checked is the tool's own input text, redacted and length-capped by
  * the caller.
  */
-export type GuardMode = 'off' | 'warn' | 'deny';
+export type GuardMode = 'off' | 'warn' | 'ask' | 'deny';
 export interface GuardRule {
     /** Stable id, shown to the model so it can be referenced. */
     id: string;
@@ -35,6 +35,12 @@ export declare function guardMode(env?: NodeJS.ProcessEnv): GuardMode;
 export interface GuardHit {
     rule: GuardRule;
 }
+/**
+ * Extract raw command text for shell payloads so real newlines are preserved
+ * (preventing `JSON.stringify` `\\n` escapes from bypassing line anchors or
+ * causing cross-line false positives).
+ */
+export declare function extractGuardInput(toolInput: unknown): string;
 /**
  * First rule matching `text`, or null.
  *

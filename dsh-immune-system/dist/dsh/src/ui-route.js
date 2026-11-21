@@ -1,4 +1,4 @@
-import { applyAction, evolutionStats, readState, readWorkspaces, resolveBudgetMs, runHygieneAction, } from '../../core/ui/query.js';
+import { applyAction, evaluateUiGuard, evolutionStats, readFederationPreview, readGuardEvents, readInsights, readState, readWorkspaces, resolveBudgetMs, runHygieneAction, } from '../../core/ui/query.js';
 import { exportLibrary, importLibrary } from '../../core/sync.js';
 import { renderSkillMarkdown } from '../../core/export.js';
 import { shareSanityCheck } from '../../core/share-guard.js';
@@ -31,18 +31,37 @@ function sendJson(res, status, payload) {
     });
     res.end(JSON.stringify(payload));
 }
+class PayloadTooLargeError extends Error {
+    constructor() {
+        super('body too large');
+    }
+}
 function readBody(req, max = 4096) {
     return new Promise((resolve, reject) => {
         let body = '';
+        let settled = false;
         req.on('data', (chunk) => {
+            if (settled)
+                return;
             body += chunk.toString('utf8');
             if (body.length > max) {
-                reject(new Error('body too large'));
-                req.destroy();
+                settled = true;
+                reject(new PayloadTooLargeError());
+                req.resume();
             }
         });
-        req.on('end', () => resolve(body));
-        req.on('error', reject);
+        req.on('end', () => {
+            if (!settled) {
+                settled = true;
+                resolve(body);
+            }
+        });
+        req.on('error', (err) => {
+            if (!settled) {
+                settled = true;
+                reject(err);
+            }
+        });
     });
 }
 /**
@@ -69,7 +88,8 @@ export function registerImmuneUiRoute(ctx, store, getBudgetMs) {
                     if (req.method === 'GET' && path.endsWith('/export')) {
                         const format = url.searchParams.get('format') === 'json' ? 'json' : 'md';
                         const snapshot = format === 'json' ? exportLibrary(store) : null;
-                        const exportRows = snapshot ? snapshot.antibodies : store.exportable(3);
+                        const mdRows = snapshot ? null : store.exportable(3);
+                        const exportRows = snapshot ? snapshot.antibodies : mdRows;
                         const violations = shareSanityCheck(exportRows);
                         if (violations.length > 0) {
                             sendJson(res, 422, { error: 'export blocked by the share gate', violations });
@@ -81,7 +101,7 @@ export function registerImmuneUiRoute(ctx, store, getBudgetMs) {
                             'cache-control': 'no-store',
                             'x-content-type-options': 'nosniff',
                         });
-                        res.end(snapshot ? JSON.stringify(snapshot, null, 2) : renderSkillMarkdown(store.exportable(3)));
+                        res.end(snapshot ? JSON.stringify(snapshot, null, 2) : renderSkillMarkdown(mdRows));
                         return;
                     }
                     if (req.method === 'GET' && path.endsWith('/workspaces')) {
@@ -99,9 +119,23 @@ export function registerImmuneUiRoute(ctx, store, getBudgetMs) {
                     if (req.method === 'GET' && path.endsWith('/explain')) {
                         const query = url.searchParams.get('q') ?? '';
                         const rawLimit = Number(url.searchParams.get('limit') ?? '5');
-                        const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(10, rawLimit) : 5;
+                        const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(10, Math.trunc(rawLimit)) : 5;
                         const toolName = url.searchParams.get('tool') ?? undefined;
                         sendJson(res, 200, explainRecall(store, query, { limit, toolName }));
+                        return;
+                    }
+                    if (req.method === 'GET' && path.endsWith('/insights')) {
+                        sendJson(res, 200, readInsights(store, process.cwd()));
+                        return;
+                    }
+                    if (req.method === 'GET' && path.endsWith('/guard-events')) {
+                        const rawLimit = Number(url.searchParams.get('limit') ?? '25');
+                        const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(200, Math.trunc(rawLimit)) : 25;
+                        sendJson(res, 200, readGuardEvents(store, limit));
+                        return;
+                    }
+                    if (req.method === 'GET' && path.endsWith('/federate')) {
+                        sendJson(res, 200, readFederationPreview(store, process.cwd()));
                         return;
                     }
                     if (req.method === 'GET') {
@@ -167,7 +201,38 @@ export function registerImmuneUiRoute(ctx, store, getBudgetMs) {
                         });
                         return;
                     }
-                    if (req.method === 'POST') {
+                    if (req.method === 'POST' && path.endsWith('/guard')) {
+                        if (!isSameOrigin(req)) {
+                            sendJson(res, 403, { error: 'cross-origin request refused' });
+                            return;
+                        }
+                        const type = String(req.headers['content-type'] ?? '');
+                        if (!type.includes('application/json')) {
+                            sendJson(res, 415, { error: 'content-type must be application/json' });
+                            return;
+                        }
+                        const body = await readBody(req, 65536);
+                        let parsed;
+                        try {
+                            const raw = JSON.parse(body);
+                            parsed = typeof raw === 'object' && raw !== null ? raw : {};
+                        }
+                        catch {
+                            sendJson(res, 400, { error: 'invalid json' });
+                            return;
+                        }
+                        const payload = typeof parsed.payload === 'string' ? parsed.payload : '';
+                        if (!payload.trim()) {
+                            sendJson(res, 400, { error: 'payload is required' });
+                            return;
+                        }
+                        sendJson(res, 200, evaluateUiGuard(store, payload, {
+                            toolName: typeof parsed.toolName === 'string' ? parsed.toolName : 'Bash',
+                            strict: parsed.strict === true,
+                        }));
+                        return;
+                    }
+                    if (req.method === 'POST' && (path === UI_ROUTE_PREFIX || path.endsWith('/action'))) {
                         if (!isSameOrigin(req)) {
                             sendJson(res, 403, { error: 'cross-origin mutation refused' });
                             return;
@@ -196,6 +261,10 @@ export function registerImmuneUiRoute(ctx, store, getBudgetMs) {
                     sendJson(res, 405, { error: 'method not allowed' });
                 }
                 catch (error) {
+                    if (error instanceof PayloadTooLargeError) {
+                        sendJson(res, 413, { error: 'body too large' });
+                        return;
+                    }
                     sendJson(res, 500, { error: error instanceof Error ? error.message : String(error) });
                 }
             },

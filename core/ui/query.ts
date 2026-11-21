@@ -4,12 +4,21 @@
  * Kept separate from either server so the two cannot drift: one definition of
  * "what the UI may read" and "which mutations exist".
  */
-import type { Antibody, WorkspaceProfile } from '../types.js';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import type { Antibody, GuardEventSummary, WorkspaceProfile } from '../types.js';
 import type { ImmuneStore } from '../store/index.js';
 import type { TriageSummary } from '../triage.js';
 import type { ReceiptSummary } from '../receipts.js';
 import type { HygieneReport } from '../hygiene.js';
 import { scanMagpieSummary, type MagpieGatewaySummary } from '../audit/magpie.js';
+import { diagnoseAgentArchetype, type AgentDiagnosisReport } from '../diagnose.js';
+import { runPitfallAutopsy, type AutopsyReport } from '../autopsy.js';
+import { evaluatePreFlightGuard, type GuardVerdict } from '../guard.js';
+import { detectWorkspaceDNA, verifyVaccineLockfile, type VaccineVerificationReport, type WorkspaceDNA } from '../vaccine.js';
+import { federateSwarmRules, type SwarmFederationReport, type SwarmRuleSource } from '../federate.js';
+import { parseTeamRulesJsonl } from '../team-sync.js';
+import { computeImmunityScore } from '../wrapped.js';
 
 export const MAX_QUERY = 200;
 export const ACTIONS = new Set(['retire', 'restore', 'delete']);
@@ -47,6 +56,8 @@ export interface DashboardStats {
   workspaces: number;
   triage: TriageSummary;
   receipts: ReceiptSummary;
+  /** V4 live Pre-Flight Guard interceptions recorded in this store. */
+  guardInterceptions: number;
   /** Read-only Magpie local AI gateway summary when `~/.config/magpie` exists. */
   gateway?: MagpieGatewaySummary;
 }
@@ -100,6 +111,7 @@ export function dashboardStats(store: ImmuneStore): DashboardStats {
     workspaces: store.listWorkspaceProfiles().length,
     triage: store.triageSummary(12),
     receipts: store.receiptSummary(500),
+    guardInterceptions: store.guardEventSummary(1).total,
     gateway: scanMagpieSummary(),
   };
 }
@@ -164,6 +176,117 @@ export function readWorkspaces(store: ImmuneStore): WorkspaceProfile[] {
 
 export function runHygieneAction(store: ImmuneStore, dryRun = false): HygieneReport {
   return store.repairHygiene({ dryRun });
+}
+
+export interface InsightsPayload {
+  immunityScore: number;
+  diagnosis: AgentDiagnosisReport;
+  autopsy: AutopsyReport;
+  workspaceDna: WorkspaceDNA;
+  lockfile: { exists: boolean } & Partial<VaccineVerificationReport>;
+  guardSummary: GuardEventSummary;
+  receipts: ReceiptSummary;
+}
+
+/**
+ * Unified v4 read-only insights payload shared by both standalone dashboard and
+ * DSH native settings tab. Grounded strictly in real database receipts, hits,
+ * suppressions, and guard events (zero synthetic multipliers).
+ */
+export function readInsights(store: ImmuneStore, workspace = process.cwd()): InsightsPayload {
+  const active = store.listAll(false);
+  const s = store.stats();
+  const receipts = store.receiptSummary(500);
+  const guardSummary = store.guardEventSummary(15);
+  const totalInjections = active.reduce((sum, r) => sum + Math.max(0, r.hit_count), 0);
+  const heldCount = receipts.byOutcome.held ?? 0;
+  const failedCount = receipts.byOutcome.failed ?? 0;
+  const prevented = s.suppressedRepeats + heldCount + guardSummary.total;
+  const observedTotal = Math.max(prevented + failedCount, totalInjections);
+  const effectiveFailures =
+    receipts.total > 0 ? failedCount : active.reduce((sum, r) => sum + Math.max(0, r.fail_count), 0);
+
+  const lockPath = join(workspace, '.immune', 'vaccine.lock.json');
+  let lockfile: { exists: boolean } & Partial<VaccineVerificationReport>;
+  if (existsSync(lockPath)) {
+    try {
+      lockfile = { exists: true, ...verifyVaccineLockfile(readFileSync(lockPath, 'utf8')) };
+    } catch (error) {
+      lockfile = {
+        exists: true,
+        valid: false,
+        reason: `Unreadable lockfile: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+  } else {
+    lockfile = { exists: false, valid: false, reason: 'No .immune/vaccine.lock.json found (run `immune vaccinate`)' };
+  }
+
+  return {
+    immunityScore: computeImmunityScore({
+      totalCalls: observedTotal,
+      repeatFailures: effectiveFailures,
+      avoidableTokens: receipts.estimatedTokensSaved,
+      activeRules: active.length,
+      totalInjections,
+    }),
+    diagnosis: diagnoseAgentArchetype(active),
+    autopsy: runPitfallAutopsy(active),
+    workspaceDna: detectWorkspaceDNA(workspace),
+    lockfile,
+    guardSummary,
+    receipts,
+  };
+}
+
+/** Shared read-only Pre-Flight Guard evaluator for both UI HTTP endpoints. */
+export function evaluateUiGuard(
+  store: ImmuneStore,
+  payload: string,
+  opts: { toolName?: string; strict?: boolean; workspace?: string } = {},
+): GuardVerdict {
+  const dna = detectWorkspaceDNA(opts.workspace ?? process.cwd());
+  const pm =
+    dna.packageManager === 'pnpm' ||
+    dna.packageManager === 'yarn' ||
+    dna.packageManager === 'bun' ||
+    dna.packageManager === 'uv'
+      ? dna.packageManager
+      : null;
+  return evaluatePreFlightGuard(payload, store.listAll(false), {
+    toolName: opts.toolName?.trim() || 'Bash',
+    strict: opts.strict === true,
+    workspacePackageManager: pm,
+  });
+}
+
+/** Shared read-only Pre-Flight Guard audit ledger query. */
+export function readGuardEvents(store: ImmuneStore, limit = 25): GuardEventSummary {
+  return store.guardEventSummary(limit);
+}
+
+/** Shared read-only Swarm Federation preview across local SQLite, shared DB, and `.immune/rules.jsonl`. */
+export function readFederationPreview(
+  store: ImmuneStore,
+  workspace = process.cwd(),
+): SwarmFederationReport {
+  const sources: SwarmRuleSource[] = [{ sourceId: 'local-sqlite', rules: store.listAll(false) }];
+  const shared = store.sharedAntibodies(200);
+  if (shared.length > 0) {
+    sources.push({ sourceId: 'shared-library', rules: shared });
+  }
+  const teamPath = join(workspace, '.immune', 'rules.jsonl');
+  if (existsSync(teamPath)) {
+    try {
+      const teamRules = parseTeamRulesJsonl(readFileSync(teamPath, 'utf8'));
+      if (teamRules.length > 0) {
+        sources.push({ sourceId: '.immune/rules.jsonl', rules: teamRules });
+      }
+    } catch {
+      // Ignore unreadable team rules file in UI preview.
+    }
+  }
+  return federateSwarmRules(sources);
 }
 
 // --------------------------------------------------------- ROADMAP 3.3

@@ -13,6 +13,7 @@
  */
 import { rememberPluginRoot } from './root-marker.js';
 import { appendFileSync } from 'node:fs';
+import { canonicalToolName } from '../../core/tools.js';
 /**
  * Optional execution trace, enabled with IMMUNE_DEBUG_LOG=<path>.
  *
@@ -34,7 +35,7 @@ const MAX_CONTEXT = 10_000;
 let activeAntigravityEvent = false;
 let activeGeminiCliEvent = false;
 let activeCursorEvent = false;
-let deniedByHook = false;
+let decisionEmittedByHook = false;
 export function log(message) {
     try {
         process.stderr.write(`[immune] ${message}\n`);
@@ -61,7 +62,7 @@ export function emitContext(eventName, additionalContext) {
  * whole hook is discarded, which would silently turn a deny into an allow.
  */
 export function emitDeny(eventName, reason) {
-    deniedByHook = true;
+    decisionEmittedByHook = true;
     const trimmedReason = reason.slice(0, MAX_CONTEXT);
     if (activeCursorEvent) {
         process.stdout.write(`${JSON.stringify({ permission: 'deny', user_message: trimmedReason, agent_message: trimmedReason })}\n`);
@@ -78,6 +79,33 @@ export function emitDeny(eventName, reason) {
             permissionDecisionReason: trimmedReason,
         },
     }));
+}
+/**
+ * Ask the user for confirmation (PreToolUse only).
+ *
+ * Returns `true` when the active host protocol supports a native `ask` decision
+ * and the JSON response has been emitted; returns `false` on hosts that only
+ * accept `allow`/`deny` (Antigravity, Gemini CLI) so the caller can fall back
+ * to advisory context injection without emitting an invalid schema.
+ */
+export function emitAsk(eventName, reason) {
+    if (activeAntigravityEvent || activeGeminiCliEvent) {
+        return false;
+    }
+    decisionEmittedByHook = true;
+    const trimmedReason = reason.slice(0, MAX_CONTEXT);
+    if (activeCursorEvent) {
+        process.stdout.write(`${JSON.stringify({ permission: 'ask', user_message: trimmedReason, agent_message: trimmedReason })}\n`);
+        return true;
+    }
+    process.stdout.write(JSON.stringify({
+        hookSpecificOutput: {
+            hookEventName: eventName,
+            permissionDecision: 'ask',
+            permissionDecisionReason: trimmedReason,
+        },
+    }));
+    return true;
 }
 export function isAntigravityEvent(event) {
     return (typeof event.conversationId === 'string' ||
@@ -237,32 +265,11 @@ export function sessionIdOf(event) {
  * Bash/Edit names. Keep the map here — one entry point every hook already
  * calls — so no adapter code is duplicated per host.
  */
-const HOST_TOOL_ALIASES = {
-    shell_command: 'Bash',
-    exec_command: 'Bash',
-    shell: 'Bash',
-    local_shell: 'Bash',
-    apply_patch: 'Edit',
-    run_command: 'Bash',
-    run_shell_command: 'Bash',
-    replace: 'Edit',
-    edit_file: 'Edit',
-    replace_file_content: 'Edit',
-    multi_replace_file_content: 'Edit',
-    write_file: 'Write',
-    write_to_file: 'Write',
-    read_file: 'Read',
-    view_file: 'Read',
-    view_file_outline: 'Read',
-    view_code_item: 'Read',
-    grep_search: 'Grep',
-    search_file_content: 'Grep',
-    find_by_name: 'Glob',
-    glob: 'Glob',
-    list_dir: 'Glob',
-};
+/**
+ * Normalise host tool names via the single canonical taxonomy in `core/tools.ts`.
+ */
 export function normaliseToolName(name) {
-    return HOST_TOOL_ALIASES[name.toLowerCase()] ?? name;
+    return canonicalToolName(name);
 }
 export function toolNameOf(event) {
     const name = event.tool_name ?? event.toolName ?? event.toolCall?.name;
@@ -325,15 +332,15 @@ export async function runHook(fallbackName, body) {
     activeAntigravityEvent = false;
     activeGeminiCliEvent = false;
     activeCursorEvent = false;
-    deniedByHook = false;
+    decisionEmittedByHook = false;
     try {
         rememberPluginRoot();
         const event = await readEvent();
         const eventName = eventNameOf(event, fallbackName);
         traceRun(eventName, sessionIdOf(event));
         const context = await body(event, eventName);
-        if (deniedByHook) {
-            // emitDeny already wrote the host-formatted denial.
+        if (decisionEmittedByHook) {
+            // emitDeny / emitAsk already wrote the host-formatted decision.
         }
         else if (activeCursorEvent) {
             emitCursorResult(fallbackName, context);
@@ -347,7 +354,7 @@ export async function runHook(fallbackName, body) {
     }
     catch (error) {
         log(`hook error: ${error instanceof Error ? error.message : String(error)}`);
-        if (!deniedByHook) {
+        if (!decisionEmittedByHook) {
             if (activeCursorEvent)
                 emitCursorResult(fallbackName, null);
             else if (activeAntigravityEvent)

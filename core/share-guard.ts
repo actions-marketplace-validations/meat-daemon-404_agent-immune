@@ -108,27 +108,36 @@ export function parseManagedBlock(docPath: string): Array<AntibodyFields> {
   const end = text.indexOf(SECTION_END);
   if (start < 0 || end <= start) return [];
   const body = text.slice(start + SECTION_START.length, end);
-  // The generated format is three lines per rule:
+  // Support both sync-doc format:
   //   - **<trigger>**
   //     - 忌/avoid: <symptom>
   //     - 宜/do: <prescription>
+  // and compile-rules format:
+  //   - **[Tool] When**: `<trigger>` *(files: `...`)*
+  //     - **Avoid**: <symptom>
+  //     - **Do instead**: <prescription>
   const rules: Array<AntibodyFields> = [];
   let current: { trigger: string; avoid: string } | null = null;
   for (const line of body.split('\n')) {
-    const triggerLine = line.match(/^\s*-\s*\*\*(.+?)\*\*\s*$/);
-    if (triggerLine) {
+    const syncTrigger = line.match(/^\s*-\s*\*\*(.+?)\*\*\s*$/);
+    const compileTrigger = line.match(/^\s*-\s*\*\*(?:\[[^\]]+\]\s*)?When\*\*:\s*`([^`]+)`/);
+    if (syncTrigger || compileTrigger) {
       if (current) rules.push({ trigger_pattern: current.trigger, symptom: current.avoid, prescription: '' });
-      current = { trigger: triggerLine[1] ?? '', avoid: '' };
+      current = { trigger: (compileTrigger?.[1] ?? syncTrigger?.[1] ?? '').trim(), avoid: '' };
       continue;
     }
-    const avoidLine = line.match(/^\s*-\s*忌\/avoid:\s*(.*)$/);
+    const avoidLine = line.match(/^\s*-\s*(?:忌\/avoid:|\*\*Avoid\*\*:)\s*(.*)$/);
     if (avoidLine && current) {
-      current.avoid = avoidLine[1] ?? '';
+      current.avoid = (avoidLine[1] ?? '').trim();
       continue;
     }
-    const doLine = line.match(/^\s*-\s*宜\/do:\s*(.*)$/);
+    const doLine = line.match(/^\s*-\s*(?:宜\/do:|\*\*Do instead\*\*:)\s*(.*)$/);
     if (doLine && current) {
-      rules.push({ trigger_pattern: current.trigger, symptom: current.avoid, prescription: doLine[1] ?? '' });
+      rules.push({
+        trigger_pattern: current.trigger,
+        symptom: current.avoid,
+        prescription: (doLine[1] ?? '').trim(),
+      });
       current = null;
     }
   }

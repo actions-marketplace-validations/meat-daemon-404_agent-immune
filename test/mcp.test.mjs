@@ -87,12 +87,17 @@ test('MCP handshake and tool listing follow the wire protocol', async (t) => {
     const names = tools.result.tools.map((tool) => tool.name).sort();
     assert.deepEqual(names, [
       'immune_audit',
+      'immune_autopsy',
       'immune_ci_check',
       'immune_detours',
+      'immune_diagnose',
       'immune_doctor',
       'immune_explain',
       'immune_export',
+      'immune_federate',
       'immune_forget',
+      'immune_guard',
+      'immune_guard_log',
       'immune_hygiene',
       'immune_ingest_disk',
       'immune_learn',
@@ -106,6 +111,7 @@ test('MCP handshake and tool listing follow the wire protocol', async (t) => {
       'immune_seed_packs',
       'immune_stats',
       'immune_triage',
+      'immune_vaccinate',
       'immune_workspaces',
     ]);
     for (const tool of tools.result.tools) {

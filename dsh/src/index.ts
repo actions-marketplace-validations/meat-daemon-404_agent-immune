@@ -15,9 +15,9 @@ import { renderSkillMarkdown } from '../../core/export.js';
 import { formatShareViolations, shareSanityCheck } from '../../core/share-guard.js';
 import { isSubstantiveHint } from '../../core/distiller.js';
 import { strings } from '../../core/i18n.js';
-import { findGuardHit, guardMode } from '../../core/guards.js';
-import { redact } from '../../core/redact.js';
 import { ImmuneRuntime, clampBudgetMs, resolveDrainBudgetMs } from '../../core/runtime.js';
+import { guardMode } from '../../core/guards.js';
+import { hydrateTeamRules, maybeSyncTeamRulesAfterDrain } from '../../core/team-sync.js';
 import { registerImmuneUiRoute } from './ui-route.js';
 import {
   DSH_EVENTS,
@@ -159,14 +159,16 @@ function reportWebTabWhenComposed(ctx: DshContext, log: ReturnType<typeof makeLo
       };
       const onGraphChanged = (registry as { onGraphChanged?: (cb: () => void) => unknown } | undefined)
         ?.onGraphChanged;
-      if (typeof onGraphChanged === 'function') {
-        try {
-          onGraphChanged.call(registry, report);
-        } catch {
-          // ignore
-        }
+      const initialState = readWebTabState(registry);
+      if (initialState === 'registered' || typeof onGraphChanged !== 'function') {
+        report();
+        return;
       }
-      report();
+      try {
+        onGraphChanged.call(registry, report);
+      } catch {
+        report();
+      }
     });
   } catch {
     // ignore
@@ -194,6 +196,23 @@ export function apply(ctx: DshContext): void {
 function startPlugin(ctx: DshContext): void {
   const log = makeLogger(ctx);
   const store = new ImmuneStore({ dbPath: resolveStorePath() });
+  try {
+    startPluginWithStore(ctx, store, log);
+  } catch (error) {
+    try {
+      store.close();
+    } catch {
+      // ignore close failure on abort
+    }
+    throw error;
+  }
+}
+
+function startPluginWithStore(
+  ctx: DshContext,
+  store: ImmuneStore,
+  log: ReturnType<typeof makeLogger>,
+): void {
   const runtime = new ImmuneRuntime(store);
   log.info(`[immune] storage: ${store.dbPath}`);
 
@@ -210,7 +229,13 @@ function startPlugin(ctx: DshContext): void {
   });
 
   ctx.on(DSH_EVENTS.sessionStart, ({ agent, source }) => {
-    const top = runtime.sessionStart({ sessionId: agent.id, source, workspace: process.cwd() });
+    const workspace = process.cwd();
+    try {
+      hydrateTeamRules(store, workspace);
+    } catch {
+      // Best-effort team rule hydration; never break session-start.
+    }
+    const top = runtime.sessionStart({ sessionId: agent.id, source, workspace, prewarm: true });
     const block = renderMemory(top, t.promptPreamble, 1400);
     if (block) agent.inject(createPluginMessage(block));
     log.info(`[immune] session-start (${source}): ${store.listAll(false).length} active antibody/queries`);
@@ -233,7 +258,7 @@ function startPlugin(ctx: DshContext): void {
     const block = renderMemory(hits, t.promptPreamble, 1400);
     const streak = store.topProbeStreak(agent.id, 3);
     const thrash = streak
-      ? `探针提示 / probe note: 上一回合对 ${streak.signature} 连续探测了 ${streak.count} 次 — 一条精确命令（grep -n 关键词、单次 Read）通常一步到位。`
+      ? `探针提示 / probe note: 上一回合对 ${sanitize(streak.signature)} 连续探测了 ${streak.count} 次 — 一条精确命令（grep -n 关键词、单次 Read）通常一步到位。`
       : null;
     const stuck = store.topStuck(agent.id, 2);
     const stuckNote = stuck ? stuckHypothesisText(stuck.signature) : null;
@@ -243,7 +268,9 @@ function startPlugin(ctx: DshContext): void {
     const advisoryBlock = advisories.length > 0 ? advisories.join('\n') : null;
     const combined =
       advisoryBlock && block
-        ? `${block}\n${advisoryBlock}`
+        ? block.endsWith('\n</immune_memory>')
+          ? `${block.slice(0, -'\n</immune_memory>'.length)}\n${advisoryBlock}\n</immune_memory>`
+          : `${block}\n${advisoryBlock}`
         : advisoryBlock
           ? `<immune_memory>\n${advisoryBlock}\n</immune_memory>`
           : block;
@@ -258,16 +285,22 @@ function startPlugin(ctx: DshContext): void {
   });
 
   ctx.on(DSH_EVENTS.preToolExecute, async (exec, next): Promise<DshPreToolDecision> => {
-    if (guardMode() === 'deny') {
-      let argsText = '';
-      try {
-        argsText = redact(JSON.stringify(exec?.arguments ?? {})).slice(0, 2000);
-      } catch {
-        argsText = '';
+    const mode = guardMode();
+    const guard = runtime.evaluateLiveGuard({
+      sessionId: exec?.agent?.id ?? '',
+      toolName: exec?.name ?? 'Bash',
+      toolInput: exec?.arguments ?? {},
+      workspace: process.cwd(),
+      // DSH PreToolDecision only supports allow / ask / deny — do not record
+      // phantom audit events when IMMUNE_GUARD=warn cannot surface a banner.
+      recordEvent: mode !== 'warn',
+    });
+    if (guard) {
+      if (guard.shouldDeny) {
+        return { kind: 'deny', reason: guard.banner };
       }
-      const hit = findGuardHit(argsText);
-      if (hit) {
-        return { kind: 'deny', reason: `[${hit.rule.id}] ${hit.rule.what} → ${hit.rule.instead}` };
+      if (guard.shouldAsk) {
+        return { kind: 'ask', reason: guard.banner };
       }
     }
     return next();
@@ -292,12 +325,26 @@ function startPlugin(ctx: DshContext): void {
     return downstream;
   });
 
-  ctx.on(DSH_EVENTS.turnStopping, async () => {
+  ctx.on(DSH_EVENTS.turnStopping, async (ev?: { agent?: { id?: string } }) => {
+    const workspace = process.cwd();
+    const sid = ev?.agent?.id ?? '';
+    if (sid) {
+      try {
+        runtime.settleTurn(sid, workspace);
+      } catch {
+        // Best-effort turn receipt settlement.
+      }
+    }
     await runtime.drain({
       budgetMs: drainBudgetMs(),
       selfMarkers: selfMarkers(),
       runPostDrainHooks: true,
     });
+    try {
+      maybeSyncTeamRulesAfterDrain(store, workspace);
+    } catch {
+      // Best-effort team rule sync.
+    }
   });
 
   ctx.effect(
@@ -435,7 +482,7 @@ function registerCommands(ctx: DshContext, store: ImmuneStore): void {
       const trigger = segments[0] ?? '';
       const prescription = segments[segments.length - 1] ?? '';
       const symptom = segments.length >= 3 ? segments.slice(1, -1).join(' | ') : '';
-      if (!trigger || !prescription || segments.length > 3) {
+      if (!trigger || !prescription || segments.length < 2 || segments.length > 3) {
         return {
           kind: 'error',
           text:

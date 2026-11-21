@@ -10,13 +10,13 @@ export function renderClientScript(
   t: Labels,
   budget: string,
 ): string {
-  const labelsJson = JSON.stringify(t).replace(/</g, '\\u003c');
+  const safeJson = (v: unknown): string => JSON.stringify(v).replace(/</g, '\\u003c');
   return `<script>
 (function () {
-  var TOKEN = ${JSON.stringify(token)};
-  var T = ${labelsJson};
-  var BUDGET = ${JSON.stringify(budget)};
-  var BUDGET_HINT = ${JSON.stringify(t.budgetHint)};
+  var TOKEN = ${safeJson(token)};
+  var T = ${safeJson(t)};
+  var BUDGET = ${safeJson(budget)};
+  var BUDGET_HINT = ${safeJson(t.budgetHint)};
 
   var kpisEl = document.getElementById('kpis');
   var byModelEl = document.getElementById('byModel');
@@ -33,13 +33,18 @@ export function renderClientScript(
   var tabQuarantined = document.getElementById('tabQuarantined');
   var tabWorkspaces = document.getElementById('tabWorkspaces');
   var tabExplain = document.getElementById('tabExplain');
+  var tabGuard = document.getElementById('tabGuard');
+  var tabInsights = document.getElementById('tabInsights');
   var hygieneBtn = document.getElementById('hygieneBtn');
   var nProject = document.getElementById('nProject');
   var nShared = document.getElementById('nShared');
   var nQuarantined = document.getElementById('nQuarantined');
   var nWorkspaces = document.getElementById('nWorkspaces');
+  var nGuard = document.getElementById('nGuard');
   var tab = 'project';
+  var guardState = { payload: '', tool: 'Bash', strict: false, verdict: null, events: null };
   var timer = null;
+  var toastTimer = null;
   var seq = 0;
 
   function api(path) { return path + (path.indexOf('?') < 0 ? '?' : '&') + 't=' + encodeURIComponent(TOKEN); }
@@ -47,7 +52,8 @@ export function renderClientScript(
   function toast(msg, bad) {
     toastEl.textContent = msg;
     toastEl.className = bad ? 'show bad' : 'show';
-    setTimeout(function () { toastEl.className = bad ? 'bad' : ''; }, 2200);
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { toastEl.className = bad ? 'bad' : ''; }, 2200);
   }
 
   function el(tag, cls, text) {
@@ -184,6 +190,7 @@ export function renderClientScript(
     nShared.textContent = String(s.shared);
     if (nQuarantined) nQuarantined.textContent = String(s.quarantined || 0);
     if (nWorkspaces) nWorkspaces.textContent = String(s.workspaces || 0);
+    if (nGuard) nGuard.textContent = String(s.guardInterceptions || 0);
   }
 
   function sortRows(list) {
@@ -193,7 +200,7 @@ export function renderClientScript(
       if (mode === 'hits') return (b.hit_count - a.hit_count) || (a.id - b.id);
       if (mode === 'fails') return (b.fail_count - a.fail_count) || (a.id - b.id);
       if (mode === 'rubric') return ((b.rubric_score || 0) - (a.rubric_score || 0)) || (b.hit_count - a.hit_count);
-      return String(b.updated_at).localeCompare(String(a.updated_at)) || (b.id - a.id);
+      return ((Number(b.updated_at) || 0) - (Number(a.updated_at) || 0)) || (b.id - a.id);
     });
     return copy;
   }
@@ -332,10 +339,16 @@ export function renderClientScript(
       tr.appendChild(cell(T.colDo, 'text', function (td) { td.textContent = c.prescription; }));
       tr.appendChild(cell(T.explainScore, 'counts', function (td) {
         var b = c.breakdown || {};
-        td.appendChild(el('b', '', String(b.finalScore || 0)));
-        td.appendChild(el('div', 'tags', '').appendChild(
-          el('span', 'tag', 'bm25=' + b.baseRelevance + ' lex×' + b.lexicalMultiplier + ' rub×' + b.rubricMultiplier + ' hit×' + b.hitMultiplier),
-        ).parentNode);
+        td.appendChild(el('b', '', String(b.finalScore != null ? b.finalScore : 0)));
+        var parts = [
+          'bm25=' + (b.baseRelevance != null ? b.baseRelevance : 0),
+          'lex×' + (b.lexicalMultiplier != null ? b.lexicalMultiplier : 1),
+          'rub×' + (b.rubricMultiplier != null ? b.rubricMultiplier : 1),
+          'hit×' + (b.hitMultiplier != null ? b.hitMultiplier : 1),
+        ];
+        if (b.pathAffinityBoost != null && b.pathAffinityBoost !== 1) parts.push('path×' + b.pathAffinityBoost);
+        if (b.timeDecay != null && b.timeDecay !== 1) parts.push('decay×' + b.timeDecay);
+        td.appendChild(el('div', 'tags', '').appendChild(el('span', 'tag', parts.join(' '))).parentNode);
       }));
       tbody.appendChild(tr);
     });
@@ -356,6 +369,239 @@ export function renderClientScript(
       .then(function (data) {
         if (mine !== seq) return;
         renderExplainView(trimmed, data);
+      })
+      .catch(function (err) {
+        if (mine !== seq) return;
+        bodyEl.textContent = '';
+        renderEmpty(T.loadFailed, String((err && err.message) || err));
+      });
+  }
+
+  function renderGuardView() {
+    bodyEl.textContent = '';
+    var box = el('div', 'explain-box');
+    var row = el('div', 'explain-row');
+    var inp = document.createElement('input');
+    inp.type = 'text';
+    inp.value = guardState.payload;
+    inp.placeholder = T.guardPrompt;
+    var toolSel = document.createElement('select');
+    ['Bash', 'Edit', 'Write'].forEach(function (name) {
+      var opt = document.createElement('option');
+      opt.value = name;
+      opt.textContent = name;
+      if (guardState.tool === name) opt.selected = true;
+      toolSel.appendChild(opt);
+    });
+    var strictLbl = el('label', 'v4-check');
+    var strictChk = document.createElement('input');
+    strictChk.type = 'checkbox';
+    strictChk.checked = guardState.strict;
+    strictLbl.appendChild(strictChk);
+    strictLbl.appendChild(document.createTextNode(T.guardStrict));
+    var btn = el('button', 'act', T.guardButton);
+    btn.type = 'button';
+    var runEval = function () {
+      guardState.payload = inp.value;
+      guardState.tool = toolSel.value;
+      guardState.strict = strictChk.checked;
+      if (!guardState.payload.trim()) return;
+      btn.disabled = true;
+      fetch(api('/api/guard'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'accept': 'application/json' },
+        body: JSON.stringify({ payload: guardState.payload, toolName: guardState.tool, strict: guardState.strict }),
+      })
+        .then(function (r) { return r.json(); })
+        .then(function (v) {
+          if (v.error) { toast(v.error, true); return; }
+          guardState.verdict = v;
+          if (tab === 'guard') renderGuardView();
+        })
+        .catch(function () { toast(T.loadFailed, true); })
+        .then(function () { btn.disabled = false; });
+    };
+    btn.onclick = runEval;
+    inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') runEval(); });
+    row.appendChild(inp);
+    row.appendChild(toolSel);
+    row.appendChild(strictLbl);
+    row.appendChild(btn);
+    box.appendChild(row);
+
+    var v = guardState.verdict;
+    if (v) {
+      var card = el('div', 'v4-verdict');
+      var topTags = el('div', 'tags');
+      var tone = v.decision === 'block' ? 'crit' : v.decision === 'allow' ? 'hi' : 'low';
+      topTags.appendChild(el('span', 'tag ' + tone, String(v.decision || 'allow').toUpperCase()));
+      topTags.appendChild(el('span', 'tag', 'blast ' + (v.blastRadiusScore || 0) + '/100'));
+      topTags.appendChild(el('span', 'tag', String(v.severity || 'low').toUpperCase()));
+      card.appendChild(topTags);
+
+      var barRow = el('div', 'v4-bar-row');
+      barRow.appendChild(el('span', '', 'Blast Radius'));
+      var track = el('div', 'v4-bar-track');
+      var fill = el('div', 'v4-bar-fill ' + (v.blastRadiusScore >= 80 ? 'bad' : v.blastRadiusScore >= 50 ? 'warn' : 'hi'));
+      fill.style.width = Math.min(100, Math.max(2, v.blastRadiusScore || 0)) + '%';
+      track.appendChild(fill);
+      barRow.appendChild(track);
+      barRow.appendChild(el('span', '', String(v.blastRadiusScore || 0) + '/100'));
+      card.appendChild(barRow);
+
+      card.appendChild(el('div', '', v.summary || ''));
+      if (v.suggestedRewrite) {
+        card.appendChild(el('div', 'v4-rewrite', T.guardSafeRewrite + v.suggestedRewrite));
+      }
+      if (Array.isArray(v.matches) && v.matches.length > 0) {
+        v.matches.forEach(function (m) {
+          var mt = el('div', 'tags');
+          mt.appendChild(el('span', 'tag ' + (m.severity === 'critical' ? 'crit' : 'low'), m.id));
+          mt.appendChild(el('span', 'tag', m.source));
+          mt.appendChild(el('span', 'tag', m.prescription));
+          card.appendChild(mt);
+        });
+      }
+      box.appendChild(card);
+    }
+    bodyEl.appendChild(box);
+
+    var ev = guardState.events;
+    var list = (ev && ev.recent) || [];
+    countEl.textContent = (ev ? ev.total : 0) + ' ' + T.guardCount;
+    bodyEl.appendChild(el('div', 'v4-sec-title', T.guardAuditTitle + ' (' + (ev ? ev.total : 0) + ')'));
+    if (list.length === 0) {
+      renderEmpty(T.guardAuditTitle, T.guardNoEvents);
+      return;
+    }
+    var table = el('table');
+    var thead = el('thead');
+    var hr = el('tr');
+    ['#', 'Decision', 'Tool / Policies', 'Payload / Rewrite'].forEach(function (lbl) { hr.appendChild(el('th', '', lbl)); });
+    thead.appendChild(hr);
+    table.appendChild(thead);
+    var tbody = el('tbody');
+    list.forEach(function (item) {
+      var tr = el('tr');
+      tr.appendChild(cell('#', 'id', function (td) { td.textContent = String(item.id); }));
+      tr.appendChild(cell('Decision', '', function (td) {
+        var cls = item.decision === 'block' ? 'quarantined' : item.decision === 'rewrite' ? 'retired' : 'active';
+        td.appendChild(el('span', 'pill ' + cls, String(item.decision).toUpperCase() + ' ' + item.blast_radius));
+      }));
+      tr.appendChild(cell('Policies', 'trigger', function (td) {
+        td.textContent = item.tool_name;
+        var tags = el('div', 'tags');
+        (item.policy_ids || []).forEach(function (pid) { tags.appendChild(el('span', 'tag low', pid)); });
+        td.appendChild(tags);
+      }));
+      tr.appendChild(cell('Payload', 'text', function (td) {
+        td.textContent = item.payload_preview;
+        if (item.suggested_rewrite) {
+          td.appendChild(el('div', 'repair', T.guardSafeRewrite + item.suggested_rewrite));
+        }
+      }));
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    bodyEl.appendChild(table);
+  }
+
+  function loadGuard() {
+    var mine = ++seq;
+    renderSkeleton();
+    fetch(api('/api/guard-events?limit=25'), { headers: { 'accept': 'application/json' } })
+      .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+      .then(function (data) {
+        if (mine !== seq) return;
+        guardState.events = data;
+        if (nGuard) nGuard.textContent = String(data.total || 0);
+        renderGuardView();
+      })
+      .catch(function (err) {
+        if (mine !== seq) return;
+        bodyEl.textContent = '';
+        renderEmpty(T.loadFailed, String((err && err.message) || err));
+      });
+  }
+
+  function kvRow(k, v) {
+    var r = el('div', 'v4-kv');
+    r.appendChild(el('span', '', k));
+    r.appendChild(el('b', '', String(v)));
+    return r;
+  }
+
+  function renderInsightsView(ins, fed) {
+    bodyEl.textContent = '';
+    countEl.textContent = T.insightsScore + ': ' + (ins.immunityScore || 0) + '/100';
+    var grid = el('div', 'v4-grid');
+
+    var arch = ins.diagnosis || {};
+    var c1 = el('div', 'v4-card');
+    c1.appendChild(el('h3', '', T.insightsArchetype));
+    c1.appendChild(kvRow(T.insightsScore, (ins.immunityScore || 0) + ' / 100'));
+    c1.appendChild(kvRow('Archetype', (arch.archetype && arch.archetype.title) || '—'));
+    c1.appendChild(kvRow('Overall Immunity', (arch.overallImmunityPct || 0) + '%'));
+    (arch.radar || []).forEach(function (axis) {
+      var pct = Number(axis.immunityPct || 0);
+      var br = el('div', 'v4-bar-row');
+      br.appendChild(el('span', '', axis.label));
+      var track = el('div', 'v4-bar-track');
+      var fill = el('div', 'v4-bar-fill ' + (pct >= 70 ? 'hi' : pct >= 40 ? 'warn' : 'bad'));
+      fill.style.width = Math.max(4, Math.min(100, pct)) + '%';
+      track.appendChild(fill);
+      br.appendChild(track);
+      br.appendChild(el('span', '', String(pct) + '%'));
+      c1.appendChild(br);
+    });
+    grid.appendChild(c1);
+
+    var aut = ins.autopsy || {};
+    var rec = ins.receipts || {};
+    var c2 = el('div', 'v4-card');
+    c2.appendChild(el('h3', '', T.insightsAutopsy));
+    c2.appendChild(kvRow('Prevented Loops', aut.savedLoops || 0));
+    c2.appendChild(kvRow('Verified Held Tokens', rec.estimatedTokensSaved || 0));
+    c2.appendChild(kvRow('Receipt Chain', rec.chainValid === false ? T.chainBroken : T.chainVerified));
+    c2.appendChild(kvRow('Autopsy Tokens Est.', aut.tokensRescued || 0));
+    c2.appendChild(kvRow('API Dollars Saved', '$' + Number(aut.usdSaved || 0).toFixed(2)));
+    c2.appendChild(kvRow('Guard Interceptions', (ins.guardSummary && ins.guardSummary.total) || 0));
+    grid.appendChild(c2);
+
+    var dna = ins.workspaceDna || {};
+    var lock = ins.lockfile || {};
+    var c3 = el('div', 'v4-card');
+    c3.appendChild(el('h3', '', T.insightsDna));
+    c3.appendChild(kvRow('Package Manager', dna.packageManager || 'unknown'));
+    c3.appendChild(kvRow('Stacks', (dna.stacks || []).join(', ') || '—'));
+    c3.appendChild(kvRow('Recommended Packs', (dna.recommendedPacks || []).join(', ') || '—'));
+    c3.appendChild(kvRow('Vaccine Lockfile', lock.exists ? (lock.valid ? 'VERIFIED (' + (lock.antibodyCount || 0) + ')' : 'INVALID: ' + (lock.reason || '')) : 'Not generated'));
+    grid.appendChild(c3);
+
+    var c4 = el('div', 'v4-card');
+    c4.appendChild(el('h3', '', T.insightsFederation));
+    c4.appendChild(kvRow('Sources Scanned', (fed && fed.totalSources) || 1));
+    c4.appendChild(kvRow('Total Clusters', (fed && fed.clusters && fed.clusters.length) || 0));
+    c4.appendChild(kvRow('Universal Swarm Laws', (fed && Array.isArray(fed.universalLaws) ? fed.universalLaws.length : 0)));
+    c4.appendChild(kvRow('Avg Consensus Score', (fed && fed.averageConsensusScore) || 0));
+    ((fed && fed.clusters) || []).slice(0, 4).forEach(function (cl) {
+      c4.appendChild(kvRow('[' + cl.consensusScore + '] ' + cl.tier, String(cl.trigger_pattern || '').slice(0, 42)));
+    });
+    grid.appendChild(c4);
+
+    bodyEl.appendChild(grid);
+  }
+
+  function loadInsights() {
+    var mine = ++seq;
+    renderSkeleton();
+    Promise.all([
+      fetch(api('/api/insights'), { headers: { 'accept': 'application/json' } }).then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); }),
+      fetch(api('/api/federate'), { headers: { 'accept': 'application/json' } }).then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); }),
+    ])
+      .then(function (pair) {
+        if (mine !== seq) return;
+        renderInsightsView(pair[0], pair[1]);
       })
       .catch(function (err) {
         if (mine !== seq) return;
@@ -472,104 +718,18 @@ export function renderClientScript(
     bodyEl.appendChild(table);
   }
 
-  function renderExplainView(initialQuery, data) {
-    bodyEl.textContent = '';
-    var box = el('div', 'explain-box');
-    var row = el('div', 'explain-row');
-    var inp = document.createElement('input');
-    inp.type = 'text';
-    inp.value = initialQuery;
-    inp.placeholder = T.explainPrompt;
-    var btn = el('button', 'act', T.explainButton);
-    btn.type = 'button';
-    var runSim = function () {
-      var val = inp.value.trim();
-      qEl.value = val;
-      syncClear();
-      loadExplain(val);
-    };
-    btn.onclick = runSim;
-    inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') runSim(); });
-    row.appendChild(inp);
-    row.appendChild(btn);
-    box.appendChild(row);
-    if (data && data.addedConcepts && data.addedConcepts.length > 0) {
-      var cLine = el('div', 'tags');
-      cLine.appendChild(el('span', 'tag hi', T.explainConcepts + data.addedConcepts.join(' ')));
-      box.appendChild(cLine);
-    }
-    if (data && data.renderedBlock) {
-      box.appendChild(el('div', 'tags').appendChild(el('span', 'tag', T.explainPreview)).parentNode);
-      box.appendChild(el('pre', 'explain-preview', data.renderedBlock));
-    }
-    bodyEl.appendChild(box);
-    if (!data || !initialQuery.trim()) {
-      countEl.textContent = '0 ' + T.results;
-      renderEmpty(T.tabsExplain, T.explainHint);
-      return;
-    }
-    var list = data.candidates || [];
-    countEl.textContent = list.length + ' ' + T.results;
-    if (list.length === 0) {
-      renderEmpty(T.explainNoMatch, T.explainHint);
-      return;
-    }
-    var table = el('table');
-    var thead = el('thead');
-    var hr = el('tr');
-    ['#', T.colTrigger, T.colDo, T.explainScore].forEach(function (lbl) { hr.appendChild(el('th', '', lbl)); });
-    thead.appendChild(hr);
-    table.appendChild(thead);
-    var tbody = el('tbody');
-    list.forEach(function (c) {
-      var tr = el('tr');
-      tr.appendChild(cell('#', 'id', function (td) { td.textContent = (c.source === 'shared' ? 'S#' : '#') + c.id; }));
-      tr.appendChild(cell(T.colTrigger, 'trigger', function (td) {
-        td.textContent = c.trigger_pattern;
-        var tags = el('div', 'tags');
-        (c.matchedTokens || []).slice(0, 4).forEach(function (tk) { tags.appendChild(el('span', 'tag hi', tk)); });
-        (c.matchedBigrams || []).slice(0, 4).forEach(function (bg) { tags.appendChild(el('span', 'tag', bg)); });
-        if (tags.childNodes.length > 0) td.appendChild(tags);
-      }));
-      tr.appendChild(cell(T.colDo, 'text', function (td) { td.textContent = c.prescription; }));
-      tr.appendChild(cell(T.explainScore, 'counts', function (td) {
-        var b = c.breakdown || {};
-        td.appendChild(el('b', '', String(b.finalScore || 0)));
-        td.appendChild(el('div', 'tags', '').appendChild(
-          el('span', 'tag', 'bm25=' + b.baseRelevance + ' lex×' + b.lexicalMultiplier + ' rub×' + b.rubricMultiplier + ' hit×' + b.hitMultiplier),
-        ).parentNode);
-      }));
-      tbody.appendChild(tr);
-    });
-    table.appendChild(tbody);
-    bodyEl.appendChild(table);
-  }
-
-  function loadExplain(queryText) {
-    var trimmed = (queryText || '').trim();
-    if (!trimmed) {
-      renderExplainView('', null);
-      return;
-    }
-    var mine = ++seq;
-    renderSkeleton();
-    fetch(api('/api/explain?q=' + encodeURIComponent(trimmed)), { headers: { 'accept': 'application/json' } })
-      .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
-      .then(function (data) {
-        if (mine !== seq) return;
-        renderExplainView(trimmed, data);
-      })
-      .catch(function (err) {
-        if (mine !== seq) return;
-        bodyEl.textContent = '';
-        renderEmpty(T.loadFailed, String((err && err.message) || err));
-      });
-  }
-
   function load() {
     var q = qEl.value.trim();
     if (tab === 'explain') {
       loadExplain(q);
+      return;
+    }
+    if (tab === 'guard') {
+      loadGuard();
+      return;
+    }
+    if (tab === 'insights') {
+      loadInsights();
       return;
     }
     var mine = ++seq;
@@ -650,16 +810,19 @@ export function renderClientScript(
 
   qEl.addEventListener('input', function () {
     syncClear();
+    if (tab === 'workspaces' || tab === 'guard' || tab === 'insights') return;
     clearTimeout(timer);
     timer = setTimeout(load, 220);
   });
   clearEl.addEventListener('click', function () {
     qEl.value = '';
     syncClear();
-    load();
+    if (tab !== 'workspaces' && tab !== 'guard' && tab !== 'insights') load();
     qEl.focus();
   });
-  sortEl.addEventListener('change', load);
+  sortEl.addEventListener('change', function () {
+    if (tab !== 'workspaces' && tab !== 'explain' && tab !== 'guard' && tab !== 'insights') load();
+  });
 
   var importFile = document.getElementById('importFile');
   var importWrap = document.getElementById('importWrap');
@@ -693,8 +856,15 @@ export function renderClientScript(
   }
 
   document.addEventListener('keydown', function (e) {
-    if (e.key === '/' && document.activeElement !== qEl) { e.preventDefault(); qEl.focus(); }
-    if (e.key === 'Escape' && document.activeElement === qEl) { qEl.value = ''; syncClear(); load(); }
+    var active = document.activeElement;
+    var inEditable =
+      active &&
+      (active.tagName === 'INPUT' ||
+        active.tagName === 'TEXTAREA' ||
+        active.tagName === 'SELECT' ||
+        active.isContentEditable);
+    if (e.key === '/' && !inEditable) { e.preventDefault(); qEl.focus(); }
+    if (e.key === 'Escape' && active === qEl) { qEl.value = ''; syncClear(); load(); }
   });
 
   function selectTab(next) {
@@ -705,6 +875,8 @@ export function renderClientScript(
       [tabQuarantined, 'quarantined'],
       [tabWorkspaces, 'workspaces'],
       [tabExplain, 'explain'],
+      [tabGuard, 'guard'],
+      [tabInsights, 'insights'],
     ].forEach(function (pair) {
       if (!pair[0]) return;
       pair[0].className = next === pair[1] ? 'on' : '';
@@ -717,6 +889,8 @@ export function renderClientScript(
   if (tabQuarantined) tabQuarantined.onclick = function () { selectTab('quarantined'); };
   if (tabWorkspaces) tabWorkspaces.onclick = function () { selectTab('workspaces'); };
   if (tabExplain) tabExplain.onclick = function () { selectTab('explain'); };
+  if (tabGuard) tabGuard.onclick = function () { selectTab('guard'); };
+  if (tabInsights) tabInsights.onclick = function () { selectTab('insights'); };
 
   syncClear();
   load();

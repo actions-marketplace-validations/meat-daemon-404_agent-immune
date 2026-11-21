@@ -3,7 +3,7 @@
  */
 import { ImmuneStore } from '../../../core/store/index.js';
 import { ImmuneRuntime } from '../../../core/runtime.js';
-import { emitDeny, runHook, sessionIdOf, toolNameOf } from '../hook-io.js';
+import { emitAsk, emitDeny, runHook, sessionIdOf, toolNameOf } from '../hook-io.js';
 import { formatToolWarning } from '../format.js';
 await runHook('PreToolUse', (event) => {
     const workspace = (typeof event.cwd === 'string' && event.cwd) ||
@@ -19,6 +19,9 @@ await runHook('PreToolUse', (event) => {
         });
         if (out.denyBanner) {
             emitDeny('PreToolUse', out.denyBanner);
+            return null;
+        }
+        if (out.askBanner && emitAsk('PreToolUse', out.askBanner)) {
             return null;
         }
         const recall = formatToolWarning(out.recallRows);

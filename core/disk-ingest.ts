@@ -264,7 +264,7 @@ export function discoverDiskProjects(
     if (depth > 0 && SKIP_DIR_RE.test(name)) return;
     if (!includeCodexSkills && /codex-skills/i.test(norm)) return;
 
-    if (depth > 0 && isProjectRoot(dir)) {
+    if (isProjectRoot(dir)) {
       seenPaths.add(norm);
       const stacks = detectExtendedStacks(dir);
       const baseline = detectProjectBaselineDetail(dir).level;
@@ -359,13 +359,13 @@ export function ingestDiskCorpus(
   const now = Date.now();
 
   for (const repo of repos) {
-    const picked = repo.extractedRules.slice(0, maxRulesPerProject);
+    // Filter rubric threshold BEFORE capping per-project count so low-scoring
+    // rules do not crowd out high-rubric pitfalls.
+    const eligible = repo.extractedRules.filter((rule) => (rule.rubric_score ?? 0) >= 55);
+    skippedLowQuality += repo.extractedRules.length - eligible.length;
+    const picked = eligible.slice(0, maxRulesPerProject);
     rulesExtracted += picked.length;
     for (const rule of picked) {
-      if ((rule.rubric_score ?? 0) < 55) {
-        skippedLowQuality += 1;
-        continue;
-      }
       if (rule.project_scope === '*') universalRules += 1;
       else scopedRules += 1;
       if (!dryRun) {

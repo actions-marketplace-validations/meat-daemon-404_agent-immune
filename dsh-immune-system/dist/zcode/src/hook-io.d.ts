@@ -51,6 +51,15 @@ export declare function emitContext(eventName: string, additionalContext: string
  * whole hook is discarded, which would silently turn a deny into an allow.
  */
 export declare function emitDeny(eventName: string, reason: string): void;
+/**
+ * Ask the user for confirmation (PreToolUse only).
+ *
+ * Returns `true` when the active host protocol supports a native `ask` decision
+ * and the JSON response has been emitted; returns `false` on hosts that only
+ * accept `allow`/`deny` (Antigravity, Gemini CLI) so the caller can fall back
+ * to advisory context injection without emitting an invalid schema.
+ */
+export declare function emitAsk(eventName: string, reason: string): boolean;
 export declare function isAntigravityEvent(event: HookEvent): boolean;
 export declare function isGeminiCliEvent(event: HookEvent): boolean;
 export declare function isCursorEvent(event: HookEvent): boolean;
@@ -65,6 +74,19 @@ export declare function normaliseHookEvent(event: HookEvent): HookEvent;
 export declare function readEvent(): Promise<HookEvent>;
 export declare function eventNameOf(event: HookEvent, fallback: string): string;
 export declare function sessionIdOf(event: HookEvent): string;
+/**
+ * Host tool names, normalised to the vocabulary the engine speaks.
+ *
+ * Codex emits `shell_command` / `exec_command` / `apply_patch`; Antigravity
+ * emits `run_command` / `edit_file` / `replace_file_content` / `write_file` /
+ * `read_file` / `view_file` / `grep_search` / `find_by_name` / `list_dir`.
+ * The pairing loop, REPAIR_TOOLS and program-family matching all key on ZCode's
+ * Bash/Edit names. Keep the map here — one entry point every hook already
+ * calls — so no adapter code is duplicated per host.
+ */
+/**
+ * Normalise host tool names via the single canonical taxonomy in `core/tools.ts`.
+ */
 export declare function normaliseToolName(name: string): string;
 export declare function toolNameOf(event: HookEvent): string;
 /**

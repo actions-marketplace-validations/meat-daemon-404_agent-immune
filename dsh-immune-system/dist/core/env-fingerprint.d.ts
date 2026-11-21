@@ -6,7 +6,10 @@ export interface WorkspaceFingerprint {
 }
 /** Pure: hash one workspace's lockfiles + the runtime major. */
 export declare function computeFingerprint(cwd: string, nodeMajor?: string): WorkspaceFingerprint;
-/** The current process's workspace fingerprint (cached per process). */
+/**
+ * The current workspace fingerprint, invalidated automatically when any lockfile's
+ * mtime or size changes so long-lived DSH / MCP processes detect upgrades live.
+ */
 export declare function currentFingerprint(cwd?: string): WorkspaceFingerprint;
 /**
  * SessionStart metabolism: fingerprint-mismatched rules enter probation,

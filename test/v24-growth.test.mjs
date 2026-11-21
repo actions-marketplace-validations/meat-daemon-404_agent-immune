@@ -349,9 +349,11 @@ test('v2.4 root action.yml GitHub Marketplace Action exists and defines composit
   const raw = readFileSync(actionPath, 'utf8');
   assert.match(raw, /name:\s*'Agent Immune/);
   assert.match(raw, /using:\s*'composite'/);
-  assert.match(raw, /dsh-immune-system ci-check/);
-  assert.match(raw, /dsh-immune-system team-sync --check/);
-  assert.match(raw, /dsh-immune-system wrapped/);
+  assert.match(raw, /ci-check/);
+  assert.match(raw, /team-sync --check/);
+  assert.match(raw, /vaccinate --check/);
+  assert.match(raw, /wrapped/);
+  assert.match(raw, /--github/);
 });
 
 test('v2.4 dsh-immune-system/core barrel exports badge, markdown, and team-sync verification helpers', () => {
@@ -466,8 +468,8 @@ test('v2.4 inferRuleGlobs and renderCursorMdc generate valid Cursor .mdc frontma
 
   const mdc = renderCursorMdc([rustRule, nextRule]);
   assert.ok(mdc.startsWith('---\ndescription:'));
-  assert.ok(mdc.includes('globs: **/*.rs, **/Cargo.toml, **/*.tsx, **/*.ts, **/*.jsx'));
-  assert.ok(mdc.includes('alwaysApply: true'));
+  assert.ok(mdc.includes('globs: "**/*.rs, **/Cargo.toml, **/*.tsx, **/*.ts, **/*.jsx"'));
+  assert.ok(mdc.includes('alwaysApply: false'));
 });
 
 test('v2.4 compileIdeRules transpiles rules across all 5 IDE targets and preserves existing user content outside fenced markers', () => {
@@ -503,7 +505,7 @@ test('v2.4 compileIdeRules transpiles rules across all 5 IDE targets and preserv
 
     const copilotMerged = readFileSync(copilotPath, 'utf8');
     assert.ok(copilotMerged.includes('# My Team Custom Copilot Instructions'), 'preserves user header');
-    assert.ok(copilotMerged.includes('<!-- immune:generated:start -->'));
+    assert.ok(copilotMerged.includes('<!-- immune:generated start -->'));
     assert.ok(copilotMerged.includes('Use pnpm install instead of npm'));
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -553,7 +555,7 @@ test('v2.4 runPitfallAutopsy computes rescued tokens, frontier API dollar saving
   assert.ok(report.minutesReclaimed >= 13);
   assert.equal(report.fragileScars.length, 1);
   assert.equal(report.fragileScars[0].trigger_pattern, 'Edit target file unread');
-  assert.equal(report.fragileScars[0].survivalPct, 80);
+  assert.equal(report.fragileScars[0].survivalPct, 75);
 
   const term = renderAutopsyTerminal(report);
   assert.match(term, /FORENSIC PITFALL AUTOPSY/);

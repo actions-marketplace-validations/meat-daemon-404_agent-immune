@@ -76,6 +76,8 @@ export interface Antibody {
   triage_bucket?: TriageBucket;
   /** Count of times a valid rule was delivered but ignored by the agent. */
   ignored_count?: number;
+  /** Timestamp when this rule was promoted to the shared global library (0 = not yet promoted). */
+  promoted_at?: number;
   created_at: number;
   updated_at: number;
 }
@@ -157,6 +159,30 @@ export interface TriageEvent {
   reason: string;
   action_taken: string;
   created_at: number;
+}
+
+/** Persistent Pre-Flight Guard interception event (v4.0 audit ledger). */
+export interface GuardEvent {
+  id: number;
+  session_id: string;
+  tool_name: string;
+  decision: 'warn' | 'rewrite' | 'block';
+  severity: 'low' | 'medium' | 'high' | 'critical';
+  blast_radius: number;
+  policy_ids: string[];
+  payload_preview: string;
+  suggested_rewrite: string;
+  project_scope: string;
+  created_at: number;
+}
+
+/** Read-only summary of live Pre-Flight Guard interceptions. */
+export interface GuardEventSummary {
+  total: number;
+  byDecision: Record<string, number>;
+  byPolicy: Array<{ policyId: string; count: number }>;
+  avgBlastRadius: number;
+  recent: GuardEvent[];
 }
 
 /** Discovered workspace profile on local disk. */

@@ -14,9 +14,15 @@ import type { Antibody } from './types.js';
  * diluting BM25 ranking). Unrelated prompts return the original text unchanged.
  */
 export declare function expandConceptQuery(query: string): string;
+export interface PreparedLexicalQuery {
+    readonly asciiTokens: string[];
+    readonly cjkBigrams: string[];
+}
+/** Precompute concept expansion + ASCII tokens + CJK bigrams once per query before scoring N candidates. */
+export declare function prepareLexicalQuery(query: string): PreparedLexicalQuery;
 /**
  * Direct lexical + concept-trigger affinity score in [0, 3+].
  * Rewards rules whose trigger_pattern actually shares meaningful ASCII tokens or
  * CJK bigrams with the (concept-expanded) query, neutralizing BM25 short-field bias.
  */
-export declare function lexicalTriggerAffinity(query: string, rule: Pick<Antibody, 'trigger_pattern' | 'symptom' | 'prescription'>): number;
+export declare function lexicalTriggerAffinity(query: string | PreparedLexicalQuery, rule: Pick<Antibody, 'trigger_pattern' | 'symptom' | 'prescription'>): number;

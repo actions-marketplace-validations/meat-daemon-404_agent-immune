@@ -14,16 +14,18 @@ import { GlobalStore, globalDbPathFor, isPromotable } from './global.js';
 import { rerank } from './rerank.js';
 import { bumpMeta, readMeta, setMeta } from './meta.js';
 import { deriveProjectScope, repairLibraryHygiene } from '../hygiene.js';
-import { recordDeliveryReceipt, summarizeReceipts } from '../receipts.js';
+import { recordDeliveryReceipt, recordHeldReceiptsForSession, summarizeReceipts, } from '../receipts.js';
+import { recordGuardEvent, summarizeGuardEvents, } from './guard-events.js';
 import { summarizeTriage } from '../triage.js';
 import { buildModelImmunityReport } from '../model-intel.js';
+import { canonicalToolName } from '../tools.js';
 /** meta-table key for the value metric: repeats the plugin measurably prevented. */
 export const SUPPRESSED_REPEATS_KEY = 'suppressed_repeats';
 /** Runtime truth for the optional model path: rules it produced / times it degraded. */
 export const LLM_SUCCESS_KEY = 'llm_distilled';
 export const LLM_FALLBACK_KEY = 'llm_fallbacks';
 import { bumpTurn, claimPromptTurn, clearPromptTurn, clearTurnState, readTurnState, recordTurnInjection, shouldSuppress, } from './turn-state.js';
-import { bumpHits, exportableAntibodies, findMatches, getAntibodyById, insertAntibody, listAntibodies, mutateRule, penalizeAntibodies, removeAntibody, setAntibodyStatus, setPrescription as setAntibodyPrescription, consolidateAntibodies, newestActiveId, pruneZombieAntibodies, retireZombieAntibodies, } from './antibodies.js';
+import { bumpHits, exportableAntibodies, findMatches, getAntibodyById, insertAntibody, listAntibodies, markPromoted, mutateRule, penalizeAntibodies, removeAntibody, setAntibodyStatus, setPrescription as setAntibodyPrescription, consolidateAntibodies, newestActiveId, pruneZombieAntibodies, retireZombieAntibodies, } from './antibodies.js';
 import { installSeedPack, removeSeedPack, seededPackCounts } from './seeds.js';
 import { crossModelRuleCount, modelBreakdown, recordModelFails, recordModelHits, resolveModel, } from './models.js';
 import { claimFailure, hasPendingFailure, injectedIds, injectedPrescriptions, probeStreakCount, pruneStale, recordFailure, recordInjection, recordProbeOutcome, recordRepairAction, topProbeStreak, attachHumanHint, } from './episodes.js';
@@ -48,8 +50,8 @@ export class ImmuneStore {
                     : resolveDbPath(process.env, opts.cwd));
         this.db = openDatabase(this.dbPath);
     }
-    insert(ab) {
-        return insertAntibody(this.db, ab);
+    insert(ab, opts = {}) {
+        return insertAntibody(this.db, ab, opts);
     }
     /**
      * Insert and, when the rule is provably generic, also publish it to the
@@ -73,6 +75,7 @@ export class ImmuneStore {
                     prescription: ab.prescription,
                     tool_name: ab.tool_name ?? null,
                 });
+                markPromoted(this.db, id);
             }
         }
         catch {
@@ -99,8 +102,9 @@ export class ImmuneStore {
     match(queryText, opts = {}) {
         const limit = opts.limit ?? 3;
         // Retrieve wide, then rerank: BM25 answers "is the text related", not "is
-        // this about the file I am touching right now".
-        const wide = limit * 2;
+        // this about the file I am touching right now", and wide >= 12 keeps enough
+        // headroom for bilingual FTS5 + CJK bigram union candidates.
+        const wide = Math.max(limit * 4, 12);
         const sent = opts.excludeInjected && opts.sessionId
             ? new Set(injectedPrescriptions(this.db, opts.sessionId))
             : null;
@@ -139,16 +143,16 @@ export class ImmuneStore {
             }
         }
         let merged = [...own, ...shared];
-        if (opts.strictToolMatch && opts.toolName) {
-            const targetTool = opts.toolName.toLowerCase();
-            merged = merged.filter((r) => !r.tool_name || r.tool_name.toLowerCase() === targetTool);
+        const targetTool = opts.toolName ? canonicalToolName(opts.toolName).toLowerCase() : '';
+        if (opts.strictToolMatch && targetTool) {
+            merged = merged.filter((r) => !r.tool_name || canonicalToolName(r.tool_name).toLowerCase() === targetTool);
         }
         // Tool affinity is a TIE-BREAKER inside the retrieval order, not a
         // post-multiplier: two rules with near-identical text get near-arbitrary
         // bm25 positions, and a same-tool rule should win that tie. The stable
         // sort keeps retrieval order otherwise; the relevance spread stays the
         // dominant signal.
-        const aff = (r) => opts.toolName && r.tool_name?.toLowerCase() === opts.toolName.toLowerCase() ? 0 : 1;
+        const aff = (r) => targetTool && r.tool_name && canonicalToolName(r.tool_name).toLowerCase() === targetTool ? 0 : 1;
         const ordered = merged
             .map((r, i) => ({ r, i }))
             .sort((x, y) => aff(x.r) - aff(y.r) || x.i - y.i);
@@ -171,26 +175,24 @@ export class ImmuneStore {
         }
         if (rankedOwn.length > 0) {
             bumpHits(this.db, rankedOwn.map((r) => r.id));
-            // Promote on the turn a rule crosses five successful injections: that is
-            // the proof-of-generality the promotion rule asks for. isPromotable
-            // judges the POST-bump count (>= 5), so pass hit_count + 1: the original
-            // code fed the pre-bump count into that predicate, which made the whole
-            // crossing check dead — nothing could ever promote at match time. The
-            // >= form also lets pre-existing rules (hit counts already past the
-            // threshold when promotion shipped) promote on their next injection;
-            // GlobalStore.insert deduplicates by prescription, so repeated crossings
-            // just count the shared copy's hits.
-            const crossed = rankedOwn.filter((r) => r.hit_count + 1 >= 5 && isPromotable({ ...r, hit_count: r.hit_count + 1 }, false));
+            // Promote once when a rule crosses five successful injections: `promoted_at`
+            // prevents re-opening global.sqlite on every subsequent match (hit 6..500).
+            const crossed = rankedOwn.filter((r) => (r.promoted_at ?? 0) === 0 &&
+                r.hit_count + 1 >= 5 &&
+                isPromotable({ ...r, hit_count: r.hit_count + 1 }, false));
             if (crossed.length > 0) {
                 const global = this.global();
                 for (const row of crossed) {
                     try {
-                        global?.insert({
-                            trigger_pattern: row.trigger_pattern,
-                            symptom: row.symptom,
-                            prescription: row.prescription,
-                            tool_name: row.tool_name,
-                        });
+                        if (global) {
+                            global.insert({
+                                trigger_pattern: row.trigger_pattern,
+                                symptom: row.symptom,
+                                prescription: row.prescription,
+                                tool_name: row.tool_name,
+                            });
+                            markPromoted(this.db, row.id);
+                        }
                     }
                     catch {
                         // Sharing is best-effort.
@@ -360,8 +362,19 @@ export class ImmuneStore {
     pruneZombies(olderThanMs) {
         return pruneZombieAntibodies(this.db, olderThanMs);
     }
-    setStatus(id, status) {
-        return setAntibodyStatus(this.db, id, status);
+    setStatus(id, status, retireReason) {
+        const effectiveReason = retireReason ?? (status === 'retired' ? 'manual' : undefined);
+        return setAntibodyStatus(this.db, id, status, effectiveReason);
+    }
+    /** Read the current SQLite `PRAGMA user_version` schema version. */
+    schemaVersion() {
+        try {
+            const row = this.db.prepare('PRAGMA user_version').get();
+            return Number(row?.user_version ?? 0);
+        }
+        catch {
+            return 0;
+        }
     }
     /** Write a consistent snapshot; a plain copy of a WAL db can be empty. */
     async backupTo(path) {
@@ -513,6 +526,31 @@ export class ImmuneStore {
     /** Verify and summarize SHA-256 chained delivery receipts. */
     receiptSummary(limit = 500) {
         return summarizeReceipts(this.db, limit);
+    }
+    /**
+     * Settle verified `'held'` receipts at turn end for rules injected in
+     * `sessionId` that survived without a related failure in this window.
+     */
+    recordHeldReceipts(sessionId, projectScope = '*', tokensPerHold) {
+        const ids = injectedIds(this.db, sessionId);
+        if (ids.length === 0)
+            return 0;
+        const model = resolveModel(this.db, sessionId);
+        return recordHeldReceiptsForSession(this.db, {
+            sessionId,
+            ruleIds: ids,
+            model,
+            projectScope,
+            tokensPerHold,
+        });
+    }
+    /** Persist a redacted live Pre-Flight Guard interception into the audit ledger. */
+    recordGuardEvent(entry) {
+        recordGuardEvent(this.db, entry);
+    }
+    /** Read-only summary and recent rows from the live Pre-Flight Guard audit ledger. */
+    guardEventSummary(limit = 25) {
+        return summarizeGuardEvents(this.db, limit);
     }
     /** Build per-model immunity matrix + adaptive escalation targets. */
     modelImmunity(magpie) {

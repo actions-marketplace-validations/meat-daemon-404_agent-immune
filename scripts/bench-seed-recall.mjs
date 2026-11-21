@@ -77,6 +77,27 @@ const QUESTIONS = [
   ['go-mod', 'errors.Is errors.As', 'Go 用 fmt.Errorf %w 包装后的错误直接用 == 比较失效'],
   ['go-mod', 'encoding/json struct 小写私有字段', 'Go 结构体 json.Marshal 出来是空对象字段全丢了'],
   ['go-mod', 'go test -race', 'Go 并发写 map 偶发崩溃怎么在测试时查出数据竞争'],
+  // sql-migrations
+  ['sql-migrations', 'prisma migrate dev non-TTY', 'Agent 终端跑 prisma migrate dev 一直卡住等输入怎么办'],
+  ['sql-migrations', 'Postgres ALTER TABLE 锁表', '大表直接建索引把线上读写全阻塞锁表了怎么处理'],
+  ['sql-migrations', 'drizzle-kit push generate', '团队项目直接跑 drizzle-kit push 导致 schema 漂移没法回滚'],
+  ['sql-migrations', 'SQLite SQLITE_BUSY', '多进程同时写 SQLite 频繁报 database is locked 怎么配'],
+  ['sql-migrations', 'DELETE UPDATE 漏写 WHERE', '执行 SQL 更新删数据怕漏写 WHERE 把整表清空怎么防'],
+  ['sql-migrations', 'DROP TABLE TRUNCATE', '共享数据库能直接跑 DROP TABLE 或 TRUNCATE 清表吗'],
+  // nextjs-react
+  ['nextjs-react', 'useState useEffect Server Component', 'Next.js App Router 组件里用 useState 报错说只能在客户端用'],
+  ['nextjs-react', 'next/router NextRouter', 'App Router 里引入 useRouter 运行时报错 NextRouter was not mounted'],
+  ['nextjs-react', 'React hydration mismatch', '页面首屏直接用 Date.now 渲染导致 React 水合不一致报错'],
+  ['nextjs-react', 'useSearchParams Suspense', 'next build 预渲染阶段因为 useSearchParams 报错失败怎么修'],
+  ['nextjs-react', 'Server Action try catch redirect', 'Next.js Server Action 里 try catch 包了 redirect 后页面不跳转'],
+  ['nextjs-react', 'useEffect fetch 竞态', 'React 快速切换筛选条件旧 fetch 请求覆盖新状态怎么取消'],
+  // windows-shell
+  ['windows-shell', 'PowerShell && 链式命令', 'Windows PowerShell 5.1 里用 && 连写两条命令报语法错误'],
+  ['windows-shell', '保留设备名 nul', '仓库根目录不小心重定向出来一个删不掉的 nul 文件怎么办'],
+  ['windows-shell', 'PowerShell curl 别名', 'PowerShell 里跑 curl 传 -H 参数报错提示是 Invoke-WebRequest'],
+  ['windows-shell', 'Git CRLF 换行符 .sh', 'Windows 提交的 shell 脚本放到 Linux 容器里报 bad interpreter'],
+  ['windows-shell', 'Out-File UTF-16 BOM', 'PowerShell 重定向写出来的 JSON 文件带 UTF-16 BOM 解析报错'],
+  ['windows-shell', '反斜杠路径 glob', 'Windows 上用 path.join 拼的路径传给 glob 匹配不到任何文件'],
 ];
 
 /** Unrelated prompts — gram-clean enough that no seed rule should surface. */

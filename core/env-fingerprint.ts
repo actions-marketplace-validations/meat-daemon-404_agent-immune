@@ -58,13 +58,31 @@ export function computeFingerprint(cwd: string, nodeMajor = process.version): Wo
   return { key, parts };
 }
 
-let cached: { cwd: string; fingerprint: WorkspaceFingerprint } | null = null;
+let cached: { cwd: string; statStamp: string; fingerprint: WorkspaceFingerprint } | null = null;
 
-/** The current process's workspace fingerprint (cached per process). */
+function lockfileStatStamp(cwd: string): string {
+  const stamps: string[] = [];
+  for (const name of LOCKFILES) {
+    const p = join(cwd, name);
+    try {
+      const st = statSync(p);
+      stamps.push(`${name}:${Math.trunc(st.mtimeMs)}:${st.size}`);
+    } catch {
+      // File absent.
+    }
+  }
+  return stamps.join('|');
+}
+
+/**
+ * The current workspace fingerprint, invalidated automatically when any lockfile's
+ * mtime or size changes so long-lived DSH / MCP processes detect upgrades live.
+ */
 export function currentFingerprint(cwd = process.cwd()): WorkspaceFingerprint {
-  if (cached && cached.cwd === cwd) return cached.fingerprint;
+  const stamp = lockfileStatStamp(cwd);
+  if (cached && cached.cwd === cwd && cached.statStamp === stamp) return cached.fingerprint;
   const fingerprint = computeFingerprint(cwd);
-  cached = { cwd, fingerprint };
+  cached = { cwd, statStamp: stamp, fingerprint };
   return fingerprint;
 }
 

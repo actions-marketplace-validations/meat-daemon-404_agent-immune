@@ -1,3 +1,12 @@
+/**
+ * v3.0 Cross-Project Swarm Federation & Antibody Consensus Engine (`immune federate`).
+ *
+ * Aggregates antibody libraries across multiple workspaces or coding agents
+ * (Claude Code, Cursor, Codex, Gemini CLI, Windsurf), filters out local paths
+ * and secrets via `isTeamShareSafe`, clusters semantically equivalent lessons,
+ * and computes a Swarm Consensus Score (0-100) to promote corroborated rules
+ * into Universal Swarm Laws.
+ */
 import type { DiagnosableRule } from './diagnose.js';
 export type SwarmConsensusTier = 'universal-law' | 'proven-tactic' | 'local-probation';
 export interface SwarmRuleSource {

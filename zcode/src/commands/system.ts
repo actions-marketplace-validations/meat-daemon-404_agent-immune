@@ -14,6 +14,14 @@ import { runDoctor } from '../doctor.js';
 import { flagValue } from './shared.js';
 
 export function cmdConnect(args: string[]): number {
+  const KNOWN_CONNECT_FLAGS = new Set(['--remove', '--status', '--json', '--refresh']);
+  const unknownFlags = args.filter((arg) => arg.startsWith('-') && !KNOWN_CONNECT_FLAGS.has(arg));
+  if (unknownFlags.length > 0) {
+    process.stderr.write(
+      `connect: unknown option(s): ${unknownFlags.join(', ')} (supported: --status, --remove, --refresh, --json)\n`,
+    );
+    return 2;
+  }
   const hostArg = args.find((arg) => !arg.startsWith('-'));
   const remove = args.includes('--remove');
   const asJson = args.includes('--json');
@@ -104,6 +112,10 @@ export function cmdConnect(args: string[]): number {
   try {
     if (remove) {
       const report = disconnectHost(definition.id);
+      if (asJson) {
+        process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+        return 0;
+      }
       process.stdout.write(
         report.removed > 0
           ? `removed ${report.removed} immune hook(s) from ${report.configPath}\n`
@@ -113,6 +125,10 @@ export function cmdConnect(args: string[]): number {
       return 0;
     }
     const report = connectHost(definition.id, { refresh: args.includes('--refresh') });
+    if (asJson) {
+      process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+      return 0;
+    }
     process.stdout.write(`connected ${report.label} -> ${report.configPath}\n`);
     const counts: string[] = [];
     if (report.added > 0) counts.push(`${report.added} event(s) wired`);
@@ -139,7 +155,11 @@ export function cmdConnect(args: string[]): number {
 export function cmdUi(args: string[]): number {
   const rawPort = flagValue(args, '--port');
   const wanted = rawPort !== undefined ? Number(rawPort) : 7788;
-  const port = Number.isInteger(wanted) && wanted >= 0 ? wanted : 7788;
+  if (rawPort !== undefined && (!Number.isInteger(wanted) || wanted < 0 || wanted > 65535)) {
+    process.stderr.write(`ui: invalid --port "${rawPort}" (expected integer 0–65535)\n`);
+    return 2;
+  }
+  const port = Number.isInteger(wanted) && wanted >= 0 && wanted <= 65535 ? wanted : 7788;
 
   startUiServer({ port })
     .then((handle) => {

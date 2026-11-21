@@ -140,11 +140,14 @@ function resultFromObject(obj, toolName) {
         },
     };
 }
+function escapePromptTags(text) {
+    return text.replace(/<\/?(?:failed_call|successful_call|human_explanation|draft_rule|rubric_issues|evidence)\b[^>]*>/gi, '[tag]');
+}
 /** Build the user-side payload for one failure/success pair. */
 export function buildDistillInput(failureTrace, successTrace, humanHint = '') {
-    const safeFailure = redactOutbound(failureTrace);
-    const safeSuccess = redactOutbound(successTrace);
-    const safeHint = humanHint.trim() ? redactOutbound(humanHint.trim()) : '';
+    const safeFailure = escapePromptTags(redactOutbound(failureTrace));
+    const safeSuccess = escapePromptTags(redactOutbound(successTrace));
+    const safeHint = humanHint.trim() ? escapePromptTags(redactOutbound(humanHint.trim())) : '';
     const parts = [
         '<failed_call>',
         safeFailure,
@@ -236,15 +239,15 @@ Requirements:
 export function buildCritiqueInput(draft, issues, failureTrace, successTrace) {
     return [
         '<draft_rule>',
-        JSON.stringify(draft),
+        escapePromptTags(redactOutbound(JSON.stringify(draft))),
         '</draft_rule>',
         '<rubric_issues>',
-        issues.join('; ') || 'low portability or actionability',
+        escapePromptTags(issues.join('; ') || 'low portability or actionability'),
         '</rubric_issues>',
         '<evidence>',
-        redactOutbound(failureTrace).slice(0, 600),
+        escapePromptTags(redactOutbound(failureTrace).slice(0, 600)),
         '---',
-        redactOutbound(successTrace).slice(0, 600),
+        escapePromptTags(redactOutbound(successTrace).slice(0, 600)),
         '</evidence>',
     ].join('\n');
 }

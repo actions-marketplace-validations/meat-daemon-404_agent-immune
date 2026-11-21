@@ -35,9 +35,24 @@ const CONCEPT_GRAPH = [
     { pattern: /借用检查|可变借用|同时借用|borrow.?check/i, expansions: ['borrow', 'E0502', 'mutable'] },
     { pattern: /跨.*await|send.*bound|mutexguard/i, expansions: ['Send', 'await', 'MutexGuard'] },
     { pattern: /阻塞.*异步|tokio.*阻塞|异步.*卡死/i, expansions: ['spawn_blocking', 'tokio', 'executor'] },
+    { pattern: /serde|derive.*serialize|找不到宏/i, expansions: ['serde', 'Serialize', 'Deserialize', 'derive'] },
     { pattern: /空\s*map|未初始化.*map|nil\s*map/i, expansions: ['nil', 'map', 'assignment', 'make'] },
     { pattern: /错误包装|链式错误|fmt\.errorf/i, expansions: ['errors.Is', 'errors.As', 'Errorf'] },
     { pattern: /并发.*map|concurrent map/i, expansions: ['concurrent', 'map', 'race', 'sync'] },
+    { pattern: /prisma.*migrate|非交互.*迁移|migrate dev.*卡/i, expansions: ['prisma', 'migrate', 'non-TTY', '--create-only'] },
+    { pattern: /锁表|建索引.*阻塞|lock_timeout|concurrently/i, expansions: ['Postgres', 'ALTER', 'CONCURRENTLY', 'lock_timeout'] },
+    { pattern: /drizzle|schema.*漂移|push.*迁移/i, expansions: ['drizzle-kit', 'push', 'generate', 'migrate'] },
+    { pattern: /漏写.*where|全表清空|误删数据/i, expansions: ['DELETE', 'UPDATE', 'WHERE'] },
+    { pattern: /删表|drop table|truncate/i, expansions: ['DROP', 'TABLE', 'TRUNCATE'] },
+    { pattern: /水合|hydration|服务端.*客户端.*html/i, expansions: ['hydration', 'mismatch', 'SSR', 'Date.now'] },
+    { pattern: /next\/router|nextrouter.*not mounted/i, expansions: ['next/router', 'next/navigation', 'useRouter'] },
+    { pattern: /usesearchparams|预渲染.*suspense/i, expansions: ['useSearchParams', 'Suspense', 'prerender'] },
+    { pattern: /server action.*redirect|next_redirect|跳转失效/i, expansions: ['Server', 'Action', 'redirect', 'NEXT_REDIRECT'] },
+    { pattern: /请求.*竞态|卸载.*setstate|abortcontroller/i, expansions: ['useEffect', 'AbortController', 'cleanup'] },
+    { pattern: /保留设备名|删不掉.*nul|>\s*nul/i, expansions: ['nul', 'Windows', 'Out-Null'] },
+    { pattern: /powershell.*curl|invoke-webrequest|curl.*别名/i, expansions: ['curl', 'Invoke-WebRequest', 'curl.exe', 'PowerShell'] },
+    { pattern: /utf-16|bom.*json|重定向.*乱码/i, expansions: ['UTF-16', 'BOM', 'Out-File', 'PowerShell'] },
+    { pattern: /反斜杠.*glob|路径.*glob.*0/i, expansions: ['反斜杠', 'glob', 'Windows', 'posix'] },
 ];
 const STOP_LEX = new Set(['the', 'and', 'for', 'with', 'that', 'this', 'from', 'into', 'error', 'fail', 'failed']);
 /**
@@ -62,26 +77,38 @@ export function expandConceptQuery(query) {
     }
     return extra.length > 0 ? `${query} ${extra.join(' ')}` : query;
 }
+/** Precompute concept expansion + ASCII tokens + CJK bigrams once per query before scoring N candidates. */
+export function prepareLexicalQuery(query) {
+    const expanded = expandConceptQuery(query);
+    const asciiTokens = [];
+    for (const tok of tokenize(expanded, 20)) {
+        const low = tok.toLowerCase();
+        if (low.length < 2 || STOP_LEX.has(low) || /[\u4e00-\u9fff]/.test(low))
+            continue;
+        asciiTokens.push(low);
+    }
+    return {
+        asciiTokens,
+        cjkBigrams: cjkBigrams(expanded, 16),
+    };
+}
 /**
  * Direct lexical + concept-trigger affinity score in [0, 3+].
  * Rewards rules whose trigger_pattern actually shares meaningful ASCII tokens or
  * CJK bigrams with the (concept-expanded) query, neutralizing BM25 short-field bias.
  */
 export function lexicalTriggerAffinity(query, rule) {
-    const expanded = expandConceptQuery(query);
+    const prepared = typeof query === 'string' ? prepareLexicalQuery(query) : query;
     const triggerLow = rule.trigger_pattern.toLowerCase();
     const bodyLow = `${rule.symptom} ${rule.prescription}`.toLowerCase();
     let score = 0;
-    for (const tok of tokenize(expanded, 20)) {
-        const low = tok.toLowerCase();
-        if (low.length < 2 || STOP_LEX.has(low) || /[\u4e00-\u9fff]/.test(low))
-            continue;
+    for (const low of prepared.asciiTokens) {
         if (triggerLow.includes(low))
             score += 1.0;
         else if (bodyLow.includes(low))
             score += 0.35;
     }
-    for (const bg of cjkBigrams(expanded, 16)) {
+    for (const bg of prepared.cjkBigrams) {
         if (triggerLow.includes(bg))
             score += 0.85;
         else if (bodyLow.includes(bg))

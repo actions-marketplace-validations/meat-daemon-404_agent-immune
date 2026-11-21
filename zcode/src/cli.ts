@@ -49,6 +49,7 @@ import {
 import { cmdCompletions } from './commands/completions.js';
 import { hasHelpFlag, renderCommandHelp, renderMainHelp } from './commands/shared.js';
 import { cmdConnect, cmdDoctor, cmdGitHook, cmdUi, runDemo } from './commands/system.js';
+import { runMcpServer } from './mcp-server.js';
 
 function main(argv: string[]): number {
   const [command = 'list', ...args] = argv;
@@ -83,6 +84,14 @@ function main(argv: string[]): number {
         process.exitCode = 1;
       })
       .finally(() => clearInterval(keepAlive));
+    return 0;
+  }
+
+  if (command === 'mcp') {
+    void runMcpServer().catch((error: unknown) => {
+      process.stderr.write(`mcp server failed: ${error instanceof Error ? error.message : String(error)}\n`);
+      process.exitCode = 1;
+    });
     return 0;
   }
 

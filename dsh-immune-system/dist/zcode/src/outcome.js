@@ -8,17 +8,31 @@
  *
  * So PostToolUse is classified here instead, and the two paths converge.
  */
-/** Check for a non-zero numeric exit code in a few plausible spellings. */
+/** Check for a numeric shell exit code in explicit spellings without mistaking HTTP status codes. */
 function exitCodeOf(response) {
     if (typeof response !== 'object' || response === null)
         return null;
     const raw = response;
-    for (const key of ['exitCode', 'exit_code', 'code', 'status']) {
+    for (const key of ['exitCode', 'exit_code']) {
         const value = raw[key];
         if (typeof value === 'number' && Number.isFinite(value))
             return value;
         if (typeof value === 'string' && /^-?\d+$/.test(value))
             return Number(value);
+    }
+    const looksHttp = 'ok' in raw || 'headers' in raw || 'statusText' in raw || 'body' in raw || 'data' in raw;
+    if (!looksHttp) {
+        for (const key of ['code', 'status']) {
+            const value = raw[key];
+            const num = typeof value === 'number' && Number.isFinite(value)
+                ? value
+                : typeof value === 'string' && /^-?\d+$/.test(value)
+                    ? Number(value)
+                    : null;
+            // Exclude HTTP 2xx/3xx status codes (200..399) from generic `status`/`code` keys.
+            if (num !== null && (num < 200 || num >= 400))
+                return num;
+        }
     }
     return null;
 }
@@ -29,7 +43,7 @@ function exitCodeOf(response) {
  * only specific shapes count. A false positive here would record a healthy call
  * as a pitfall.
  */
-const FAILURE_MARKERS = /\bexit (?:code|status)\s*[:=]?\s*[1-9]\d*\b|ENOENT|EACCES|EPERM|ECONNREFUSED|command not found|is not recognized as an internal|Traceback \(most recent call last\)|npm ERR!|\bfatal:\s|^Error:|Cannot find module/i;
+const FAILURE_MARKERS = /\bexit (?:code|status)\s*[:=]?\s*[1-9]\d*\b|ENOENT|EACCES|EPERM|ECONNREFUSED|command not found|is not recognized as an internal|Traceback \(most recent call last\)|npm ERR!|\bfatal:\s|^Error:|Cannot find module/im;
 const SANDBOX_DENIED = /\[sandbox:\s*file access denied under [^\]\n]+ mode\]|\bUPLOAD_NEEDS_PERMISSION\b|permission denied by user|rejected by user/i;
 const TIMED_OUT = /\n\[timed out after \d+ms\]/i;
 /** Classify one successful-looking tool result as failure or success. */
@@ -66,10 +80,18 @@ export function classifyOutcome(event) {
     if (exit !== null) {
         return { failed: exit !== 0, text: body || `exit code ${exit}` };
     }
-    if (typeof response === 'object' && response !== null) {
+    if (typeof response === 'object' && response !== null && !Array.isArray(response)) {
         const obj = response;
-        if (obj.is_error === true || obj.isError === true || obj.error) {
+        if (obj.is_error === true || obj.isError === true || obj.error || obj.ok === false) {
             return { failed: true, text: body || String(obj.error ?? 'error') };
+        }
+        // AGENTS.md #13: a non-empty structured payload from a content/API tool
+        // (Read, Grep, HTTP fetch) without shell output fields is already a verdict;
+        // do not scan file contents or response data for `Error:` words.
+        const keys = Object.keys(obj);
+        const hasShellOutputField = 'stdout' in obj || 'stderr' in obj || 'output' in obj || 'command' in obj || 'interrupted' in obj;
+        if (keys.length > 0 && !hasShellOutputField) {
+            return { failed: false, text: body };
         }
     }
     if (FAILURE_MARKERS.test(body))

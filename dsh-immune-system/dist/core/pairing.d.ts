@@ -28,7 +28,14 @@ export interface TargetSignature {
  * machines and checkouts.
  */
 export declare function normaliseTargetPath(rawPath: string, cwd?: string): string;
-/** Split a shell command into `program` and its first non-flag subcommand. */
+/**
+ * Split a shell command into `program` and its first non-flag subcommand.
+ *
+ * For chained commands (`cd packages/api && npm test`, `echo building && cargo check`),
+ * skips leading probe/navigation segments (`cd`, `echo`, `pwd`, ...) so the real
+ * action determines both signature and `probeOnly` — a chain is probe-only only
+ * when EVERY segment is a probe (`cd /repo && git status`).
+ */
 export declare function parseCommand(command: string): {
     program: string;
     sub: string;

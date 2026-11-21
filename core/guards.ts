@@ -17,7 +17,7 @@
  * the caller.
  */
 
-export type GuardMode = 'off' | 'warn' | 'deny';
+export type GuardMode = 'off' | 'warn' | 'ask' | 'deny';
 
 export interface GuardRule {
   /** Stable id, shown to the model so it can be referenced. */
@@ -46,7 +46,7 @@ export const GUARD_RULES: readonly GuardRule[] = [
   {
     id: 'rm-rf-root',
     what: '递归删除根目录或家目录不可逆',
-    pattern: /\brm\s+(?:-[a-zA-Z]*[rf][a-zA-Z]*\s+)+(?:\/|~|\$HOME)\s*(?=$|[;&|"'])/i,
+    pattern: /\brm\s+(?:-[a-zA-Z]*[rf][a-zA-Z]*\s+)+(?:\/\*?|~\/?|\$HOME)\s*(?=$|[\r\n;&|"'])/i,
     instead: '把目标收窄到具体子目录，并先 ls 确认',
   },
   {
@@ -72,12 +72,35 @@ export const GUARD_RULES: readonly GuardRule[] = [
 export function guardMode(env: NodeJS.ProcessEnv = process.env): GuardMode {
   const raw = env.IMMUNE_GUARD?.trim().toLowerCase();
   if (raw === 'deny') return 'deny';
+  if (raw === 'ask') return 'ask';
   if (raw === 'warn' || raw === '1' || raw === 'true') return 'warn';
   return 'off';
 }
 
 export interface GuardHit {
   rule: GuardRule;
+}
+
+/**
+ * Extract raw command text for shell payloads so real newlines are preserved
+ * (preventing `JSON.stringify` `\\n` escapes from bypassing line anchors or
+ * causing cross-line false positives).
+ */
+export function extractGuardInput(toolInput: unknown): string {
+  if (typeof toolInput === 'string') return toolInput;
+  if (toolInput && typeof toolInput === 'object') {
+    const obj = toolInput as Record<string, unknown>;
+    const rawCmd =
+      (typeof obj.command === 'string' && obj.command) ||
+      (typeof obj.CommandLine === 'string' && obj.CommandLine) ||
+      (typeof obj.cmd === 'string' && obj.cmd);
+    if (rawCmd) return rawCmd;
+  }
+  try {
+    return JSON.stringify(toolInput ?? {});
+  } catch {
+    return '';
+  }
 }
 
 /**

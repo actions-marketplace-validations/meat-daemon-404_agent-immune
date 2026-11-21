@@ -31,19 +31,33 @@ export interface GitHookStatus {
   coexistsWithUserHook: boolean;
 }
 
-/** Resolve the active Git hooks directory (supports worktrees and `core.hooksPath` default). */
-export function resolveGitDir(startDir = process.cwd()): string | null {
+/** Resolve repository root and Git common dir (supports worktrees). */
+function resolveGitLocations(startDir = process.cwd()): { repoRoot: string; gitCommonDir: string } | null {
   let current = resolve(startDir);
   for (let depth = 0; depth < 32; depth += 1) {
     const dotGit = join(current, '.git');
     if (existsSync(dotGit)) {
       try {
         const st = statSync(dotGit);
-        if (st.isDirectory()) return dotGit;
+        if (st.isDirectory()) return { repoRoot: current, gitCommonDir: dotGit };
         if (st.isFile()) {
           const content = readFileSync(dotGit, 'utf8').trim();
           const m = content.match(/^gitdir:\s*(.+)$/i);
-          if (m?.[1]) return resolve(current, m[1].trim());
+          if (m?.[1]) {
+            const gitDir = resolve(current, m[1].trim());
+            // Worktree `.git` files point to `.git/worktrees/<name>`, whose hooks
+            // live in the shared common dir named by `<gitdir>/commondir`.
+            const commonFile = join(gitDir, 'commondir');
+            if (existsSync(commonFile)) {
+              try {
+                const relCommon = readFileSync(commonFile, 'utf8').trim();
+                if (relCommon) return { repoRoot: current, gitCommonDir: resolve(gitDir, relCommon) };
+              } catch {
+                // Fall back to gitDir if commondir cannot be read.
+              }
+            }
+            return { repoRoot: current, gitCommonDir: gitDir };
+          }
         }
       } catch {
         return null;
@@ -54,6 +68,50 @@ export function resolveGitDir(startDir = process.cwd()): string | null {
     current = parent;
   }
   return null;
+}
+
+/** Resolve the active Git common dir (supports worktrees). */
+export function resolveGitDir(startDir = process.cwd()): string | null {
+  return resolveGitLocations(startDir)?.gitCommonDir ?? null;
+}
+
+/** Read `core.hooksPath` from `<gitCommonDir>/config` if configured. */
+function readConfiguredHooksPath(gitCommonDir: string, repoRoot: string): string | null {
+  const cfgPath = join(gitCommonDir, 'config');
+  if (!existsSync(cfgPath)) return null;
+  try {
+    const text = readFileSync(cfgPath, 'utf8');
+    let inCore = false;
+    for (const rawLine of text.split(/\r?\n/)) {
+      const line = rawLine.replace(/[#;].*$/, '').trim();
+      if (!line) continue;
+      const section = line.match(/^\[([^\]]+)\]$/);
+      if (section?.[1]) {
+        inCore = section[1].trim().toLowerCase() === 'core';
+        continue;
+      }
+      if (!inCore) continue;
+      const kv = line.match(/^hooksPath\s*=\s*(.+)$/i);
+      if (kv?.[1]) {
+        const val = kv[1].trim().replace(/^["']|["']$/g, '');
+        if (val) return resolve(repoRoot, val);
+      }
+    }
+  } catch {
+    // Ignore unreadable git config and fall back to default hooks dir.
+  }
+  return null;
+}
+
+/** Resolve the effective hooks directory (`core.hooksPath` or `<gitCommonDir>/hooks`). */
+export function resolveGitHooksDir(startDir = process.cwd()): { gitCommonDir: string; hooksDir: string } | null {
+  const loc = resolveGitLocations(startDir);
+  if (!loc) return null;
+  const custom = readConfiguredHooksPath(loc.gitCommonDir, loc.repoRoot);
+  return {
+    gitCommonDir: loc.gitCommonDir,
+    hooksDir: custom ?? join(loc.gitCommonDir, 'hooks'),
+  };
 }
 
 function buildHookBlock(warnOnly: boolean): string {
@@ -87,11 +145,12 @@ function stripManagedHook(content: string): string {
 }
 
 export function gitHookStatus(cwd = process.cwd()): GitHookStatus {
-  const gitDir = resolveGitDir(cwd);
-  if (!gitDir) {
+  const resolved = resolveGitHooksDir(cwd);
+  if (!resolved) {
     return { gitCommonDir: null, hookPath: null, installed: false, mode: 'none', coexistsWithUserHook: false };
   }
-  const hookPath = join(gitDir, 'hooks', 'pre-commit');
+  const { gitCommonDir: gitDir, hooksDir } = resolved;
+  const hookPath = join(hooksDir, 'pre-commit');
   if (!existsSync(hookPath)) {
     return { gitCommonDir: gitDir, hookPath, installed: false, mode: 'none', coexistsWithUserHook: false };
   }
@@ -117,13 +176,23 @@ export function gitHookStatus(cwd = process.cwd()): GitHookStatus {
   };
 }
 
+/** True when a shell script ends with an unconditional `exit` or `exec` (e.g. Husky / lint-staged). */
+function terminatesEarly(script: string): boolean {
+  const lines = script
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0 && !l.startsWith('#'));
+  const last = lines[lines.length - 1] ?? '';
+  return /^(?:exit|exec)\b/.test(last);
+}
+
 export function installGitHook(opts: GitHookOptions = {}): GitHookStatus {
   const cwd = opts.cwd ?? process.cwd();
-  const gitDir = resolveGitDir(cwd);
-  if (!gitDir) {
+  const resolved = resolveGitHooksDir(cwd);
+  if (!resolved) {
     throw new Error(`No .git directory found from ${cwd}`);
   }
-  const hooksDir = join(gitDir, 'hooks');
+  const { hooksDir } = resolved;
   mkdirSync(hooksDir, { recursive: true });
   const hookPath = join(hooksDir, 'pre-commit');
   const block = buildHookBlock(Boolean(opts.warnOnly));
@@ -135,6 +204,17 @@ export function installGitHook(opts: GitHookOptions = {}): GitHookStatus {
     if (!cleaned || /^#!\/bin\/(?:sh|bash|env\s+\S+)\s*$/.test(cleaned)) {
       const shebang = cleaned.startsWith('#!') ? cleaned : '#!/bin/sh';
       nextContent = `${shebang}\n\n${block}\n`;
+    } else if (terminatesEarly(cleaned)) {
+      // Existing hook ends in `exit` or `exec` (e.g. `exec lint-staged`): prepend
+      // our block right after the shebang so it is actually reachable.
+      if (cleaned.startsWith('#!')) {
+        const nl = cleaned.indexOf('\n');
+        const shebang = nl >= 0 ? cleaned.slice(0, nl) : cleaned;
+        const rest = nl >= 0 ? cleaned.slice(nl + 1).replace(/^\n+/, '') : '';
+        nextContent = `${shebang}\n\n${block}\n\n${rest}\n`;
+      } else {
+        nextContent = `#!/bin/sh\n\n${block}\n\n${cleaned}\n`;
+      }
     } else {
       const withShebang = cleaned.startsWith('#!') ? cleaned : `#!/bin/sh\n\n${cleaned}`;
       nextContent = `${withShebang}\n\n${block}\n`;
@@ -153,11 +233,11 @@ export function installGitHook(opts: GitHookOptions = {}): GitHookStatus {
 }
 
 export function removeGitHook(cwd = process.cwd()): { removed: boolean; hookPath: string | null; fileDeleted: boolean } {
-  const gitDir = resolveGitDir(cwd);
-  if (!gitDir) {
+  const resolved = resolveGitHooksDir(cwd);
+  if (!resolved) {
     throw new Error(`No .git directory found from ${cwd}`);
   }
-  const hookPath = join(gitDir, 'hooks', 'pre-commit');
+  const hookPath = join(resolved.hooksDir, 'pre-commit');
   if (!existsSync(hookPath)) {
     return { removed: false, hookPath, fileDeleted: false };
   }

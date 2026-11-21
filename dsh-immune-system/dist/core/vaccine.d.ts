@@ -1,5 +1,5 @@
 import type { DiagnosableRule } from './diagnose.js';
-import type { TeamRuleImportStore } from './team-sync.js';
+import { type TeamRuleImportStore } from './team-sync.js';
 export type DetectedPackageManager = 'pnpm' | 'yarn' | 'bun' | 'npm' | 'uv' | 'cargo' | 'go' | 'unknown';
 export interface VaccineAntibodySpec {
     readonly hash: string;
@@ -44,6 +44,18 @@ export declare function writeVaccineLockfile(workspaceDir: string, learnedRules?
 };
 export declare function verifyVaccineLockfile(rawJson: string): VaccineVerificationReport;
 export declare function applyVaccineLockfile(store: TeamRuleImportStore, lockfile: VaccineLockfile): {
+    readonly applied: number;
+    readonly total: number;
+};
+/**
+ * Best-effort SessionStart auto-hydration of a repository's committed
+ * `.immune/vaccine.lock.json`. Strictly verifies SHA-256 integrity first so a
+ * tampered or malformed lockfile is never imported, and uses `skipIfExists` so
+ * repeat sessions never inflate `hit_count` (AGENTS.md #9).
+ */
+export declare function hydrateVaccineLockfile(store: TeamRuleImportStore, workspaceDir: string): {
+    readonly present: boolean;
+    readonly verified: boolean;
     readonly applied: number;
     readonly total: number;
 };

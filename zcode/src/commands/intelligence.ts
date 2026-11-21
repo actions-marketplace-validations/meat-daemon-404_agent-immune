@@ -23,6 +23,7 @@ export function cmdStats(store: ImmuneStore, args: string[] = []): number {
   const hits = all.reduce((sum, a) => sum + a.hit_count, 0);
   const fails = all.reduce((sum, a) => sum + a.fail_count, 0);
   const s = store.stats();
+  const guardInterceptions = store.guardEventSummary(1).total;
   const byModel = store.modelBreakdown().filter((r) => r.model !== 'unknown');
   const cross = store.crossModelRules();
   const avoided = estimateAvoided(s.suppressedRepeats);
@@ -39,6 +40,7 @@ export function cmdStats(store: ImmuneStore, args: string[] = []): number {
           fails,
           held: Math.max(0, hits - fails),
           suppressedRepeats: s.suppressedRepeats,
+          guardInterceptions,
           queuedJobs: store.pendingJobCount(),
           llmDistilled: s.llmDistilled,
           llmFallbacks: s.llmFallbacks,
@@ -80,11 +82,14 @@ export function cmdStats(store: ImmuneStore, args: string[] = []): number {
       ? `sleep review: ${sleepGroups} cluster(s) of 5+ same-lesson rules — run \`immune consolidate --dry-run\`\n`
       : '';
   const qLine = quarantined.length > 0 ? `, quarantined ${quarantined.length}` : '';
+  const guardLine =
+    guardInterceptions > 0 ? `pre-flight guard interceptions: ${guardInterceptions}\n` : '';
   process.stdout.write(
     `antibodies: ${all.length} (active ${active.length}, retired ${retired.length}${qLine})\n` +
       `injections: ${hits}\n` +
       heldLine +
       `repeats suppressed: ${s.suppressedRepeats}\n` +
+      guardLine +
       `queued distill jobs: ${store.pendingJobCount()}\n` +
       model +
       attribution +
@@ -113,9 +118,11 @@ export function cmdCoverage(store: ImmuneStore, args: string[]): number {
   const daysRaw = flagValue(args, '--days');
   const topRaw = flagValue(args, '--top');
   const dbRaw = flagValue(args, '--db');
+  const daysNum = daysRaw !== undefined ? Number(daysRaw) : 30;
+  const topNum = topRaw !== undefined ? Number(topRaw) : 10;
   const report = coverage(store, {
-    days: daysRaw !== undefined ? Number(daysRaw) : 30,
-    top: topRaw !== undefined ? Number(topRaw) : 10,
+    days: Number.isFinite(daysNum) && daysNum > 0 ? daysNum : 30,
+    top: Number.isFinite(topNum) && topNum > 0 ? Math.trunc(topNum) : 10,
     ...(dbRaw ? { sourceDb: resolve(dbRaw) } : {}),
   });
   if (args.includes('--json')) {
@@ -243,8 +250,10 @@ export function cmdReceipts(store: ImmuneStore, args: string[] = []): number {
     process.stdout.write(`${JSON.stringify(r, null, 2)}\n`);
     return 0;
   }
+  const heldTotal = r.byOutcome.held ?? 0;
+  const failedTotal = r.byOutcome.failed ?? 0;
   process.stdout.write(
-    `delivery receipts: ${r.total} · chain ${r.chainValid ? 'VERIFIED' : 'BROKEN'} · latest ${r.latestDigest}\n`,
+    `delivery receipts: ${r.total} (${heldTotal} held, ${failedTotal} failed, ~${formatTokens(r.estimatedTokensSaved)} tokens saved) · chain ${r.chainValid ? 'VERIFIED' : 'BROKEN'} · latest ${r.latestDigest}\n`,
   );
   for (const m of r.byModel.slice(0, 8)) {
     process.stdout.write(`  ${m.model}: ${m.total} total (${m.held} held, ${m.failed} failed)\n`);

@@ -9,6 +9,7 @@
  * failure is still pending anyway.
  */
 import type { DatabaseSync } from 'node:sqlite';
+import { redact } from '../redact.js';
 
 export interface StuckRow {
   fail_streak: number;
@@ -84,9 +85,10 @@ export function topStuckRow(
  * the two hosts cannot drift into different advice.
  */
 export function stuckHypothesisText(signature: string): string {
+  const safeSig = redact(signature).replace(/[<>]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120);
   return (
     '同一目标连续失败两次且规则库无覆盖 / this target failed twice in a row with no covering rule. ' +
-    `目标 / target: ${signature}. ` +
+    `目标 / target: ${safeSig || '?'}. ` +
     '第 3 次尝试前先做一次最小化诊断：读报错第一行、查 --help 或版本、检查锁文件与环境变量，确认原因后再改参数重试。' +
     ' / Before the third attempt, run ONE minimal diagnostic first: read the first line of the error, ' +
     'check --help or versions, inspect the lockfile and env vars — confirm the cause, then retry with the fix.'

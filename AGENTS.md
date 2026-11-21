@@ -26,11 +26,12 @@ dsh-immune-system/  the installable package (manifest, hooks.json, commands,
 
 Build: `npm run build` (tsc, emits into `dsh-immune-system/dist/`). Zero runtime
 dependencies — `node:sqlite` only. `dist/` and `client/client.js` are committed
-so installs need no toolchain; bump versions in **six** manifests
+so installs need no toolchain; bump versions in **seven** manifests
 (`package.json` ×2 fields, `dsh-immune-system/package.json` ×2,
 `dsh-immune-system/.zcode-plugin/plugin.json`, `marketplace.json`,
-`.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json` — all checked by
-`scripts/check-versions.mjs`, so drift fails CI, not users).
+`.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`,
+`server.json` ×2 — all 10 fields checked by `scripts/check-versions.mjs`, so
+drift fails CI, not users).
 
 ## Load-bearing decisions (do not "simplify" these away)
 
@@ -442,6 +443,70 @@ identical-retry note).
     state (probation) and one decay (superseded_by_env_upgrade when the new
     environment re-learns the same lesson) — no third tunable (#19's lesson).
 
+43. **Live Pre-Flight Guard is one engine (`core/guard.ts`), still code-owned.**
+    In v3.x, live hooks still ran legacy 5-rule `core/guards.ts` while CLI/MCP
+    ran 12-policy `core/guard.ts`. v4.0 unifies every live hook (`runtime.ts`,
+    DSH `tools/pre-execute`) onto `evaluatePreFlightGuard()` with `learnedRules=[]`
+    so Decision #8 holds strictly (never blocking live execution on unreviewed DB
+    text), inspects raw bounded input before redacting banners & `guard_events`
+    (so live secrets are caught AND never echoed/persisted), and masks quoted SQL
+    only for non-SQL prose/search/VCS commands (`git commit`, `grep`, `echo`) so
+    `psql -c "DROP TABLE"` stays blocked while commit messages pass.
+
+44. **Schema version gates hook cold-start; clean tool calls write zero WAL rows.**
+    Every hook is a fresh process; running 50+ DDL/`PRAGMA table_info` queries and
+    9 `pruneStale` DELETEs per clean tool call wasted wall time and WAL churn.
+    `openDatabase()` now short-circuits on `PRAGMA user_version = SCHEMA_VERSION`
+    (4), `claimFailure()` checks `SELECT 1 FROM pending_failures LIMIT 1` before
+    touching the disk, and `GlobalStore` promotion stamps `antibodies.promoted_at`
+    so hit 5 promotes once instead of reopening `global.sqlite` on hits 6..500.
+
+45. **Receipt chains serialize on `BEGIN IMMEDIATE` and settle real `'held'` ROI.**
+    Parallel tool calls reading the last digest without a write lock forked
+    `delivery_receipts` (`chainValid = false`), and nothing ever emitted `'held'`.
+    `recordDeliveryReceipt()` now runs inside `BEGIN IMMEDIATE` and `settleTurn()`
+    at turn end emits idempotent `'held'` receipts for injected rules that did not
+    fail in the window. Never invent synthetic multipliers in `/api/insights`.
+
+46. **Bilingual hybrid retrieval never starves CJK bigrams behind English FTS5 hits.**
+    On mixed prompts (`"npm run dev 跨域报错"`), English tokens fill FTS5 `limit`
+    and used to skip `cjkBigrams()` altogether. `findMatches()` now unions CJK
+    bigram candidates whenever `cjkBigrams(expanded).length > 0`, reserving at
+    most `Math.max(1, Math.floor(limit / 2))` slots for CJK when `limit >= 2` so
+    neither English FTS5 nor CJK bigrams can evict 100% of the other, and
+    `core/tools.ts` is the single canonical tool taxonomy shared by pairing,
+    repair tracking, passive-read filtering, guards, and hook I/O.
+
+47. **Pre-Flight Guard evaluates shell segments individually, never whole-string whitelists.**
+    Whole-command guards were trivially bypassed by chaining (`echo ok && psql -c
+    "DROP TABLE"`, `git clean -n && git clean -fd`, `git reset --hard && git
+    stash`, `rm -rf ./dist /`). `core/guard.ts` splits chains via quote-aware
+    `splitShellSegments()`, tokenizes `rm` args with `splitShellArgs()`, checks
+    order (`git stash` must precede `git reset --hard`), rewrites only the
+    offending segment, and obeys #17 (`const apiKey = process.env.OPENAI_API_KEY;`
+    is recognized as a dynamic reference, not a hardcoded secret literal).
+
+48. **SSRF and local UI boundaries are enforced at transport and host layers.**
+    `core/llm.ts` strips trailing DNS dots (`localhost.`, `metadata.google.internal.`),
+    blocks full IPv6 private/link-local/NAT64/mapped ranges (`fe80::/10`,
+    `::ffff:7f00:1`, `::127.0.0.1`, `64:ff9b::/96`), sets `redirect: 'manual'`
+    and rejects all HTTP 3xx responses so a remote endpoint cannot bounce to
+    cloud metadata. `core/ui/server.ts` validates loopback `Host` headers (`403`)
+    and sets `frame-ancestors 'none'` to block DNS rebinding and clickjacking.
+
+49. **Transactions never swallow `SQLITE_BUSY`, and `user_version` is conditional.**
+    Nested-transaction helpers must only proceed inline when `BEGIN IMMEDIATE`
+    throws `/within a transaction/i` — swallowing `SQLITE_BUSY` forks the
+    `delivery_receipts` SHA-256 chain. `openDatabase()` stamps `PRAGMA
+    user_version` inside `BEGIN IMMEDIATE` ONLY if every migration returns `true`.
+
+50. **Telemetry and manual curation state must reflect reality, never proxies.**
+    `guard_events` records the enforced action (`warn` vs `block`), never claiming
+    a block when `IMMUNE_GUARD=warn`; `summarizeReceipts()` counts only `'held'`
+    in `byModel.held` and sums ROI over the full table; Immunity Score passes real
+    `failedCount` (not prevented count) as `repeatFailures`; and manual retirement
+    stamps `retire_reason = 'manual'` so `repairLibraryHygiene` never resurrects it.
+
 ## Verification
 
 ```bash
@@ -452,7 +517,7 @@ node scripts/verify-live-host.mjs # 20  — real Cordis event bus + SQLite
 node scripts/bench-tool-latency.mjs  # cost lands at the turn boundary; also pins the drain curve and IMMUNE_DISTILL_BUDGET_MS
 node scripts/bench-scale.mjs         # 300-rule library: index cost and match p50/p95; gates a pathological slowdown
 node scripts/verify-client-serve.mjs # 10  — mounts the real ClientModuleRegistry and serves /plugins/<id>/client.js
-node scripts/verify-connected-runtime.mjs # 25 — the connect'd (vendored) hooks driven end-to-end with NO host env vars; also pinned in CI on Linux
+node scripts/verify-connected-runtime.mjs # 42 — the connect'd (vendored) hooks driven end-to-end with NO host env vars; also pinned in CI on Linux
 node scripts/verify-dist-integrity.mjs   # 5  — every relative dist import resolves, source↔dist 1:1; --self-test proves the dead-import detector; pinned in CI
 node scripts/verify-llm.mjs          # env-gated, SKIPs without LLM env; one command to live-verify external distillation
 node scripts/eval-judge.mjs          # machine-only: replays the host's labeled tool calls through the judge (needs the ZCode db)
@@ -522,7 +587,7 @@ silently broke the canonical episode shape.
 5. `node scripts/bench-seed-recall.mjs` PASS (fast; the CONTENT gate — every
    rule in `core/packs.ts` must be recallable from a paraphrased prompt, so a
    starter rule that nobody can find fails CI; also pins in CI)
-6. Bump all six manifests (same version everywhere; run `node scripts/check-versions.mjs`)
+6. Bump all seven manifests (10 fields, same version everywhere; run `node scripts/check-versions.mjs`)
 7. Commit (message file + `git commit -F`), push
 8. For a release: tag `v<version>`, `npm pack`, attach the tarball to a GitHub
    Release, update the installed copy:

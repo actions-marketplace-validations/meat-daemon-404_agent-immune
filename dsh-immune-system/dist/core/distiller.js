@@ -6,8 +6,23 @@ import { matchGenericLesson } from './lessons.js';
 import { abstractMachinePaths, canonicalizeSymptom, classifyRuleQuality } from './hygiene.js';
 import { inferRootCause } from './rubric.js';
 /** Failures with no reuse value: the retry usually just works, or a permission gate refused it (#12). */
-const TRANSIENT = /ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|EPIPE|socket hang up|rate.?limit|\b429\b|\b503\b|temporarily unavailable|network error|timed out|超时|网络|限流|请稍后/i;
+const TRANSIENT = /ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|EPIPE|socket hang up|rate.?limit|\b429\b|\b503\b|temporarily unavailable|network error|timed out|超时|网络(?:错误|超时|不可达|中断|异常|波动|断开)|限流|请稍后/i;
 const PERMISSION_DENIED = /\[sandbox:\s*file access denied|\bUPLOAD_NEEDS_PERMISSION\b|permission denied by user|rejected by user|tool call denied by pre-tool hook/i;
+/**
+ * Shared pre-distillation skip gate applied identically to BOTH the LLM and
+ * deterministic paths so AGENTS.md #12 (sandbox denials), #24 (retired-rule
+ * echo traces), and transient network flakes never burn model tokens or mint
+ * bogus antibodies.
+ */
+function preDistillSkipReason(failureTrace, successTrace) {
+    if (TRANSIENT.test(failureTrace))
+        return 'transient failure';
+    if (PERMISSION_DENIED.test(failureTrace))
+        return 'permission negotiation (#12)';
+    if (/^previous rule \(retired\b/i.test(successTrace.trim()))
+        return 'retirement is not a repair';
+    return null;
+}
 const FILE_RE = /[\w@./\\-]+\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|py|go|rs|java|kt|yml|yaml|toml|css|scss|html|vue|svelte)\b/g;
 const ENV_RE = /\b[A-Z][A-Z0-9_]{2,}\b/g;
 const ARG_RE = /"(?:command|file_path|path|notebook_path|pattern|query|url|script|cmd|CommandLine|TargetFile|AbsolutePath|Path)"\s*:\s*"((?:[^"\\]|\\.){2,200})"/g;
@@ -105,15 +120,9 @@ export function isSubstantiveHint(text) {
  * invocations without calling a model.
  */
 export function ruleDistill(toolName, failureTrace, successTrace, humanHint = '', repairs = [], opts = {}) {
-    if (TRANSIENT.test(failureTrace)) {
-        return { ok: false, reason: 'skip', detail: 'transient failure' };
-    }
-    if (PERMISSION_DENIED.test(failureTrace)) {
-        return { ok: false, reason: 'skip', detail: 'permission negotiation (#12)' };
-    }
-    // Defensive pin for AGENTS.md #24: retirement is not repair evidence.
-    if (/^previous rule \(retired\b/i.test(successTrace.trim())) {
-        return { ok: false, reason: 'skip', detail: 'retirement is not a repair' };
+    const skipReason = preDistillSkipReason(failureTrace, successTrace);
+    if (skipReason) {
+        return { ok: false, reason: 'skip', detail: skipReason };
     }
     const keywords = extractKeywords(`${failureTrace} ${successTrace}`);
     if (keywords.length === 0) {
@@ -190,6 +199,10 @@ export function ruleDistill(toolName, failureTrace, successTrace, humanHint = ''
  * deterministic rule when the model is missing, slow, or returns junk.
  */
 export async function distillEpisode(toolName, failureTrace, successTrace, opts = {}) {
+    const skipReason = preDistillSkipReason(failureTrace, successTrace);
+    if (skipReason) {
+        return { ok: false, reason: 'skip', detail: skipReason };
+    }
     const hint = opts.humanHint ?? '';
     const fallback = (reason) => {
         const ruled = ruleDistill(toolName, failureTrace, successTrace, hint, opts.repairs, {
@@ -334,10 +347,24 @@ export async function distillBatch(episodes, opts = {}) {
     const results = new Map();
     if (episodes.length === 0)
         return results;
-    const perEpisode = async () => {
-        for (const episode of episodes) {
+    // Apply #12 / #24 / transient skip gate up front so batch LLM requests never
+    // pay for or distill skippable episodes.
+    const eligible = [];
+    for (const ep of episodes) {
+        const skipReason = preDistillSkipReason(ep.failedTrace, ep.fixedTrace);
+        if (skipReason) {
+            results.set(ep.id, { ok: false, reason: 'skip', detail: skipReason });
+        }
+        else {
+            eligible.push(ep);
+        }
+    }
+    if (eligible.length === 0)
+        return results;
+    const perEpisode = async (useLlm = opts.llm) => {
+        for (const episode of eligible) {
             results.set(episode.id, await distillEpisode(episode.toolName, episode.failedTrace, episode.fixedTrace, {
-                llm: opts.llm,
+                llm: useLlm,
                 signal: opts.signal,
                 humanHint: episode.humanHint ?? '',
                 repairs: episode.repairs ?? [],
@@ -350,12 +377,12 @@ export async function distillBatch(episodes, opts = {}) {
     const llm = opts.llm === undefined ? readLlmConfig() : opts.llm;
     // One episode is not a batch: the single-episode prompt carries more context
     // per request, and it is the path the existing tests pin.
-    if (!llm || episodes.length < 2)
+    if (!llm || eligible.length < 2)
         return perEpisode();
     try {
-        const raw = await chat(llm, BATCH_DISTILL_PROMPT, buildBatchInput(episodes), opts.signal);
-        const parsed = parseBatchOutput(raw, episodes.map((episode) => episode.id), 'batch');
-        for (const episode of episodes) {
+        const raw = await chat(llm, BATCH_DISTILL_PROMPT, buildBatchInput(eligible), opts.signal);
+        const parsed = parseBatchOutput(raw, eligible.map((episode) => episode.id), 'batch');
+        for (const episode of eligible) {
             const answer = parsed.get(episode.id);
             // The model declined: respect it.
             if (answer && !answer.ok && answer.reason === 'skip') {
@@ -379,8 +406,14 @@ export async function distillBatch(episodes, opts = {}) {
         }
         return results;
     }
-    catch {
-        // Transport or parse failure: everything falls back to the rule path.
-        return perEpisode();
+    catch (error) {
+        // Transport or parse failure: degrade directly to the deterministic rule
+        // path instead of hammering a failing LLM endpoint 4 more times sequentially.
+        const reason = error instanceof Error ? error.message.slice(0, 160) : String(error).slice(0, 160);
+        for (const episode of eligible) {
+            const ruled = ruleDistill(episode.toolName, episode.failedTrace, episode.fixedTrace, episode.humanHint ?? '', episode.repairs ?? [], { projectScope: episode.projectScope, workspaceRoot: episode.workspaceRoot });
+            results.set(episode.id, ruled.ok ? { ...ruled, source: 'rule', degradedReason: reason } : ruled);
+        }
+        return results;
     }
 }

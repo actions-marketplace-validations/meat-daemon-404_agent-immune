@@ -1,15 +1,14 @@
-/**
- * Query surface shared by the standalone dashboard and the DSH web route.
- *
- * Kept separate from either server so the two cannot drift: one definition of
- * "what the UI may read" and "which mutations exist".
- */
-import type { Antibody, WorkspaceProfile } from '../types.js';
+import type { Antibody, GuardEventSummary, WorkspaceProfile } from '../types.js';
 import type { ImmuneStore } from '../store/index.js';
 import type { TriageSummary } from '../triage.js';
 import type { ReceiptSummary } from '../receipts.js';
 import type { HygieneReport } from '../hygiene.js';
 import { type MagpieGatewaySummary } from '../audit/magpie.js';
+import { type AgentDiagnosisReport } from '../diagnose.js';
+import { type AutopsyReport } from '../autopsy.js';
+import { type GuardVerdict } from '../guard.js';
+import { type VaccineVerificationReport, type WorkspaceDNA } from '../vaccine.js';
+import { type SwarmFederationReport } from '../federate.js';
 export declare const MAX_QUERY = 200;
 export declare const ACTIONS: Set<string>;
 export interface DashboardStats {
@@ -50,6 +49,8 @@ export interface DashboardStats {
     workspaces: number;
     triage: TriageSummary;
     receipts: ReceiptSummary;
+    /** V4 live Pre-Flight Guard interceptions recorded in this store. */
+    guardInterceptions: number;
     /** Read-only Magpie local AI gateway summary when `~/.config/magpie` exists. */
     gateway?: MagpieGatewaySummary;
 }
@@ -70,6 +71,33 @@ export declare function dashboardStats(store: ImmuneStore): DashboardStats;
 export declare function readState(store: ImmuneStore, view: 'project' | 'shared' | 'quarantined', query?: string, budgetMs?: number): DashboardState;
 export declare function readWorkspaces(store: ImmuneStore): WorkspaceProfile[];
 export declare function runHygieneAction(store: ImmuneStore, dryRun?: boolean): HygieneReport;
+export interface InsightsPayload {
+    immunityScore: number;
+    diagnosis: AgentDiagnosisReport;
+    autopsy: AutopsyReport;
+    workspaceDna: WorkspaceDNA;
+    lockfile: {
+        exists: boolean;
+    } & Partial<VaccineVerificationReport>;
+    guardSummary: GuardEventSummary;
+    receipts: ReceiptSummary;
+}
+/**
+ * Unified v4 read-only insights payload shared by both standalone dashboard and
+ * DSH native settings tab. Grounded strictly in real database receipts, hits,
+ * suppressions, and guard events (zero synthetic multipliers).
+ */
+export declare function readInsights(store: ImmuneStore, workspace?: string): InsightsPayload;
+/** Shared read-only Pre-Flight Guard evaluator for both UI HTTP endpoints. */
+export declare function evaluateUiGuard(store: ImmuneStore, payload: string, opts?: {
+    toolName?: string;
+    strict?: boolean;
+    workspace?: string;
+}): GuardVerdict;
+/** Shared read-only Pre-Flight Guard audit ledger query. */
+export declare function readGuardEvents(store: ImmuneStore, limit?: number): GuardEventSummary;
+/** Shared read-only Swarm Federation preview across local SQLite, shared DB, and `.immune/rules.jsonl`. */
+export declare function readFederationPreview(store: ImmuneStore, workspace?: string): SwarmFederationReport;
 export interface EvolutionStats {
     /** New rules per week, oldest of the shown weeks first (8 buckets). */
     newRules: number[];

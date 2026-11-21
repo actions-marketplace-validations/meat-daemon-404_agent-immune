@@ -13,6 +13,7 @@
  *  - paths are normalised to a project-relative form so a failure in
  *    `./src/a.ts` and a success in `<cwd>/src/a.ts` still match.
  */
+import { canonicalToolName } from './tools.js';
 /** Programs that never change state; their success proves nothing. */
 const PROBE_PROGRAMS = new Set([
     'ls',
@@ -84,14 +85,10 @@ export function normaliseTargetPath(rawPath, cwd) {
     }
     return p.replace(/^\.\//, '');
 }
-/** Split a shell command into `program` and its first non-flag subcommand. */
-export function parseCommand(command) {
-    const tokens = command
-        .split(/\s*(?:&&|\|\||[;|])\s*/)
-        .join(' ')
-        .trim()
-        .split(/\s+/)
-        .filter(Boolean);
+function parseSingleSegment(segment) {
+    // For a pipeline like `npm test | tail -20`, the left-most command is the primary action.
+    const primary = segment.split(/\s*\|\s*/)[0] ?? segment;
+    const tokens = primary.trim().split(/\s+/).filter(Boolean);
     // Skip leading env assignments (FOO=bar cmd), then strip a leading path from
     // the program token ("C:\tools\npm.cmd test" -> "npm.cmd") on any platform.
     let index = 0;
@@ -111,13 +108,47 @@ export function parseCommand(command) {
     }
     return { program: program.toLowerCase(), sub: sub.toLowerCase() };
 }
+function isProbeParsed(parsed) {
+    return (PROBE_PROGRAMS.has(parsed.program) ||
+        (parsed.program === 'git' && GIT_PROBE_SUBCOMMANDS.has(parsed.sub)));
+}
+/**
+ * Split a shell command into `program` and its first non-flag subcommand.
+ *
+ * For chained commands (`cd packages/api && npm test`, `echo building && cargo check`),
+ * skips leading probe/navigation segments (`cd`, `echo`, `pwd`, ...) so the real
+ * action determines both signature and `probeOnly` — a chain is probe-only only
+ * when EVERY segment is a probe (`cd /repo && git status`).
+ */
+export function parseCommand(command) {
+    const segments = command
+        .split(/\s*(?:&&|\|\||;|\r?\n)\s*/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+    if (segments.length <= 1) {
+        return parseSingleSegment(command);
+    }
+    let fallback = { program: '', sub: '' };
+    for (const seg of segments) {
+        const parsed = parseSingleSegment(seg);
+        if (!parsed.program)
+            continue;
+        fallback = parsed;
+        if (!isProbeParsed(parsed))
+            return parsed;
+    }
+    return fallback;
+}
 /** Compute the pairing signature for one tool call. */
 export function targetSignature(toolName, input, cwd) {
     const obj = asRecord(input);
-    // Hosts differ in tool-name casing (the DSH harness emits "bash", ZCode
-    // emits "Bash"): the branch checks are case-insensitive, the SIGNATURE
-    // casing stays verbatim so stored signatures keep matching their producers.
-    const tool = toolName.trim().toLowerCase();
+    // Hosts differ in tool-name casing and aliases (DSH emits "bash", ZCode
+    // emits "Bash", Antigravity emits "run_command"/"edit_file"/"view_file",
+    // Codex emits "shell_command"/"apply_patch"): branch checks use the
+    // canonical taxonomy while preserving original casing in file/search
+    // signatures so stored rows stay backward-compatible with their producers.
+    const canon = canonicalToolName(toolName);
+    const tool = canon.toLowerCase();
     if (FILE_TOOLS.has(tool)) {
         const raw = pickString(obj, ['file_path', 'path', 'notebook_path', 'TargetFile', 'AbsolutePath', 'Path']);
         const target = raw ? normaliseTargetPath(raw, cwd) : '';
@@ -212,11 +243,11 @@ export function canCloseEpisode(failedSignature, incoming) {
         return true;
     const failedParts = failedSignature.split(':');
     const incomingParts = incoming.signature.split(':');
-    const failedTool = failedParts[0] ?? '';
-    const incomingTool = incomingParts[0] ?? '';
-    if (failedTool.toLowerCase() !== incomingTool.toLowerCase())
+    const failedTool = canonicalToolName(failedParts[0] ?? '').toLowerCase();
+    const incomingTool = canonicalToolName(incomingParts[0] ?? '').toLowerCase();
+    if (failedTool !== incomingTool)
         return false;
-    if (failedTool.toLowerCase() === 'bash') {
+    if (failedTool === 'bash') {
         const failedTarget = failedParts[1] ?? '';
         const incomingTarget = incomingParts[1] ?? '';
         if (!failedTarget || failedTarget === '?' || !incomingTarget || incomingTarget === '?')

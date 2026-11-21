@@ -14,15 +14,23 @@ import {
   renderWrappedSvg,
   type WrappedInput,
 } from '../../../core/wrapped.js';
-import { parseTeamRulesJsonl, verifyTeamRulesJsonl, writeTeamRulesFile } from '../../../core/team-sync.js';
+import { isTeamShareSafe, parseTeamRulesJsonl, verifyTeamRulesJsonl, writeTeamRulesFile } from '../../../core/team-sync.js';
 import { diagnoseAgentArchetype, renderDiagnosisMarkdown, renderDiagnosisSvg, renderDiagnosisTerminal } from '../../../core/diagnose.js';
 import { IDE_TARGET_PATHS, compileIdeRules, type IdeRuleTarget } from '../../../core/compile-rules.js';
 import { renderAutopsyMarkdown, renderAutopsyTerminal, runPitfallAutopsy } from '../../../core/autopsy.js';
-import { evaluatePreFlightGuard, renderGuardHookDecision, renderGuardMarkdown, renderGuardTerminal } from '../../../core/guard.js';
-import { applyVaccineLockfile, detectWorkspaceDNA, renderVaccineMarkdown, renderVaccineTerminal, verifyVaccineLockfile, writeVaccineLockfile } from '../../../core/vaccine.js';
+import {
+  evaluatePreFlightGuard,
+  renderGuardHookDecision,
+  renderGuardHostHookDecision,
+  renderGuardMarkdown,
+  renderGuardTerminal,
+  type GuardHookHost,
+} from '../../../core/guard.js';
+import { applyVaccineLockfile, detectWorkspaceDNA, renderVaccineMarkdown, renderVaccineTerminal, verifyVaccineLockfile, writeVaccineLockfile, type VaccineLockfile } from '../../../core/vaccine.js';
 import { federateSwarmRules, renderFederationMarkdown, renderFederationSvg, renderFederationTerminal, type SwarmRuleSource } from '../../../core/federate.js';
+import { deriveProjectScope } from '../../../core/hygiene.js';
 import { dshDirOf } from '../root-marker.js';
-import { clamp, flagValue, pad } from './shared.js';
+import { clamp, flagValue, pad, positionalArgs } from './shared.js';
 
 export function cmdList(store: ImmuneStore, argsOrRetired: string[] | boolean): number {
   const args = Array.isArray(argsOrRetired) ? argsOrRetired : [];
@@ -252,7 +260,12 @@ export function cmdCiCheck(args: string[]): number {
   const explicitDoc = flagValue(args, '--doc');
   let diffText = '';
   if (explicitDiff) {
-    diffText = readFileSync(resolve(explicitDiff), 'utf8');
+    const resolvedDiff = resolve(explicitDiff);
+    if (!existsSync(resolvedDiff)) {
+      process.stderr.write(`ci-check: diff file not found: ${resolvedDiff}\n`);
+      return 2;
+    }
+    diffText = readFileSync(resolvedDiff, 'utf8');
   } else if (process.stdin.isTTY) {
     try {
       diffText = execFileSync('git', ['diff', 'HEAD'], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
@@ -342,7 +355,8 @@ export function cmdCiCheck(args: string[]): number {
 }
 
 export function cmdWrapped(store: ImmuneStore, args: string[]): number {
-  const explicitOut = flagValue(args, '--out') ?? args.find((a) => !a.startsWith('-'));
+  const pos = positionalArgs(args, ['--out', '--hosts']);
+  const explicitOut = flagValue(args, '--out') ?? pos[0];
   const hostsFlag = flagValue(args, '--hosts');
   const asJson = args.includes('--json');
   const toStdout = args.includes('--stdout');
@@ -352,15 +366,22 @@ export function cmdWrapped(store: ImmuneStore, args: string[]): number {
   const s = store.stats();
   const totalInjections = all.reduce((sum, a) => sum + a.hit_count, 0);
   const totalFails = all.reduce((sum, a) => sum + a.fail_count, 0);
-  const repeatFailures = Math.max(s.suppressedRepeats + totalInjections, active.length);
-  const totalCalls = Math.max((repeatFailures + totalFails) * 18, totalInjections * 4, active.length * 25);
+  const repeatFailures =
+    active.length === 0 && totalInjections === 0 && s.suppressedRepeats === 0
+      ? 0
+      : Math.max(s.suppressedRepeats + totalInjections, active.length);
+  const totalCalls =
+    repeatFailures === 0 && totalFails === 0
+      ? 0
+      : Math.max((repeatFailures + totalFails) * 18, totalInjections * 4, active.length * 25);
   const avoidableTokens = (s.suppressedRepeats + totalInjections) * 2400;
   const topNemeses = [...active]
+    .filter((a) => a.hit_count > 0)
     .sort((a, b) => b.hit_count - a.hit_count)
     .slice(0, 3)
     .map((a) => ({
       label: `${a.tool_name ? `${a.tool_name}: ` : ''}${a.trigger_pattern}`,
-      count: Math.max(1, a.hit_count),
+      count: a.hit_count,
     }));
 
   const input: WrappedInput = {
@@ -371,7 +392,6 @@ export function cmdWrapped(store: ImmuneStore, args: string[]): number {
     totalInjections,
     ...(hostsFlag ? { hosts: hostsFlag.split(',').map((h) => h.trim()).filter(Boolean) } : {}),
     ...(topNemeses.length > 0 ? { topNemeses } : {}),
-    judgeAgreementPct: 97.81,
   };
   const asBadge = args.includes('--badge');
   const asMarkdown = args.includes('--markdown');
@@ -418,7 +438,8 @@ export function cmdTeamSync(store: ImmuneStore, args: string[]): number {
   const isCheck = args.includes('--check');
   const isDedupe = args.includes('--dedupe');
   const asJson = args.includes('--json');
-  const explicitPath = flagValue(args, '--path') ?? args.find((a) => !a.startsWith('-'));
+  const pos = positionalArgs(args, ['--path', '--min-hits']);
+  const explicitPath = flagValue(args, '--path') ?? pos[0];
   const rawMinHits = flagValue(args, '--min-hits');
   const minHits =
     rawMinHits !== undefined && Number.isFinite(Number(rawMinHits))
@@ -436,7 +457,7 @@ export function cmdTeamSync(store: ImmuneStore, args: string[]): number {
       process.stdout.write(`${JSON.stringify({ mode: 'check', file: filePath, ...report }, null, 2)}\n`);
     } else {
       process.stdout.write(
-        `team-sync check: ${report.valid ? 'OK' : 'FAILED'} (${report.total} rule(s), unsorted=${report.unsorted}, duplicates=${report.duplicates}, unsafe=${report.unsafeCount}, conflicts=${report.conflictMarkers})\n`,
+        `team-sync check: ${report.valid ? 'OK' : 'FAILED'} (${report.total} rule(s), unsorted=${report.unsorted}, duplicates=${report.duplicates}, unsafe=${report.unsafeCount}, conflicts=${report.conflictMarkers}, malformed=${report.malformedLines}, hashMismatches=${report.hashMismatches})\n`,
       );
     }
     return report.valid ? 0 : 1;
@@ -464,13 +485,18 @@ export function cmdTeamSync(store: ImmuneStore, args: string[]): number {
     const records = parseTeamRulesJsonl(readFileSync(filePath, 'utf8'));
     let imported = 0;
     for (const rec of records) {
-      const id = store.insert({
-        trigger_pattern: rec.trigger_pattern,
-        symptom: rec.symptom || '(team rule)',
-        prescription: rec.prescription,
-        tool_name: rec.tool_name,
-        prescription_source: 'human',
-      });
+      if (!isTeamShareSafe(rec)) continue;
+      const id = store.insert(
+        {
+          trigger_pattern: rec.trigger_pattern,
+          symptom: rec.symptom || '(team rule)',
+          prescription: rec.prescription,
+          tool_name: rec.tool_name,
+          prescription_source: 'human',
+          origin: 'team_sync',
+        },
+        { skipIfExists: true },
+      );
       if (id !== null) imported += 1;
     }
     if (asJson) {
@@ -524,7 +550,9 @@ export function cmdDiagnose(store: ImmuneStore, args: string[]): number {
     return 0;
   }
   if (args.includes('--svg')) {
-    const out = resolve(flagValue(args, '--out') ?? args.find((a) => !a.startsWith('-')) ?? 'immune-diagnosis.svg');
+    const pos = positionalArgs(args, ['--out']);
+    const out = resolve(flagValue(args, '--out') ?? pos[0] ?? 'immune-diagnosis.svg');
+    mkdirSync(dirname(out), { recursive: true });
     writeFileSync(out, renderDiagnosisSvg(report), 'utf8');
     process.stdout.write(`diagnosis radar SVG (${report.archetype.id}, ${report.overallImmunityPct}%) -> ${out}\n`);
     return 0;
@@ -540,7 +568,8 @@ export function cmdDiagnose(store: ImmuneStore, args: string[]): number {
 export function cmdCompileRules(store: ImmuneStore, args: string[]): number {
   const asJson = args.includes('--json');
   const dryRun = args.includes('--dry-run');
-  const rawTarget = (flagValue(args, '--target') ?? args.find((a) => !a.startsWith('-')) ?? 'all').toLowerCase();
+  const pos = positionalArgs(args, ['--target', '--min-hits']);
+  const rawTarget = (flagValue(args, '--target') ?? pos[0] ?? 'all').toLowerCase();
   const rawMinHits = flagValue(args, '--min-hits');
   const minHits =
     rawMinHits !== undefined && Number.isFinite(Number(rawMinHits))
@@ -613,19 +642,77 @@ export function cmdAutopsy(store: ImmuneStore, args: string[]): number {
 }
 
 export function cmdGuard(store: ImmuneStore, args: string[]): number {
-  const asJson = args.includes('--json');
-  const asMarkdown = args.includes('--markdown');
-  const asHook = args.includes('--hook');
-  const strict = args.includes('--strict');
-  const toolName = flagValue(args, '--tool') ?? 'Bash';
-  const payload = args.filter((a) => !a.startsWith('-')).join(' ').trim();
+  const sepIdx = args.indexOf('--');
+  const flagArgs = sepIdx >= 0 ? args.slice(0, sepIdx) : args;
+  const asJson = flagArgs.includes('--json');
+  const asMarkdown = flagArgs.includes('--markdown');
+  const asHook = flagArgs.includes('--hook');
+  const asLog = flagArgs.includes('--log');
+  const strict = flagArgs.includes('--strict');
+  if (asLog) {
+    const rawLimit = Number(flagValue(flagArgs, '--limit') ?? '20');
+    const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(200, Math.trunc(rawLimit)) : 20;
+    const summary = store.guardEventSummary(limit);
+    if (asJson) {
+      process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
+      return 0;
+    }
+    const lines = [
+      `Pre-Flight Guard Audit Ledger: ${summary.total} interception(s) (avg blast ${summary.avgBlastRadius}/100)`,
+      `  decisions: block=${summary.byDecision.block ?? 0} · rewrite=${summary.byDecision.rewrite ?? 0} · warn=${summary.byDecision.warn ?? 0}`,
+    ];
+    if (summary.recent.length === 0) {
+      lines.push('  (no live guard interceptions recorded yet — enable IMMUNE_GUARD=warn|ask|deny)');
+    } else {
+      for (const ev of summary.recent) {
+        const ts = new Date(ev.created_at).toISOString().slice(0, 19).replace('T', ' ');
+        lines.push(
+          `  #${ev.id} [${ev.decision.toUpperCase()} ${ev.blast_radius}/100] ${ts} ${ev.tool_name} (${ev.policy_ids.join(', ')}) — ${ev.payload_preview}`,
+        );
+        if (ev.suggested_rewrite) {
+          lines.push(`      ↳ safe rewrite: ${ev.suggested_rewrite}`);
+        }
+      }
+    }
+    process.stdout.write(`${lines.join('\n')}\n`);
+    return 0;
+  }
+  const toolName = flagValue(flagArgs, '--tool') ?? 'Bash';
+  const rawHookHost = flagValue(flagArgs, '--hook-host')?.toLowerCase() as GuardHookHost | undefined;
+  const positional: string[] = [];
+  let afterSeparator = false;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]!;
+    if (afterSeparator) {
+      positional.push(a);
+      continue;
+    }
+    if (a === '--') {
+      afterSeparator = true;
+      continue;
+    }
+    if (a === '--tool' || a === '--hook-host' || a === '--limit') {
+      i++;
+      continue;
+    }
+    if (a.startsWith('--tool=') || a.startsWith('--hook-host=') || a.startsWith('--limit=')) continue;
+    if (a === '--json' || a === '--markdown' || a === '--hook' || a === '--strict' || a === '--log') continue;
+    positional.push(a);
+  }
+  const payload = positional.join(' ').trim();
   if (!payload) {
-    process.stderr.write('usage: immune guard "<command-or-payload>" [--tool Bash|Edit|Write] [--strict] [--hook] [--markdown] [--json]\n');
+    process.stderr.write(
+      'usage: immune guard "<command-or-payload>" [--tool Bash|Edit|Write] [--strict] [--hook] [--hook-host <host>] [--markdown] [--json]\n' +
+        '       immune guard --log [--limit N] [--json]\n',
+    );
     return 2;
   }
   const dna = detectWorkspaceDNA(process.cwd());
   const pm =
-    dna.packageManager === 'pnpm' || dna.packageManager === 'yarn' || dna.packageManager === 'bun'
+    dna.packageManager === 'pnpm' ||
+    dna.packageManager === 'yarn' ||
+    dna.packageManager === 'bun' ||
+    dna.packageManager === 'uv'
       ? dna.packageManager
       : null;
   const verdict = evaluatePreFlightGuard(payload, store.listAll(false), {
@@ -634,8 +721,11 @@ export function cmdGuard(store: ImmuneStore, args: string[]): number {
     workspacePackageManager: pm,
   });
   if (asHook) {
-    process.stdout.write(`${JSON.stringify(renderGuardHookDecision(verdict), null, 2)}\n`);
-    return verdict.decision === 'block' ? 1 : 0;
+    const out = rawHookHost
+      ? renderGuardHostHookDecision(verdict, rawHookHost)
+      : renderGuardHookDecision(verdict);
+    process.stdout.write(`${JSON.stringify(out, null, 2)}\n`);
+    return 0;
   }
   if (asJson) {
     process.stdout.write(`${JSON.stringify(verdict, null, 2)}\n`);
@@ -654,6 +744,7 @@ export function cmdVaccinate(store: ImmuneStore, args: string[]): number {
   const asMarkdown = args.includes('--markdown');
   const isCheck = args.includes('--check');
   const shouldApply = args.includes('--apply');
+  const shouldRefresh = args.includes('--refresh');
   const explicitLock = flagValue(args, '--lockfile');
   const lockfilePath = resolve(explicitLock ?? join('.immune', 'vaccine.lock.json'));
 
@@ -671,15 +762,37 @@ export function cmdVaccinate(store: ImmuneStore, args: string[]): number {
     return report.valid ? 0 : 1;
   }
 
-  const { lockfile } = writeVaccineLockfile(process.cwd(), store.listAll(false), { lockfilePath });
+  let lockfile: VaccineLockfile;
+  if (shouldApply && existsSync(lockfilePath) && !shouldRefresh) {
+    const raw = readFileSync(lockfilePath, 'utf8');
+    const report = verifyVaccineLockfile(raw);
+    if (!report.valid) {
+      if (asJson) {
+        process.stdout.write(`${JSON.stringify({ mode: 'apply', lockfilePath, valid: false, reason: report.reason }, null, 2)}\n`);
+      } else {
+        process.stderr.write(`vaccinate apply: lockfile integrity check failed (${report.reason})\n`);
+      }
+      return 1;
+    }
+    lockfile = JSON.parse(raw) as VaccineLockfile;
+  } else {
+    const workspaceScope = deriveProjectScope(process.cwd());
+    const scopedRules = store
+      .listAll(false)
+      .filter((r) => !r.project_scope || r.project_scope === '*' || r.project_scope === workspaceScope);
+    ({ lockfile } = writeVaccineLockfile(process.cwd(), scopedRules, { lockfilePath }));
+  }
+
   let appliedCount = 0;
+  let skippedCount = 0;
   if (shouldApply) {
     const res = applyVaccineLockfile(store, lockfile);
     appliedCount = res.applied;
+    skippedCount = Math.max(0, res.total - res.applied);
   }
 
   if (asJson) {
-    process.stdout.write(`${JSON.stringify({ lockfilePath, appliedCount, lockfile }, null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify({ lockfilePath, appliedCount, skippedCount, lockfile }, null, 2)}\n`);
     return 0;
   }
   if (asMarkdown) {
@@ -687,6 +800,9 @@ export function cmdVaccinate(store: ImmuneStore, args: string[]): number {
     return 0;
   }
   process.stdout.write(renderVaccineTerminal(lockfile, lockfilePath));
+  if (shouldApply) {
+    process.stdout.write(`  Applied to SQLite : ${appliedCount} new (${skippedCount} already present)\n`);
+  }
   return 0;
 }
 
@@ -698,7 +814,7 @@ export function cmdFederate(store: ImmuneStore, args: string[]): number {
   const rawMin = flagValue(args, '--min-consensus');
   const minConsensusScore = rawMin && Number.isFinite(Number(rawMin)) ? Number(rawMin) : 0;
 
-  const fileInputs = args.filter((a) => !a.startsWith('-') && a !== outPath && a !== rawMin);
+  const fileInputs = positionalArgs(args, ['--out', '--min-consensus']);
   const sources: SwarmRuleSource[] = [
     { sourceId: 'local-sqlite', rules: store.listAll(false) },
   ];
@@ -712,21 +828,24 @@ export function cmdFederate(store: ImmuneStore, args: string[]): number {
   } else {
     for (const fp of fileInputs) {
       const resolved = resolve(fp);
-      if (existsSync(resolved)) {
-        sources.push({
-          sourceId: fp,
-          rules: parseTeamRulesJsonl(readFileSync(resolved, 'utf8')),
-        });
+      if (!existsSync(resolved)) {
+        process.stderr.write(`federate: input file not found: ${resolved}\n`);
+        return 2;
       }
+      sources.push({
+        sourceId: fp,
+        rules: parseTeamRulesJsonl(readFileSync(resolved, 'utf8')),
+      });
     }
   }
 
   const report = federateSwarmRules(sources, { minConsensusScore });
   if (outPath && !asSvg) {
-    writeTeamRulesFile(resolve(outPath), report.universalLaws, { minHits: 0 });
+    writeTeamRulesFile(resolve(outPath), report.universalLaws, { minHits: 0, replace: true });
   }
   if (asSvg) {
     const svgTarget = resolve(outPath ?? 'immune-federation.svg');
+    mkdirSync(dirname(svgTarget), { recursive: true });
     writeFileSync(svgTarget, renderFederationSvg(report), 'utf8');
     process.stdout.write(`federation consensus SVG (${report.universalLaws.length} universal laws, ${report.averageConsensusScore}/100) -> ${svgTarget}\n`);
     return 0;

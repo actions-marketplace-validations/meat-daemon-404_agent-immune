@@ -6,6 +6,14 @@
  * prescribes a targeted seed-pack "booster shot" + 3-line system-prompt vaccine.
  */
 const ARCHETYPES = {
+    'cold-start': {
+        id: 'cold-start',
+        title: '🌱 Cold-Start Workspace (Awaiting First Antibodies)',
+        tagline: 'No active antibodies recorded yet — prime your workspace before burning retry tokens.',
+        diagnosis: 'Your local SQLite library is currently empty. Run `immune vaccinate --apply` or `immune seed` to pre-immunize against stack pitfalls.',
+        recommendedPacks: ['git-safety', 'node-ts'],
+        vaccinePrompt: 'VACCINE: Run `npx dsh-immune-system vaccinate --apply` to compile Workspace DNA zero-day antibodies before your first coding session.',
+    },
     'blind-surgeon': {
         id: 'blind-surgeon',
         title: '⚡ The Blind Surgeon (Unread-File Mutator)',
@@ -38,6 +46,14 @@ const ARCHETYPES = {
         recommendedPacks: ['rust-cargo', 'go-mod', 'node-ts'],
         vaccinePrompt: 'VACCINE: Use explicit .js extensions in NodeNext TypeScript imports, avoid holding non-Send guards across .await, and check concrete nil before interface assignment.',
     },
+    'git-gambler': {
+        id: 'git-gambler',
+        title: '🔥 The Git & CI Gambler (History Risk-Taker)',
+        tagline: 'Force-pushes, skips pre-commit hooks, or wipes working trees before verifying remote state.',
+        diagnosis: 'Your agent repeatedly triggers Git history collisions, destructive clean/reset operations, or CI gate failures.',
+        recommendedPacks: ['git-safety'],
+        vaccinePrompt: 'VACCINE: Always use `git push --force-with-lease`, stash before `git reset --hard`, preview `git clean -n`, and never bypass hooks with `--no-verify`.',
+    },
     'env-drifter': {
         id: 'env-drifter',
         title: '🐳 The Environment Drifter (Container & Config Nomad)',
@@ -58,16 +74,16 @@ const ARCHETYPES = {
 export function classifyRuleDomain(rule) {
     const tool = (rule.tool_name ?? '').toLowerCase();
     const text = `${rule.trigger_pattern} ${rule.symptom} ${rule.prescription}`.toLowerCase();
-    if (/(?:git |rebase|force-with-lease|commit|branch|pre-commit|ci-check|github|pr |pull request)/.test(text)) {
+    if (/(?:\bgit\b|rebase|force-with-lease|\bcommit\b|\bbranch\b|pre-commit|ci-check|github|\bpr\b|pull request)/.test(text)) {
         return 'git_ci';
     }
     if (/(?:cargo|rustc|e0502|borrow|tokio|goroutine|go\.mod|tsconfig|typescript|nodenext|\.d\.ts|type error)/.test(text)) {
         return 'types';
     }
-    if (/(?:pnpm|yarn|npm install|uv |pip |venv|pyproject|requirements\.txt|lockfile|package\.json|vite|next\/|docker)/.test(text)) {
+    if (/(?:\bpnpm\b|\byarn\b|npm install|\buv\b|\bpip3?\b|\bvenv\b|pyproject|requirements\.txt|lockfile|package\.json|\bvite\b|next\/|\bdocker\b)/.test(text)) {
         return 'toolchain';
     }
-    if (tool === 'edit' || tool === 'write' || /(?:read file|not read|path|enoent|eexist|indent|whitespace|win32|posix)/.test(text)) {
+    if (tool === 'edit' || tool === 'write' || /(?:read file|not read|\bpath\b|enoent|eexist|indent|whitespace|win32|posix)/.test(text)) {
         return 'filesystem';
     }
     return 'shell';
@@ -91,7 +107,7 @@ export function diagnoseAgentArchetype(rules) {
     for (const r of active) {
         const dom = classifyRuleDomain(r);
         counts[dom].rules += 1;
-        counts[dom].hits += Math.max(1, r.hit_count ?? 1);
+        counts[dom].hits += Math.max(0, r.hit_count ?? 0);
         counts[dom].fails += Math.max(0, r.fail_count ?? 0);
     }
     const domainMeta = [
@@ -103,6 +119,9 @@ export function diagnoseAgentArchetype(rules) {
     ];
     const radar = domainMeta.map(({ id, label }) => {
         const c = counts[id];
+        if (active.length === 0) {
+            return { id, label, ruleCount: 0, totalHits: 0, immunityPct: 0 };
+        }
         const coverageBoost = Math.min(60, Math.round(Math.log2(1 + c.rules) * 18));
         const hitProof = Math.min(35, Math.round(Math.log2(1 + c.hits) * 8));
         const failPenalty = Math.min(30, c.fails * 6);
@@ -116,11 +135,16 @@ export function diagnoseAgentArchetype(rules) {
         };
     });
     const totalHits = radar.reduce((s, a) => s + a.totalHits, 0);
-    const overallImmunityPct = Math.round(radar.reduce((s, a) => s + a.immunityPct, 0) / Math.max(1, radar.length));
-    const sortedByPressure = [...radar].sort((a, b) => b.totalHits - a.totalHits || a.immunityPct - b.immunityPct);
+    const overallImmunityPct = active.length === 0
+        ? 0
+        : Math.round(radar.reduce((s, a) => s + a.immunityPct, 0) / Math.max(1, radar.length));
+    const sortedByPressure = [...radar].sort((a, b) => b.totalHits - a.totalHits || b.ruleCount - a.ruleCount || a.immunityPct - b.immunityPct);
     const dominantDomain = sortedByPressure[0]?.id ?? 'filesystem';
     let archetypeId;
-    if (active.length >= 18 && overallImmunityPct >= 82) {
+    if (active.length === 0) {
+        archetypeId = 'cold-start';
+    }
+    else if (active.length >= 18 && overallImmunityPct >= 82) {
         archetypeId = 'immunized-sentinel';
     }
     else if (dominantDomain === 'filesystem') {
@@ -134,6 +158,9 @@ export function diagnoseAgentArchetype(rules) {
     }
     else if (dominantDomain === 'types') {
         archetypeId = 'type-gladiator';
+    }
+    else if (dominantDomain === 'git_ci') {
+        archetypeId = 'git-gambler';
     }
     else {
         archetypeId = 'env-drifter';

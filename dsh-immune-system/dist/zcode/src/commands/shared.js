@@ -55,13 +55,15 @@ export function parseSeedCliArgs(args, valueFlags) {
     }
     return { positional, values, booleans };
 }
-/** Read `--flag value` or `--flag=value`; returns `undefined` if missing or followed by another `--` flag. */
+/** Read `--flag value` or `--flag=value`; stops scanning past `--` separator. */
 export function flagValue(args, flag) {
     const prefix = `${flag}=`;
     for (let i = 0; i < args.length; i += 1) {
         const arg = args[i];
         if (arg === undefined)
             continue;
+        if (arg === '--')
+            break;
         if (arg.startsWith(prefix)) {
             const val = arg.slice(prefix.length).trim();
             return val.length > 0 ? val : undefined;
@@ -75,6 +77,40 @@ export function flagValue(args, flag) {
         }
     }
     return undefined;
+}
+/**
+ * Extract positional arguments while skipping known value-taking flags
+ * (`--flag value` and `--flag=value`) and honoring `--` end-of-options.
+ */
+export function positionalArgs(args, valueFlags = []) {
+    const valueSet = new Set(valueFlags);
+    const out = [];
+    let afterSep = false;
+    for (let i = 0; i < args.length; i += 1) {
+        const arg = args[i];
+        if (arg === undefined)
+            continue;
+        if (afterSep) {
+            out.push(arg);
+            continue;
+        }
+        if (arg === '--') {
+            afterSep = true;
+            continue;
+        }
+        if (arg.startsWith('-')) {
+            const eq = arg.indexOf('=');
+            if (eq < 0 && valueSet.has(arg)) {
+                const next = args[i + 1];
+                if (next !== undefined && !next.startsWith('--')) {
+                    i += 1;
+                }
+            }
+            continue;
+        }
+        out.push(arg);
+    }
+    return out;
 }
 export function hasHelpFlag(args) {
     return args.includes('--help') || args.includes('-h');
@@ -91,8 +127,9 @@ export const style = {
 };
 const COMMAND_HELP = {
     demo: 'immune demo\n  Run an end-to-end distill -> score -> recall -> inject simulation entirely in memory.',
+    mcp: 'immune mcp\n  Start the zero-dependency JSON-RPC 2.0 MCP server over stdio (27 tools, 5 live resources, 3 workflow prompts).',
     connect: 'immune connect [host] [--status] [--refresh] [--remove] [--json]\n' +
-        '  Auto-detect and wire coding agents (claude-code, codex, antigravity, gemini-cli, cursor, vscode, windsurf, zed, roo-code, claude-desktop, cline).\n' +
+        '  Auto-detect and wire coding agents (claude-code, codex, antigravity, gemini-cli, cursor, vscode, windsurf, zed, roo-code, claude-desktop, cline, opencode, kiro).\n' +
         '  With no host, wires all detected agents. Pass --remove to uninstall cleanly.',
     doctor: 'immune doctor [--json]\n  Verify Node engine, SQLite+FTS5 trigram/CJK, hook paths, hygiene, and drain budget.',
     ui: 'immune ui [--port <port>]\n  Start the local-only offline Web Dashboard on 127.0.0.1 (default port 7788).',
@@ -110,24 +147,24 @@ const COMMAND_HELP = {
     detours: 'immune detours\n  List sessions that probed the same target 4+ times read-only before fixing.',
     rewrite: 'immune rewrite [--dry-run] [--max <n>] [--id <a,b>]\n  Rewrite echo-grade command dumps into concise imperative advice via configured LLM.',
     consolidate: 'immune consolidate [--dry-run]\n  Merge near-duplicate rules (>=70% similarity, shared trigger & symptom) while preserving counters.',
-    seed: 'immune seed [<pack>] [--baseline widely|newly] [--remove]\n  List or install 9 builtin starter packs (git-safety, node-ts, python-uv, rust-cargo, go-mod, docker, modern-web, dsh-ecosystem, patrol-triage).',
+    seed: 'immune seed [<pack>] [--baseline widely|newly] [--remove]\n  List or install 12 builtin starter packs (git-safety, node-ts, python-uv, rust-cargo, go-mod, docker, modern-web, dsh-ecosystem, patrol-triage, sql-migrations, nextjs-react, windows-shell).',
     'ingest-skill': 'immune ingest-skill <path...> [--pack <name>] [--baseline widely|newly] [--remove]\n  Index external SKILL.md / Markdown playbooks into FTS5 for zero-bloat on-demand recall.',
-    'ingest-disk': 'immune ingest-disk [<root...>] [--dry-run] [--depth <n>] [--max-projects <n>] [--max-rules <n>]\n  Discover repositories & skills under root directories (defaults to cwd) and extract scoped/universal rules.',
+    'ingest-disk': 'immune ingest-disk [<root...>] [--dry-run] [--depth <n>] [--max-projects <n>] [--max-rules <n>] [--no-codex-skills]\n  Discover repositories & skills under root directories (defaults to cwd) and extract scoped/universal rules.',
     workspaces: 'immune workspaces [--json]\n  List discovered workspace profiles, tech stacks, Baselines, and rule counts.',
-    audit: 'immune audit [--dry-run] [--days <n>|--all-time] [--source auto|zcode|codex|claude-code|antigravity] [--max <n>] [--no-llm] [--json]\n  Replay local agent histories to surface repeat failure families and bootstrap rules.',
-    backfill: 'immune backfill [--days <n>] [--max <n>] [--budget-ms <n>] [--no-llm] [--db <path>]\n  Backfill historical ZCode episodes into the library.',
+    audit: 'immune audit [--dry-run] [--days <n>|--all-time] [--source auto|zcode|codex|claude-code|antigravity] [--max <n>] [--budget-ms <n>] [--magpie] [--no-llm] [--json]\n  Replay local agent histories to surface repeat failure families and bootstrap rules.',
+    backfill: 'immune backfill [--days <n>] [--max <n>] [--budget-ms <n>] [--session <id>] [--no-llm] [--db <path>]\n  Backfill historical ZCode episodes into the library.',
     export: 'immune export [minHits] [outPath]\n  Export proven share-safe rules (default hits >= 3) as a portable SKILL.md.',
     'export-json': 'immune export-json [outPath]\n  Export a share-gated JSON library snapshot for team or cross-machine sync.',
     'import-json': 'immune import-json <snapshot.json>\n  Merge a JSON library snapshot into the current database.',
     'sync-doc': 'immune sync-doc [--out <file>] [--min-hits <n>]\n  Sync proven rules into AGENTS.md (or existing CLAUDE.md) inside <!-- immune:generated --> markers.',
-    guard: 'immune guard "<command>" [--tool Bash|Edit|Write] [--strict] [--hook] [--markdown] [--json]\n  Pre-flight blast-radius interceptor: score (0-100), block, or safely rewrite destructive agent commands before execution.',
-    vaccinate: 'immune vaccinate [--check] [--apply] [--lockfile <path>] [--markdown] [--json]\n  Scan Workspace DNA manifests and compile or verify a declarative .immune/vaccine.lock.json for zero-shot immunity.',
+    guard: 'immune guard "<command>" [--tool Bash|Edit|Write] [--strict] [--hook] [--hook-host claude-code|cursor|antigravity|gemini-cli|generic] [--markdown] [--json]\n  immune guard --log [--limit N] [--json]\n  Pre-flight blast-radius interceptor: score (0-100), block, or safely rewrite destructive agent commands, or audit recent live interceptions.',
+    vaccinate: 'immune vaccinate [--check] [--apply] [--refresh] [--lockfile <path>] [--markdown] [--json]\n  Scan Workspace DNA manifests and compile, verify, or apply a declarative .immune/vaccine.lock.json for zero-shot immunity.',
     federate: 'immune federate [<rules.jsonl...>] [--out <bundle.jsonl>] [--min-consensus <0-100>] [--svg] [--markdown] [--json]\n  Federate antibodies across workspaces/agents and promote corroborated clusters into Universal Swarm Laws.',
     autopsy: 'immune autopsy [--markdown] [--json]\n  Run a forensic post-mortem on prevented debug loops, rescued tokens, API dollar savings, and fragile scars.',
-    diagnose: 'immune diagnose [--markdown] [--json]\n  Analyze your agent failure persona (6 archetypes), 5-domain immunity radar, and prescribed seed booster + prompt vaccine.',
+    diagnose: 'immune diagnose [--svg] [--out <file>] [--markdown] [--json]\n  Analyze your agent failure persona, 5-domain immunity radar, and prescribed seed booster + prompt vaccine.',
     'compile-rules': 'immune compile-rules [--target all|cursor|copilot|windsurf|cline|claude] [--min-hits <n>] [--dry-run] [--json]\n  Transpile learned SQLite antibodies into native Cursor .mdc rules (with inferred file globs), Copilot, Windsurf, Cline, and CLAUDE.md.',
-    wrapped: 'immune wrapped [out.svg] [--hosts <a,b>] [--stdout] [--json]\n  Render a 1200x630 dark-mode Pitfall Scorecard SVG with your Immunity Score (0-100) and top nemeses.',
-    'team-sync': 'immune team-sync [file] [--import] [--min-hits <n>] [--json]\n  Export or import Git-native, deterministically hash-sorted team rules (.immune/rules.jsonl) with path/secret filtering.',
+    wrapped: 'immune wrapped [out.svg] [--out <file>] [--hosts <a,b>] [--badge] [--markdown] [--stdout] [--json]\n  Render a 1200x630 dark-mode Pitfall Scorecard SVG, shields.io badge, or Markdown summary with your Immunity Score (0-100).',
+    'team-sync': 'immune team-sync [file] [--path <file>] [--import | --check | --dedupe] [--min-hits <n>] [--json]\n  Export, import, validate, or heal Git-native deterministically sorted team rules (.immune/rules.jsonl).',
     'ci-check': 'immune ci-check [--diff <patch>] [--doc <file>] [--json] [--github] [--warn-only]\n  Stateless PR gate: scan git diff added lines against committed AGENTS.md / CLAUDE.md pitfall rules.',
     'git-hook': 'immune git-hook [--install | --remove | --status] [--warn-only] [--json]\n  Install or remove a non-destructive .git/hooks/pre-commit pitfall scanner over staged diffs.',
     completions: 'immune completions <bash|zsh|fish|powershell>\n  Print a shell tab-completion script for immune and dsh-immune-system.',
@@ -150,7 +187,8 @@ export function renderMainHelp(version) {
         '',
         `${h('Quickstart & Hosts')}`,
         `  ${c('demo')}Run a 30-second in-memory distill -> recall -> inject showcase`,
-        `  ${c('connect [host]')}Wire hooks/MCP into Claude Code, Codex, Antigravity, Gemini CLI, Cursor, Windsurf`,
+        `  ${c('mcp')}Start the stdio JSON-RPC 2.0 MCP server (26 tools, zero deps)`,
+        `  ${c('connect [host]')}Wire hooks/MCP into 11 hosts (Claude Code, Codex, Cursor, Antigravity, VS Code, Zed, ...)`,
         `  ${c('doctor')}Verify Node engine, SQLite+FTS5, hook paths, hygiene & budgets`,
         `  ${c('ui [--port 7788]')}Launch the local-only offline Web Dashboard (127.0.0.1)`,
         '',

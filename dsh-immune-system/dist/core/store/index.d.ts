@@ -1,6 +1,7 @@
-import type { Antibody, AntibodyStatus, FailureSnapshot, NewAntibody, WorkspaceProfile } from '../types.js';
+import type { Antibody, AntibodyStatus, FailureSnapshot, GuardEventSummary, NewAntibody, WorkspaceProfile } from '../types.js';
 import { type HygieneReport } from '../hygiene.js';
 import { type ReceiptSummary } from '../receipts.js';
+import { type NewGuardEvent } from './guard-events.js';
 import { type TriageSummary } from '../triage.js';
 import type { MagpieTelemetryReport } from '../audit/magpie.js';
 /** meta-table key for the value metric: repeats the plugin measurably prevented. */
@@ -8,7 +9,7 @@ export declare const SUPPRESSED_REPEATS_KEY = "suppressed_repeats";
 /** Runtime truth for the optional model path: rules it produced / times it degraded. */
 export declare const LLM_SUCCESS_KEY = "llm_distilled";
 export declare const LLM_FALLBACK_KEY = "llm_fallbacks";
-import { type PenaltyContext } from './antibodies.js';
+import { type InsertOptions, type PenaltyContext } from './antibodies.js';
 import type { SeedInstallReport, SeedRemoveReport, SeedRule } from './seeds.js';
 import { type ModelRow } from './models.js';
 import { type DistillJob } from './jobs.js';
@@ -61,7 +62,7 @@ export declare class ImmuneStore {
     /** Shared library, opened on first need; undefined = not decided yet. */
     private globalStore;
     constructor(opts?: StoreOptions);
-    insert(ab: NewAntibody): number | null;
+    insert(ab: NewAntibody, opts?: InsertOptions): number | null;
     /**
      * Insert and, when the rule is provably generic, also publish it to the
      * shared library so the next project starts already knowing it.
@@ -142,7 +143,9 @@ export declare class ImmuneStore {
     retireZombies(olderThanMs: number): number[];
     /** Delete never-injected antibodies older than `olderThanMs` (not reversible). */
     pruneZombies(olderThanMs: number): number[];
-    setStatus(id: number, status: AntibodyStatus): boolean;
+    setStatus(id: number, status: AntibodyStatus, retireReason?: string): boolean;
+    /** Read the current SQLite `PRAGMA user_version` schema version. */
+    schemaVersion(): number;
     /** Write a consistent snapshot; a plain copy of a WAL db can be empty. */
     backupTo(path: string): Promise<void>;
     /** Merge proven duplicate lessons, retaining evidence and attribution. */
@@ -218,6 +221,15 @@ export declare class ImmuneStore {
     triageSummary(limit?: number): TriageSummary;
     /** Verify and summarize SHA-256 chained delivery receipts. */
     receiptSummary(limit?: number): ReceiptSummary;
+    /**
+     * Settle verified `'held'` receipts at turn end for rules injected in
+     * `sessionId` that survived without a related failure in this window.
+     */
+    recordHeldReceipts(sessionId: string, projectScope?: string, tokensPerHold?: number): number;
+    /** Persist a redacted live Pre-Flight Guard interception into the audit ledger. */
+    recordGuardEvent(entry: NewGuardEvent): void;
+    /** Read-only summary and recent rows from the live Pre-Flight Guard audit ledger. */
+    guardEventSummary(limit?: number): GuardEventSummary;
     /** Build per-model immunity matrix + adaptive escalation targets. */
     modelImmunity(magpie?: MagpieTelemetryReport | null): {
         models: import("../model-intel.js").ModelImmunityProfile[];

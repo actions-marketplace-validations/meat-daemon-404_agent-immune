@@ -10,7 +10,6 @@
  */
 import { findLessonGroups } from './consolidate.js';
 import type { ImmuneStore } from './store/index.js';
-import { readMeta, setMeta } from './store/meta.js';
 
 /** Minimum time between consolidation scans. */
 export const SLEEP_COOLDOWN_MS = 12 * 60 * 60 * 1000;

@@ -146,25 +146,42 @@ export function abstractMachinePaths(input, workspaceRoot) {
                 ? posix.resolve(trimmedRoot)
                 : resolve(trimmedRoot);
         const normRoot = resolvedRoot.replace(/\\/g, '/').replace(/\/+$/, '');
-        const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const escapedFwd = escapeRe(normRoot);
-        const escapedBack = escapedFwd.replace(/\//g, '\\\\');
-        const escapedDoubleBack = escapedFwd.replace(/\//g, '\\\\\\\\');
-        out = out
-            .replace(new RegExp(escapedDoubleBack, 'gi'), '<repo>')
-            .replace(new RegExp(escapedBack, 'gi'), '<repo>')
-            .replace(new RegExp(escapedFwd, 'gi'), '<repo>');
+        // Guard against filesystem roots (`/` -> '' or `D:\` -> 'D:'): replacing an
+        // empty pattern or bare drive prefix would corrupt ordinary strings.
+        if (normRoot.length >= 2 && !/^[A-Za-z]:$/.test(normRoot)) {
+            const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const escapedFwd = escapeRe(normRoot);
+            const escapedBack = escapedFwd.replace(/\//g, '\\\\');
+            const escapedDoubleBack = escapedFwd.replace(/\//g, '\\\\\\\\');
+            out = out
+                .replace(new RegExp(escapedDoubleBack, 'gi'), '<repo>')
+                .replace(new RegExp(escapedBack, 'gi'), '<repo>')
+                .replace(new RegExp(escapedFwd, 'gi'), '<repo>');
+        }
     }
     out = out.replace(WIN_ABS_PATH_RE, (full) => {
         const clean = full.replace(/\\\\/g, '/').replace(/\\/g, '/');
-        const segs = clean
-            .split('/')
-            .filter((s) => Boolean(s) && !/^[A-Za-z]:$/.test(s) && !/^(?:Users|home)$/i.test(s));
+        const rawSegs = clean.split('/').filter(Boolean);
+        // Drop drive prefix (`C:`) and Windows user-profile home segment (`Users/<username>`)
+        // BEFORE tail slicing so short paths like `C:\Users\alice\.env` never leak `alice`.
+        let start = rawSegs.length > 0 && /^[A-Za-z]:$/.test(rawSegs[0]) ? 1 : 0;
+        if (/^(?:Users|Documents and Settings)$/i.test(rawSegs[start] ?? '')) {
+            start += rawSegs.length > start + 1 ? 2 : 1;
+        }
+        const segs = rawSegs.slice(start).filter((s) => s !== '<user>');
         const tail = segs.slice(-2).join('/');
         return tail ? `<path>/${tail}` : '<path>';
     });
     out = out.replace(UNIX_HOME_PATH_RE, (full) => {
-        const segs = full.split('/').filter((s) => Boolean(s) && !/^(?:Users|home|root)$/i.test(s));
+        const rawSegs = full.split('/').filter(Boolean);
+        let start = 0;
+        if (/^(?:Users|home)$/i.test(rawSegs[0] ?? '')) {
+            start = rawSegs.length > 1 ? 2 : 1;
+        }
+        else if (/^root$/i.test(rawSegs[0] ?? '')) {
+            start = 1;
+        }
+        const segs = rawSegs.slice(start).filter((s) => s !== '<user>');
         const tail = segs.slice(-2).join('/');
         return tail ? `~/<path>/${tail}` : '~/<path>';
     });
@@ -345,87 +362,127 @@ export function repairLibraryHygiene(db, opts = {}) {
             retire_reason = ?,
             updated_at = ?
       WHERE id = ?`);
-    for (const raw of rows) {
-        const id = Number(raw.id);
-        const status = String(raw.status);
-        const trigger = String(raw.trigger_pattern ?? '');
-        const symptom = String(raw.symptom ?? '');
-        const prescription = String(raw.prescription ?? '');
-        const toolName = raw.tool_name ? String(raw.tool_name) : null;
-        const hitCount = Number(raw.hit_count ?? 0);
-        const failCount = Number(raw.fail_count ?? 0);
-        const source = String(raw.prescription_source ?? '');
-        const origin = String(raw.origin ?? '');
-        let repairPath = [];
+    let began = false;
+    if (!dryRun) {
         try {
-            const parsed = JSON.parse(String(raw.repair_path ?? '[]'));
-            if (Array.isArray(parsed))
-                repairPath = parsed.filter((v) => typeof v === 'string');
+            db.exec('BEGIN IMMEDIATE');
+            began = true;
         }
         catch {
-            repairPath = [];
+            // Caller already holds a transaction; proceed inline.
         }
-        const verdict = classifyRuleQuality({
-            trigger_pattern: trigger,
-            symptom,
-            prescription,
-            tool_name: toolName,
-            repair_path: repairPath,
-            prescription_source: source,
-            origin,
-            hit_count: hitCount,
-            fail_count: failCount,
-        });
-        if (status === 'active' && verdict.grade === 'quarantined')
-            garbageActiveBefore += 1;
-        let nextStatus = status;
-        let nextSymptom = symptom;
-        let nextScope = String(raw.project_scope ?? '*');
-        let nextRetireReason = String(raw.retire_reason ?? '');
-        const inferredScope = inferScopeFromRuleText(`${trigger} ${symptom} ${prescription}`);
-        if (inferredScope && nextScope === '*' && !verdict.universalEligible) {
-            nextScope = inferredScope;
-            scoped += 1;
-            changes.push({ id, action: 'scoped', detail: `assigned project_scope=${inferredScope}` });
-        }
-        if (RAW_JSON_WRAPPER_RE.test(symptom) || RAW_TOOL_WRAPPER_RE.test(symptom)) {
-            const cleaned = canonicalizeSymptom(symptom);
-            if (cleaned && cleaned !== symptom) {
-                nextSymptom = cleaned;
-                symptomsCleaned += 1;
-                changes.push({ id, action: 'cleaned_symptom', detail: `cleaned wrapper symptom` });
+    }
+    try {
+        for (const raw of rows) {
+            const id = Number(raw.id);
+            const status = String(raw.status);
+            const trigger = String(raw.trigger_pattern ?? '');
+            const symptom = String(raw.symptom ?? '');
+            const prescription = String(raw.prescription ?? '');
+            const toolName = raw.tool_name ? String(raw.tool_name) : null;
+            const hitCount = Number(raw.hit_count ?? 0);
+            const failCount = Number(raw.fail_count ?? 0);
+            const source = String(raw.prescription_source ?? '');
+            const origin = String(raw.origin ?? '');
+            const prevGrade = String(raw.quality_grade ?? '');
+            const prevRubric = Number(raw.rubric_score ?? -1);
+            const prevRootCause = String(raw.root_cause ?? '');
+            const prevScope = String(raw.project_scope ?? '*');
+            const prevRetireReason = String(raw.retire_reason ?? '');
+            let repairPath = [];
+            try {
+                const parsed = JSON.parse(String(raw.repair_path ?? '[]'));
+                if (Array.isArray(parsed))
+                    repairPath = parsed.filter((v) => typeof v === 'string');
+            }
+            catch {
+                repairPath = [];
+            }
+            const verdict = classifyRuleQuality({
+                trigger_pattern: trigger,
+                symptom,
+                prescription,
+                tool_name: toolName,
+                repair_path: repairPath,
+                prescription_source: source,
+                origin,
+                hit_count: hitCount,
+                fail_count: failCount,
+            });
+            if (status === 'active' && verdict.grade === 'quarantined')
+                garbageActiveBefore += 1;
+            let nextStatus = status;
+            let nextSymptom = symptom;
+            let nextScope = prevScope;
+            let nextRetireReason = prevRetireReason;
+            const inferredScope = inferScopeFromRuleText(`${trigger} ${symptom} ${prescription}`);
+            if (inferredScope && nextScope === '*' && !verdict.universalEligible) {
+                nextScope = inferredScope;
+                scoped += 1;
+                changes.push({ id, action: 'scoped', detail: `assigned project_scope=${inferredScope}` });
+            }
+            if (RAW_JSON_WRAPPER_RE.test(symptom) || RAW_TOOL_WRAPPER_RE.test(symptom)) {
+                const cleaned = canonicalizeSymptom(symptom);
+                if (cleaned && cleaned !== symptom) {
+                    nextSymptom = cleaned;
+                    symptomsCleaned += 1;
+                    changes.push({ id, action: 'cleaned_symptom', detail: `cleaned wrapper symptom` });
+                }
+            }
+            if (verdict.grade === 'quarantined' && status === 'active') {
+                nextStatus = 'quarantined';
+                nextRetireReason = verdict.quarantineReason ?? 'hygiene_quarantined';
+                quarantined += 1;
+                changes.push({
+                    id,
+                    action: 'quarantined',
+                    detail: `${verdict.quarantineReason} (score=${verdict.score})`,
+                });
+            }
+            else if (status === 'retired' &&
+                verdict.grade !== 'quarantined' &&
+                verdict.score >= 60 &&
+                (matchGenericLesson(nextSymptom) !== null ||
+                    (hitCount >= 10 && failCount < Math.max(hitCount, failCount) * 0.25)) &&
+                nextRetireReason !== 'superseded_by_env_upgrade' &&
+                nextRetireReason !== 'manual' &&
+                nextRetireReason !== 'mutated_to_child') {
+                // Restore unjustly retired high-value universal/low-failure rules (e.g. #37 / #66),
+                // while respecting explicit manual retirements and env-upgrade supersessions.
+                nextStatus = 'active';
+                nextRetireReason = '';
+                restored += 1;
+                changes.push({
+                    id,
+                    action: 'restored',
+                    detail: `low failure rate (${failCount}/${hitCount}) or generic lesson (score=${verdict.score})`,
+                });
+            }
+            const rootCause = inferRootCause(nextSymptom, prescription, repairPath);
+            const rowChanged = nextStatus !== status ||
+                nextSymptom !== symptom ||
+                nextScope !== prevScope ||
+                verdict.grade !== prevGrade ||
+                verdict.score !== prevRubric ||
+                rootCause !== prevRootCause ||
+                nextRetireReason !== prevRetireReason;
+            if (!dryRun && rowChanged) {
+                updateStmt.run(nextStatus, nextSymptom, nextScope, verdict.grade, verdict.score, rootCause, nextRetireReason, now, id);
             }
         }
-        if (verdict.grade === 'quarantined' && status === 'active') {
-            nextStatus = 'quarantined';
-            nextRetireReason = verdict.quarantineReason ?? 'hygiene_quarantined';
-            quarantined += 1;
-            changes.push({
-                id,
-                action: 'quarantined',
-                detail: `${verdict.quarantineReason} (score=${verdict.score})`,
-            });
+        if (began)
+            db.exec('COMMIT');
+    }
+    catch (err) {
+        if (began) {
+            try {
+                db.exec('ROLLBACK');
+            }
+            catch {
+                // ignore rollback error
+            }
         }
-        else if (status === 'retired' &&
-            verdict.grade !== 'quarantined' &&
-            verdict.score >= 60 &&
-            (matchGenericLesson(nextSymptom) !== null ||
-                (hitCount >= 10 && failCount < Math.max(hitCount, failCount) * 0.25)) &&
-            nextRetireReason !== 'superseded_by_env_upgrade') {
-            // Restore unjustly retired high-value universal/low-failure rules (e.g. #37 / #66).
-            nextStatus = 'active';
-            nextRetireReason = '';
-            restored += 1;
-            changes.push({
-                id,
-                action: 'restored',
-                detail: `low failure rate (${failCount}/${hitCount}) or generic lesson (score=${verdict.score})`,
-            });
-        }
-        const rootCause = inferRootCause(nextSymptom, prescription, repairPath);
-        if (!dryRun) {
-            updateStmt.run(nextStatus, nextSymptom, nextScope, verdict.grade, verdict.score, rootCause, nextRetireReason, now, id);
-        }
+        throw err;
     }
     const activeAfter = activeBefore - quarantined + restored;
     const garbageAfterCount = 0; // Active rules after repair have zero quarantined items.

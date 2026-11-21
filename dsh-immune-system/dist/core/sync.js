@@ -60,6 +60,12 @@ export function importLibrary(store, snapshot) {
     const raw = snapshot.antibodies;
     if (!Array.isArray(raw))
         return report;
+    const existingByPrescription = new Map();
+    for (const row of store.listAll(true)) {
+        if (!existingByPrescription.has(row.prescription)) {
+            existingByPrescription.set(row.prescription, row);
+        }
+    }
     for (const item of raw) {
         if (typeof item !== 'object' || item === null) {
             report.invalid += 1;
@@ -87,21 +93,31 @@ export function importLibrary(store, snapshot) {
             repair_path: repairPath,
             created_at: asNumber(row.created_at, Date.now()),
         };
-        const existing = store
-            .listAll(true)
-            .find((a) => a.prescription === incoming.prescription);
+        const existing = existingByPrescription.get(incoming.prescription);
         if (existing) {
             const mergedHits = Math.max(existing.hit_count, incoming.hit_count);
             const mergedFails = Math.max(existing.fail_count, incoming.fail_count);
-            const mergedStatus = existing.status === 'active' || incoming.status === 'active' ? 'active' : 'retired';
+            const mergedStatus = existing.status === 'active' || incoming.status === 'active'
+                ? 'active'
+                : existing.status === 'quarantined' && incoming.status === 'quarantined'
+                    ? 'quarantined'
+                    : 'retired';
+            const earliestCreated = existing.created_at > 0 && incoming.created_at > 0
+                ? Math.min(existing.created_at, incoming.created_at)
+                : existing.created_at || incoming.created_at;
             const changed = mergedHits !== existing.hit_count ||
                 mergedFails !== existing.fail_count ||
-                mergedStatus !== existing.status;
+                mergedStatus !== existing.status ||
+                earliestCreated !== existing.created_at;
             if (changed) {
                 // status has no numeric setter; go through setStatus when it changed.
                 if (mergedStatus !== existing.status)
                     store.setStatus(existing.id, mergedStatus);
-                applyTallies(store, existing.id, mergedHits, mergedFails, incoming.created_at);
+                applyTallies(store, existing.id, mergedHits, mergedFails, earliestCreated);
+                existing.hit_count = mergedHits;
+                existing.fail_count = mergedFails;
+                existing.status = mergedStatus;
+                existing.created_at = earliestCreated;
             }
             report.merged += 1;
             continue;
@@ -132,6 +148,9 @@ export function importLibrary(store, snapshot) {
         if (incoming.status === 'retired' || incoming.status === 'quarantined') {
             store.setStatus(id, incoming.status);
         }
+        const insertedRow = store.byId(id);
+        if (insertedRow)
+            existingByPrescription.set(insertedRow.prescription, insertedRow);
         report.added += 1;
     }
     return report;

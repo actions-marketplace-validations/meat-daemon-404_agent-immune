@@ -8,10 +8,11 @@
  * with SHA-256 integrity verification.
  */
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { DiagnosableRule } from './diagnose.js';
 import { canonicalRuleHash, isTeamShareSafe, type TeamRuleImportStore } from './team-sync.js';
+import { packageVersion } from './version.js';
 
 export type DetectedPackageManager = 'pnpm' | 'yarn' | 'bun' | 'npm' | 'uv' | 'cargo' | 'go' | 'unknown';
 
@@ -90,9 +91,21 @@ const MARKER_CHECKS: ReadonlyArray<{
     pack: 'node-ts',
     territory: 'Lockfile & Workspace Package Manager (bun)',
     rule: {
-      trigger_pattern: 'bun.lockb npm install',
-      symptom: 'Running npm install in a Bun repository bypasses bun.lockb',
-      prescription: 'Use bun install / bun run in this Bun-locked repository',
+      trigger_pattern: 'bun.lockb bun.lock npm install',
+      symptom: 'Running npm install in a Bun repository bypasses bun.lockb/bun.lock',
+      prescription: 'Use bun install / bun add / bun run in this Bun-locked repository',
+      tool_name: 'Bash',
+    },
+  },
+  {
+    file: 'bun.lock',
+    stack: 'bun',
+    pack: 'node-ts',
+    territory: 'Lockfile & Workspace Package Manager (bun)',
+    rule: {
+      trigger_pattern: 'bun.lockb bun.lock npm install',
+      symptom: 'Running npm install in a Bun repository bypasses bun.lockb/bun.lock',
+      prescription: 'Use bun install / bun add / bun run in this Bun-locked repository',
       tool_name: 'Bash',
     },
   },
@@ -202,19 +215,21 @@ export function detectWorkspaceDNA(workspaceDir: string): WorkspaceDNA {
     stacks.add('node');
     recommendedPacks.add('node-ts');
   }
+  if (existsSync(join(workspaceDir, 'package-lock.json')) && !detectedMarkers.includes('package-lock.json')) {
+    detectedMarkers.push('package-lock.json');
+    stacks.add('node');
+    recommendedPacks.add('node-ts');
+  }
 
   let packageManager: DetectedPackageManager = 'unknown';
   if (detectedMarkers.includes('pnpm-lock.yaml')) packageManager = 'pnpm';
   else if (detectedMarkers.includes('yarn.lock')) packageManager = 'yarn';
-  else if (detectedMarkers.includes('bun.lockb')) packageManager = 'bun';
+  else if (detectedMarkers.includes('bun.lockb') || detectedMarkers.includes('bun.lock')) packageManager = 'bun';
   else if (detectedMarkers.includes('uv.lock')) packageManager = 'uv';
   else if (detectedMarkers.includes('Cargo.toml')) packageManager = 'cargo';
   else if (detectedMarkers.includes('go.mod')) packageManager = 'go';
-  else if (existsSync(join(workspaceDir, 'package-lock.json')) || detectedMarkers.includes('package.json')) {
+  else if (detectedMarkers.includes('package-lock.json') || detectedMarkers.includes('package.json')) {
     packageManager = 'npm';
-    if (existsSync(join(workspaceDir, 'package-lock.json')) && !detectedMarkers.includes('package-lock.json')) {
-      detectedMarkers.push('package-lock.json');
-    }
   }
 
   return {
@@ -222,7 +237,7 @@ export function detectWorkspaceDNA(workspaceDir: string): WorkspaceDNA {
     packageManager,
     stacks: [...stacks].sort(),
     recommendedPacks: [...recommendedPacks].sort(),
-    riskTerritories,
+    riskTerritories: [...new Set(riskTerritories)],
   };
 }
 
@@ -237,6 +252,7 @@ export function computeVaccineIntegrityHash(
       packageManager: dna.packageManager,
       stacks: dna.stacks,
       recommendedPacks: dna.recommendedPacks,
+      riskTerritories: dna.riskTerritories ?? [],
     },
     antibodies: antibodies.map((a) => ({
       hash: a.hash,
@@ -325,9 +341,9 @@ export function writeVaccineLockfile(
 }
 
 export function verifyVaccineLockfile(rawJson: string): VaccineVerificationReport {
-  let parsed: Partial<VaccineLockfile>;
+  let rawParsed: unknown;
   try {
-    parsed = JSON.parse(rawJson) as Partial<VaccineLockfile>;
+    rawParsed = JSON.parse(rawJson);
   } catch (err) {
     return {
       valid: false,
@@ -339,15 +355,79 @@ export function verifyVaccineLockfile(rawJson: string): VaccineVerificationRepor
     };
   }
 
-  if (parsed.schemaVersion !== '3.0.0' || !parsed.dna || !Array.isArray(parsed.antibodies)) {
+  if (!rawParsed || typeof rawParsed !== 'object' || Array.isArray(rawParsed)) {
+    return {
+      valid: false,
+      schemaVersion: null,
+      antibodyCount: 0,
+      expectedHash: null,
+      actualHash: null,
+      reason: 'Lockfile root must be a JSON object',
+    };
+  }
+
+  const parsed = rawParsed as Partial<VaccineLockfile>;
+  if (
+    parsed.schemaVersion !== '3.0.0' ||
+    !parsed.dna ||
+    typeof parsed.dna !== 'object' ||
+    Array.isArray(parsed.dna) ||
+    !Array.isArray(parsed.dna.detectedMarkers) ||
+    !Array.isArray(parsed.dna.stacks) ||
+    !Array.isArray(parsed.dna.recommendedPacks) ||
+    !Array.isArray(parsed.antibodies)
+  ) {
     return {
       valid: false,
       schemaVersion: typeof parsed.schemaVersion === 'string' ? parsed.schemaVersion : null,
       antibodyCount: Array.isArray(parsed.antibodies) ? parsed.antibodies.length : 0,
       expectedHash: typeof parsed.integrityHash === 'string' ? parsed.integrityHash : null,
       actualHash: null,
-      reason: 'Missing schemaVersion 3.0.0, dna, or antibodies array',
+      reason: 'Missing schemaVersion 3.0.0, valid dna object, or antibodies array',
     };
+  }
+
+  for (const entry of parsed.antibodies) {
+    if (
+      !entry ||
+      typeof entry !== 'object' ||
+      Array.isArray(entry) ||
+      typeof entry.hash !== 'string' ||
+      typeof entry.trigger_pattern !== 'string' ||
+      !entry.trigger_pattern.trim() ||
+      typeof entry.symptom !== 'string' ||
+      typeof entry.prescription !== 'string' ||
+      !entry.prescription.trim()
+    ) {
+      return {
+        valid: false,
+        schemaVersion: parsed.schemaVersion,
+        antibodyCount: parsed.antibodies.length,
+        expectedHash: typeof parsed.integrityHash === 'string' ? parsed.integrityHash : null,
+        actualHash: null,
+        reason: 'Malformed antibody entry in lockfile',
+      };
+    }
+    if (entry.hash !== canonicalRuleHash(entry.prescription)) {
+      return {
+        valid: false,
+        schemaVersion: parsed.schemaVersion,
+        antibodyCount: parsed.antibodies.length,
+        expectedHash: typeof parsed.integrityHash === 'string' ? parsed.integrityHash : null,
+        actualHash: null,
+        reason: `Per-rule prescription hash mismatch (${entry.hash})`,
+      };
+    }
+    if (!isTeamShareSafe(entry)) {
+      return {
+        valid: false,
+        schemaVersion: parsed.schemaVersion,
+        antibodyCount: parsed.antibodies.length,
+        expectedHash: typeof parsed.integrityHash === 'string' ? parsed.integrityHash : null,
+        actualHash: null,
+        reason: 'Lockfile contains an unsafe rule (local path, email, or secret literal)',
+      };
+    }
   }
 
   const actualHash = computeVaccineIntegrityHash(parsed.dna, parsed.antibodies);
@@ -356,7 +436,7 @@ export function verifyVaccineLockfile(rawJson: string): VaccineVerificationRepor
     valid,
     schemaVersion: parsed.schemaVersion,
     antibodyCount: parsed.antibodies.length,
-    expectedHash: parsed.integrityHash ?? null,
+    expectedHash: typeof parsed.integrityHash === 'string' ? parsed.integrityHash : null,
     actualHash,
     reason: valid ? 'Integrity verified (SHA-256 lockfile match)' : 'Integrity hash mismatch (lockfile tampered or drifted)',
   };
@@ -368,25 +448,63 @@ export function applyVaccineLockfile(
 ): { readonly applied: number; readonly total: number } {
   let applied = 0;
   for (const ab of lockfile.antibodies) {
-    const id = store.insert({
-      trigger_pattern: ab.trigger_pattern,
-      symptom: ab.symptom,
-      prescription: ab.prescription,
-      tool_name: ab.tool_name,
-      prescription_source: 'human',
-      origin: 'team_sync',
-    });
+    if (!isTeamShareSafe(ab)) continue;
+    const id = store.insert(
+      {
+        trigger_pattern: ab.trigger_pattern,
+        symptom: ab.symptom,
+        prescription: ab.prescription,
+        tool_name: ab.tool_name,
+        prescription_source: 'human',
+        origin: 'team_sync',
+      },
+      { skipIfExists: true },
+    );
     if (id !== null && id !== undefined) applied += 1;
   }
   return { applied, total: lockfile.antibodies.length };
 }
 
+/**
+ * Best-effort SessionStart auto-hydration of a repository's committed
+ * `.immune/vaccine.lock.json`. Strictly verifies SHA-256 integrity first so a
+ * tampered or malformed lockfile is never imported, and uses `skipIfExists` so
+ * repeat sessions never inflate `hit_count` (AGENTS.md #9).
+ */
+export function hydrateVaccineLockfile(
+  store: TeamRuleImportStore,
+  workspaceDir: string,
+): { readonly present: boolean; readonly verified: boolean; readonly applied: number; readonly total: number } {
+  const lockfilePath = join(workspaceDir, '.immune', 'vaccine.lock.json');
+  if (!existsSync(lockfilePath)) {
+    return { present: false, verified: false, applied: 0, total: 0 };
+  }
+  let raw = '';
+  try {
+    raw = readFileSync(lockfilePath, 'utf8');
+  } catch {
+    return { present: true, verified: false, applied: 0, total: 0 };
+  }
+  const check = verifyVaccineLockfile(raw);
+  if (!check.valid) {
+    return { present: true, verified: false, applied: 0, total: check.antibodyCount };
+  }
+  try {
+    const parsed = JSON.parse(raw) as VaccineLockfile;
+    const res = applyVaccineLockfile(store, parsed);
+    return { present: true, verified: true, applied: res.applied, total: res.total };
+  } catch {
+    return { present: true, verified: false, applied: 0, total: 0 };
+  }
+}
+
 export function renderVaccineTerminal(lockfile: VaccineLockfile, lockfilePath?: string): string {
+  const ver = packageVersion();
   const dnaCount = lockfile.antibodies.filter((a) => a.origin === 'workspace-dna').length;
   const scarCount = lockfile.antibodies.filter((a) => a.origin === 'proven-scar').length;
   const lines: string[] = [
     `╔══════════════════════════════════════════════════════════════════════════╗`,
-    `║  💉 AGENT IMMUNE v3.0 — WORKSPACE DNA & VACCINE LOCKFILE                 ║`,
+    `║  💉 AGENT IMMUNE v${ver} — WORKSPACE DNA & VACCINE LOCKFILE`.padEnd(75) + '║',
     `╚══════════════════════════════════════════════════════════════════════════╝`,
     `  Package Manager   : ${lockfile.dna.packageManager}`,
     `  Detected Markers  : ${lockfile.dna.detectedMarkers.join(', ') || '(none)'}`,
@@ -420,10 +538,10 @@ export function renderVaccineMarkdown(lockfile: VaccineLockfile): string {
     '',
     '| Origin | Trigger Territory | Prescription |',
     '| :--- | :--- | :--- |',
-    ...lockfile.antibodies.map(
-      (a) =>
-        `| \`${a.origin}\` | \`${a.trigger_pattern.replace(/\|/g, '\\|')}\` | ${a.prescription.replace(/\|/g, '\\|')} |`,
-    ),
+    ...lockfile.antibodies.map((a) => {
+      const clean = (s: string) => s.replace(/[\r\n]+/g, ' ').replace(/`/g, "'").replace(/\|/g, '\\|');
+      return `| \`${a.origin}\` | \`${clean(a.trigger_pattern)}\` | ${clean(a.prescription)} |`;
+    }),
     '',
   ];
   return lines.join('\n');
