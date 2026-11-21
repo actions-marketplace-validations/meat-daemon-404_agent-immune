@@ -49,7 +49,7 @@ const PATTERNS = [
         /\b(X-Api-Key|X-Auth-Token|Private-Token|X-GitLab-Token|X-Hub-Signature(?:-256)?|Proxy-Authorization)(\s*:\s*)(?!<redacted)([^\s"',;\r\n]{8,})/gi,
         '$1$2<redacted>',
     ],
-    [/\b(Cookie|Set-Cookie)(\s*:\s*)(?!<redacted)([^\r\n"';]*=[^\r\n"']{6,})/gi, '$1$2<redacted>'],
+    [/\b(Cookie|Set-Cookie)(\s*:\s*)(?!<redacted)([^\r\n"']*?=[^\r\n"']{6,})/gi, '$1$2<redacted>'],
     // JSON-quoted and nested-escaped JSON key/value secret pairs (preserving valid JSON).
     [
         /"([A-Za-z0-9_.-]*(?:API[_-]?KEY|ACCESS[_-]?KEY|SECRET|TOKEN|PASSWORD|PASSWD|CREDENTIAL|PRIVATE[_-]?KEY|CLIENT[_-]?SECRET|AUTH[_-]?TOKEN)[A-Za-z0-9_.-]*)"(\s*:\s*)"(?!<redacted)(?:\\.|[^"\\]){8,}"/gi,
@@ -59,9 +59,11 @@ const PATTERNS = [
         /\\"([A-Za-z0-9_.-]*(?:API[_-]?KEY|ACCESS[_-]?KEY|SECRET|TOKEN|PASSWORD|PASSWD|CREDENTIAL|PRIVATE[_-]?KEY|CLIENT[_-]?SECRET|AUTH[_-]?TOKEN)[A-Za-z0-9_.-]*)\\"(\s*:\s*)\\"(?!<redacted)[^"\\]{8,}\\"/gi,
         '\\"$1\\"$2\\"<redacted>\\"',
     ],
-    // Common key=value secret assignments.
+    // Common key=value secret assignments (skip dynamic env/code lookups like
+    // `process.env.API_KEY`, `$TOKEN`, `${SECRET}`, `env.KEY`, or function calls
+    // `getToken()` so safe code and guard advice never false-positive — AGENTS #17).
     [
-        /\b([A-Za-z0-9_]*(?:API[_-]?KEY|ACCESS[_-]?KEY|SECRET|TOKEN|PASSWORD|PASSWD|CREDENTIAL|PRIVATE[_-]?KEY|CLIENT[_-]?SECRET|AUTH[_-]?TOKEN)[A-Za-z0-9_]*)\s*[:=]\s*["']?(?!<redacted)([^\s"',;]{8,})["']?/gi,
+        /\b([A-Za-z0-9_]*(?:API[_-]?KEY|ACCESS[_-]?KEY|SECRET|TOKEN|PASSWORD|PASSWD|CREDENTIAL|PRIVATE[_-]?KEY|CLIENT[_-]?SECRET|AUTH[_-]?TOKEN)[A-Za-z0-9_]*)\s*[:=]\s*["']?(?!<redacted|\$|process\.env\b|import\.meta\.env\b|env\.|os\.environ\b|os\.getenv\b|Deno\.env\b|secrets\.|vars\.|config\.|opts\.|this\.|req\.|ctx\.|true\b|false\b|null\b|undefined\b|[A-Za-z_][A-Za-z0-9_.]*\()([^\s"',;()]{8,})["']?/gi,
         '$1=<redacted>',
     ],
 ];

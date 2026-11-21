@@ -6,7 +6,7 @@
       "name": "dsh-immune-system",
       "source": "./",
       "description": "Self-evolving pitfall immunity for coding agents — turns failed-then-fixed tool episodes into injected SQLite+FTS5 antibodies.",
-      "version": "4.0.0"
+      "version": "4.1.0"
     }
   ]
 }

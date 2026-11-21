@@ -9,8 +9,13 @@ export interface GitHookStatus {
     mode: 'strict' | 'warn-only' | 'none';
     coexistsWithUserHook: boolean;
 }
-/** Resolve the active Git hooks directory (supports worktrees and `core.hooksPath` default). */
+/** Resolve the active Git common dir (supports worktrees). */
 export declare function resolveGitDir(startDir?: string): string | null;
+/** Resolve the effective hooks directory (`core.hooksPath` or `<gitCommonDir>/hooks`). */
+export declare function resolveGitHooksDir(startDir?: string): {
+    gitCommonDir: string;
+    hooksDir: string;
+} | null;
 export declare function gitHookStatus(cwd?: string): GitHookStatus;
 export declare function installGitHook(opts?: GitHookOptions): GitHookStatus;
 export declare function removeGitHook(cwd?: string): {

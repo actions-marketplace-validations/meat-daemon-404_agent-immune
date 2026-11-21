@@ -79,6 +79,8 @@ export declare class ImmuneRuntime {
         toolInput: unknown;
         workspace?: string;
         env?: NodeJS.ProcessEnv;
+        /** Set false when the host surface cannot emit warn-only guidance (e.g. DSH PreToolDecision). */
+        recordEvent?: boolean;
     }): LiveGuardResult | null;
     /** Pre-tool check: probe thrash, antibody recall, stuck hypothesis, unified Pre-Flight Guard. */
     preToolUse(opts: {

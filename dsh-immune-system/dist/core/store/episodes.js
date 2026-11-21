@@ -24,17 +24,48 @@ function parseIds(raw) {
         return [];
     }
 }
-/** Remember which antibodies were injected on this session's current window (accumulating unexpired deliveries). */
+function withImmediateTx(db, fn) {
+    let began = false;
+    try {
+        db.exec('BEGIN IMMEDIATE');
+        began = true;
+    }
+    catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (!/within a transaction/i.test(msg))
+            throw err;
+    }
+    try {
+        const result = fn();
+        if (began)
+            db.exec('COMMIT');
+        return result;
+    }
+    catch (err) {
+        if (began) {
+            try {
+                db.exec('ROLLBACK');
+            }
+            catch {
+                // ignore rollback error
+            }
+        }
+        throw err;
+    }
+}
+/** Remember which antibodies were injected on this session's current window (accumulating unexpired deliveries atomically). */
 export function recordInjection(db, sessionId, ids, prescriptions = []) {
-    const prevIds = injectedIds(db, sessionId);
-    const prevPrescriptions = injectedPrescriptions(db, sessionId);
-    const mergedIds = [...new Set([...prevIds, ...ids])].slice(-24);
-    const mergedPrescriptions = [...new Set([...prevPrescriptions, ...prescriptions])].slice(-24);
-    db.prepare(`INSERT INTO session_injections (session_id, ids, prescriptions, created_at) VALUES (?, ?, ?, ?)
-     ON CONFLICT(session_id) DO UPDATE SET
-       ids = excluded.ids,
-       prescriptions = excluded.prescriptions,
-       created_at = excluded.created_at`).run(sessionId, JSON.stringify(mergedIds), JSON.stringify(mergedPrescriptions), Date.now());
+    withImmediateTx(db, () => {
+        const prevIds = injectedIds(db, sessionId);
+        const prevPrescriptions = injectedPrescriptions(db, sessionId);
+        const mergedIds = [...new Set([...prevIds, ...ids])].slice(-24);
+        const mergedPrescriptions = [...new Set([...prevPrescriptions, ...prescriptions])].slice(-24);
+        db.prepare(`INSERT INTO session_injections (session_id, ids, prescriptions, created_at) VALUES (?, ?, ?, ?)
+       ON CONFLICT(session_id) DO UPDATE SET
+         ids = excluded.ids,
+         prescriptions = excluded.prescriptions,
+         created_at = excluded.created_at`).run(sessionId, JSON.stringify(mergedIds), JSON.stringify(mergedPrescriptions), Date.now());
+    });
 }
 /** Antibody ids injected during the current turn of this session. */
 export function injectedIds(db, sessionId) {
@@ -168,21 +199,23 @@ export function recordRepairAction(db, sessionId, entry) {
     const clean = entry.trim().slice(0, 120);
     if (!clean)
         return;
-    let actions = [];
-    try {
-        const parsed = JSON.parse(db.prepare('SELECT actions FROM repair_actions WHERE session_id = ?').get(sessionId)?.actions ?? '[]');
-        if (Array.isArray(parsed)) {
-            actions = parsed.filter((v) => typeof v === 'string');
+    withImmediateTx(db, () => {
+        let actions = [];
+        try {
+            const parsed = JSON.parse(db.prepare('SELECT actions FROM repair_actions WHERE session_id = ?').get(sessionId)?.actions ?? '[]');
+            if (Array.isArray(parsed)) {
+                actions = parsed.filter((v) => typeof v === 'string');
+            }
         }
-    }
-    catch {
-        actions = [];
-    }
-    actions.push(clean);
-    if (actions.length > 3)
-        actions = actions.slice(-3);
-    db.prepare(`INSERT INTO repair_actions (session_id, actions, created_at) VALUES (?, ?, ?)
-     ON CONFLICT(session_id) DO UPDATE SET actions = excluded.actions, created_at = excluded.created_at`).run(sessionId, JSON.stringify(actions), Date.now());
+        catch {
+            actions = [];
+        }
+        actions.push(clean);
+        if (actions.length > 3)
+            actions = actions.slice(-3);
+        db.prepare(`INSERT INTO repair_actions (session_id, actions, created_at) VALUES (?, ?, ?)
+       ON CONFLICT(session_id) DO UPDATE SET actions = excluded.actions, created_at = excluded.created_at`).run(sessionId, JSON.stringify(actions), Date.now());
+    });
 }
 function readRepairActions(db, sessionId) {
     try {
@@ -213,59 +246,65 @@ function readRepairActions(db, sessionId) {
  * the episode still distils from its failure/success traces.
  */
 export function claimFailure(db, sessionId, toolName, incoming) {
-    // Fast-path: 95%+ of tool calls succeed with zero open failures. Skip all 9
-    // WAL DELETE statements in `pruneStale` when `pending_failures` is empty.
+    // Fast-path: 95%+ of tool calls succeed with zero open failures. Skip write
+    // transactions entirely when `pending_failures` is empty.
     const anyPending = db.prepare('SELECT 1 FROM pending_failures LIMIT 1').get();
     if (!anyPending)
         return null;
     if (incoming?.probeOnly)
         return null;
-    const cutoff = Date.now() - PENDING_TTL_MS;
-    const ownRows = db
-        .prepare(`SELECT * FROM pending_failures
-        WHERE session_id = ? AND LOWER(tool_name) = LOWER(?) AND created_at >= ?
-        ORDER BY CASE WHEN tool_name = ? THEN 0 ELSE 1 END, created_at DESC
-        LIMIT 12`)
-        .all(sessionId, toolName, cutoff, toolName);
-    const crossRows = db
-        .prepare(`SELECT * FROM pending_failures
-        WHERE LOWER(tool_name) = LOWER(?) AND session_id != ? AND created_at >= ?
-        ORDER BY CASE WHEN tool_name = ? THEN 0 ELSE 1 END, created_at DESC
-        LIMIT 12`)
-        .all(toolName, sessionId, cutoff, toolName);
-    const pickMatch = (rows) => {
-        if (rows.length === 0)
-            return undefined;
-        if (!incoming)
-            return rows[0];
-        const exact = rows.find((r) => (r.target_signature ?? '') === incoming.signature);
-        if (exact && canCloseEpisode(exact.target_signature ?? '', incoming))
-            return exact;
-        return rows.find((r) => canCloseEpisode(r.target_signature ?? '', incoming));
-    };
-    const row = pickMatch(ownRows) ?? pickMatch(crossRows);
-    if (!row)
-        return null;
-    const targetSig = typeof row.target_signature === 'string' ? row.target_signature : '';
-    db.prepare('DELETE FROM pending_failures WHERE session_id = ? AND tool_name = ? AND target_signature = ?').run(row.session_id, row.tool_name, targetSig);
-    // Read repair actions; only clear the session buffer if no sibling pending
-    // failures remain open in that session.
-    const repairPath = readRepairActions(db, row.session_id);
-    const siblingOpen = db
-        .prepare('SELECT 1 FROM pending_failures WHERE session_id = ? AND created_at >= ? LIMIT 1')
-        .get(row.session_id, cutoff);
-    if (!siblingOpen) {
-        db.prepare('DELETE FROM repair_actions WHERE session_id = ?').run(row.session_id);
-    }
-    return {
-        session_id: row.session_id,
-        tool_name: row.tool_name,
-        trace: row.trace,
-        injected_ids: parseIds(row.injected_ids),
-        human_hint: typeof row.human_hint === 'string' ? row.human_hint : '',
-        repair_path: repairPath,
-        created_at: row.created_at,
-    };
+    return withImmediateTx(db, () => {
+        const cutoff = Date.now() - PENDING_TTL_MS;
+        const ownRows = db
+            .prepare(`SELECT * FROM pending_failures
+          WHERE session_id = ? AND LOWER(tool_name) = LOWER(?) AND created_at >= ?
+          ORDER BY CASE WHEN tool_name = ? THEN 0 ELSE 1 END, created_at DESC
+          LIMIT 12`)
+            .all(sessionId, toolName, cutoff, toolName);
+        const crossRows = db
+            .prepare(`SELECT * FROM pending_failures
+          WHERE LOWER(tool_name) = LOWER(?) AND session_id != ? AND created_at >= ?
+          ORDER BY CASE WHEN tool_name = ? THEN 0 ELSE 1 END, created_at DESC
+          LIMIT 12`)
+            .all(toolName, sessionId, cutoff, toolName);
+        const pickMatch = (rows) => {
+            if (rows.length === 0)
+                return undefined;
+            if (!incoming)
+                return rows[0];
+            const exact = rows.find((r) => (r.target_signature ?? '') === incoming.signature);
+            if (exact && canCloseEpisode(exact.target_signature ?? '', incoming))
+                return exact;
+            return rows.find((r) => canCloseEpisode(r.target_signature ?? '', incoming));
+        };
+        const row = pickMatch(ownRows) ?? pickMatch(crossRows);
+        if (!row)
+            return null;
+        const targetSig = typeof row.target_signature === 'string' ? row.target_signature : '';
+        const deleted = db
+            .prepare('DELETE FROM pending_failures WHERE session_id = ? AND tool_name = ? AND target_signature = ?')
+            .run(row.session_id, row.tool_name, targetSig);
+        if (Number(deleted.changes) === 0)
+            return null;
+        // Read repair actions; only clear the session buffer if no sibling pending
+        // failures remain open in that session.
+        const repairPath = readRepairActions(db, row.session_id);
+        const siblingOpen = db
+            .prepare('SELECT 1 FROM pending_failures WHERE session_id = ? AND created_at >= ? LIMIT 1')
+            .get(row.session_id, cutoff);
+        if (!siblingOpen) {
+            db.prepare('DELETE FROM repair_actions WHERE session_id = ?').run(row.session_id);
+        }
+        return {
+            session_id: row.session_id,
+            tool_name: row.tool_name,
+            trace: row.trace,
+            injected_ids: parseIds(row.injected_ids),
+            human_hint: typeof row.human_hint === 'string' ? row.human_hint : '',
+            repair_path: repairPath,
+            created_at: row.created_at,
+        };
+    });
 }
 /**
  * Drop expired rows on session start / turn end / explicit maintenance so the

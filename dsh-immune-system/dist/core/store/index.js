@@ -18,6 +18,7 @@ import { recordDeliveryReceipt, recordHeldReceiptsForSession, summarizeReceipts,
 import { recordGuardEvent, summarizeGuardEvents, } from './guard-events.js';
 import { summarizeTriage } from '../triage.js';
 import { buildModelImmunityReport } from '../model-intel.js';
+import { canonicalToolName } from '../tools.js';
 /** meta-table key for the value metric: repeats the plugin measurably prevented. */
 export const SUPPRESSED_REPEATS_KEY = 'suppressed_repeats';
 /** Runtime truth for the optional model path: rules it produced / times it degraded. */
@@ -142,16 +143,16 @@ export class ImmuneStore {
             }
         }
         let merged = [...own, ...shared];
-        if (opts.strictToolMatch && opts.toolName) {
-            const targetTool = opts.toolName.toLowerCase();
-            merged = merged.filter((r) => !r.tool_name || r.tool_name.toLowerCase() === targetTool);
+        const targetTool = opts.toolName ? canonicalToolName(opts.toolName).toLowerCase() : '';
+        if (opts.strictToolMatch && targetTool) {
+            merged = merged.filter((r) => !r.tool_name || canonicalToolName(r.tool_name).toLowerCase() === targetTool);
         }
         // Tool affinity is a TIE-BREAKER inside the retrieval order, not a
         // post-multiplier: two rules with near-identical text get near-arbitrary
         // bm25 positions, and a same-tool rule should win that tie. The stable
         // sort keeps retrieval order otherwise; the relevance spread stays the
         // dominant signal.
-        const aff = (r) => opts.toolName && r.tool_name?.toLowerCase() === opts.toolName.toLowerCase() ? 0 : 1;
+        const aff = (r) => targetTool && r.tool_name && canonicalToolName(r.tool_name).toLowerCase() === targetTool ? 0 : 1;
         const ordered = merged
             .map((r, i) => ({ r, i }))
             .sort((x, y) => aff(x.r) - aff(y.r) || x.i - y.i);
@@ -361,8 +362,19 @@ export class ImmuneStore {
     pruneZombies(olderThanMs) {
         return pruneZombieAntibodies(this.db, olderThanMs);
     }
-    setStatus(id, status) {
-        return setAntibodyStatus(this.db, id, status);
+    setStatus(id, status, retireReason) {
+        const effectiveReason = retireReason ?? (status === 'retired' ? 'manual' : undefined);
+        return setAntibodyStatus(this.db, id, status, effectiveReason);
+    }
+    /** Read the current SQLite `PRAGMA user_version` schema version. */
+    schemaVersion() {
+        try {
+            const row = this.db.prepare('PRAGMA user_version').get();
+            return Number(row?.user_version ?? 0);
+        }
+        catch {
+            return 0;
+        }
     }
     /** Write a consistent snapshot; a plain copy of a WAL db can be empty. */
     async backupTo(path) {

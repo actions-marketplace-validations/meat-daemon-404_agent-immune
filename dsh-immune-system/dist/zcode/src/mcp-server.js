@@ -124,7 +124,7 @@ const TOOLS = [
     },
     {
         name: 'immune_seed_packs',
-        description: 'List the 9 builtin seed packs (git-safety, node-ts, python-uv, rust-cargo, go-mod, docker, modern-web, dsh-ecosystem, patrol-triage) and any on-demand ingested `skill:*` packs with per-pack seeded counts. Install with `immune seed <id>` or `immune ingest-skill <path>` in a terminal; this tool never writes.',
+        description: `List the ${BUILTIN_PACKS.length} builtin seed packs (${BUILTIN_PACKS.map((p) => p.id).join(', ')}) and any on-demand ingested \`skill:*\` packs with per-pack seeded counts. Install with \`immune seed <id>\` or \`immune ingest-skill <path>\` in a terminal; this tool never writes.`,
         inputSchema: { type: 'object', properties: {} },
     },
     {
@@ -465,7 +465,7 @@ export function callTool(store, name, args) {
             const counts = store.seededPackCounts();
             const lines = BUILTIN_PACKS.map((pack) => {
                 const installed = counts.get(pack.id) ?? 0;
-                return `${pack.id.padEnd(12)} ${String(installed).padStart(2)}/${pack.rules.length} seeded · ${pack.label} — ${pack.description}`;
+                return `${pack.id.padEnd(15)} ${String(installed).padStart(2)}/${pack.rules.length} seeded · ${pack.label} — ${pack.description}`;
             });
             const skillLines = [...counts.entries()]
                 .filter(([id]) => id.startsWith('skill:'))
@@ -620,8 +620,13 @@ export function callTool(store, name, args) {
                 if (!existsSync(lockPath)) {
                     return JSON.stringify({ exists: false, file: lockPath, valid: false, reason: 'lockfile not found' }, null, 2);
                 }
-                const report = verifyVaccineLockfile(readFileSync(lockPath, 'utf8'));
-                return JSON.stringify({ exists: true, file: lockPath, ...report }, null, 2);
+                try {
+                    const report = verifyVaccineLockfile(readFileSync(lockPath, 'utf8'));
+                    return JSON.stringify({ exists: true, file: lockPath, ...report }, null, 2);
+                }
+                catch (error) {
+                    return JSON.stringify({ exists: true, file: lockPath, valid: false, reason: error instanceof Error ? error.message : String(error) }, null, 2);
+                }
             }
             const preview = compileVaccineLockfile(ws, store.listAll(false));
             return JSON.stringify({ workspace: ws, lockfilePath: lockPath, preview }, null, 2);
@@ -644,7 +649,12 @@ export function callTool(store, name, args) {
                 const abs = resolve(fp);
                 if (!existsSync(abs))
                     return `error: file not found: ${abs}`;
-                sources.push({ sourceId: fp, rules: parseTeamRulesJsonl(readFileSync(abs, 'utf8')) });
+                try {
+                    sources.push({ sourceId: fp, rules: parseTeamRulesJsonl(readFileSync(abs, 'utf8')) });
+                }
+                catch (error) {
+                    return `error: failed to read ${abs}: ${error instanceof Error ? error.message : String(error)}`;
+                }
             }
             return JSON.stringify(federateSwarmRules(sources, { minConsensusScore }), null, 2);
         }
@@ -688,9 +698,15 @@ export function readResource(store, uri, workspace = process.cwd()) {
         case 'immune://workspace/dna': {
             const dna = detectWorkspaceDNA(workspace);
             const lockPath = join(workspace, '.immune', 'vaccine.lock.json');
-            const lockfile = existsSync(lockPath)
-                ? { exists: true, ...verifyVaccineLockfile(readFileSync(lockPath, 'utf8')) }
-                : { exists: false, valid: false, reason: 'lockfile not found' };
+            let lockfile = { exists: false, valid: false, reason: 'lockfile not found' };
+            if (existsSync(lockPath)) {
+                try {
+                    lockfile = { exists: true, ...verifyVaccineLockfile(readFileSync(lockPath, 'utf8')) };
+                }
+                catch (error) {
+                    lockfile = { exists: true, valid: false, reason: error instanceof Error ? error.message : String(error) };
+                }
+            }
             return { uri, mimeType: 'application/json', text: JSON.stringify({ dna, lockfile }, null, 2) };
         }
         case 'immune://guard/events': {
@@ -706,7 +722,7 @@ export function readResource(store, uri, workspace = process.cwd()) {
             const totalObserved = heldCount + failedCount + stats.suppressedRepeats;
             const immunityScore = computeImmunityScore({
                 totalCalls: Math.max(totalObserved, totalInjections),
-                repeatFailures: stats.suppressedRepeats + heldCount,
+                repeatFailures: failedCount,
                 avoidableTokens: receipts.estimatedTokensSaved,
                 activeRules: active.length,
                 totalInjections,
@@ -783,7 +799,7 @@ export function getPrompt(store, name, args = {}) {
             const candidates = hostRewriteCandidates(store, HOST_REWRITE_BATCH);
             const listText = candidates.length > 0
                 ? candidates
-                    .map((c) => `- #${c.id} (${c.tool_name ?? 'any'}, hits=${c.hit_count}): trigger="${c.trigger_pattern}" | symptom="${c.symptom}" | current="${c.prescription}"`)
+                    .map((c) => `- #${c.id} (${c.tool_name ?? 'any'}, hits=${c.hit_count}): trigger="${redactOutbound(c.trigger_pattern)}" | symptom="${redactOutbound(c.symptom)}" | current="${redactOutbound(c.prescription)}"`)
                     .join('\n')
                 : '(No echo-grade antibodies currently need rewriting.)';
             return {
@@ -794,7 +810,7 @@ export function getPrompt(store, name, args = {}) {
                         content: {
                             type: 'text',
                             text: `${REWRITE_PROMPT}\n\nCandidates (max ${HOST_REWRITE_BATCH}):\n${listText}\n\n` +
-                                `After drafting concise model-neutral advice for each candidate, call \`immune_apply_rewrite\` with \`{ rewrites: [{ id, prescription }] }\`.`,
+                                `After drafting concise model-neutral advice for each candidate, call \`immune_rewrite_apply\` with \`{ rewrites: [{ id, prescription }] }\`.`,
                         },
                     },
                 ],
@@ -816,14 +832,19 @@ export function runMcpServer(env = process.env) {
             const text = line.trim();
             if (!text)
                 return;
-            let message;
+            let parsed;
             try {
-                message = JSON.parse(text);
+                parsed = JSON.parse(text);
             }
             catch {
                 return; // A stray non-JSON line must not kill the server.
             }
-            const params = (message.params ?? {});
+            if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+                return; // Valid JSON primitives/null/arrays are not JSON-RPC request objects.
+            }
+            const message = parsed;
+            const rawParams = message.params;
+            const params = (typeof rawParams === 'object' && rawParams !== null && !Array.isArray(rawParams) ? rawParams : {});
             const id = message.id;
             if (id === undefined || id === null)
                 return; // notification: no response
@@ -846,18 +867,30 @@ export function runMcpServer(env = process.env) {
                 case 'resources/list':
                     write({ jsonrpc: '2.0', id, result: { resources: RESOURCES } });
                     break;
+                case 'resources/templates/list':
+                    write({ jsonrpc: '2.0', id, result: { resourceTemplates: [] } });
+                    break;
                 case 'resources/read': {
                     const uri = typeof params.uri === 'string' ? params.uri : '';
-                    const resource = uri ? readResource(store, uri) : null;
-                    if (!resource) {
+                    try {
+                        const resource = uri ? readResource(store, uri) : null;
+                        if (!resource) {
+                            write({
+                                jsonrpc: '2.0',
+                                id,
+                                error: { code: -32602, message: `unknown resource uri: ${uri || '(none)'}` },
+                            });
+                            break;
+                        }
+                        write({ jsonrpc: '2.0', id, result: { contents: [resource] } });
+                    }
+                    catch (error) {
                         write({
                             jsonrpc: '2.0',
                             id,
-                            error: { code: -32602, message: `unknown resource uri: ${uri || '(none)'}` },
+                            error: { code: -32603, message: error instanceof Error ? error.message : String(error) },
                         });
-                        break;
                     }
-                    write({ jsonrpc: '2.0', id, result: { contents: [resource] } });
                     break;
                 }
                 case 'prompts/list':
@@ -865,7 +898,9 @@ export function runMcpServer(env = process.env) {
                     break;
                 case 'prompts/get': {
                     const promptName = typeof params.name === 'string' ? params.name : '';
-                    const promptArgs = (params.arguments ?? {});
+                    const promptArgs = (typeof params.arguments === 'object' && params.arguments !== null && !Array.isArray(params.arguments)
+                        ? params.arguments
+                        : {});
                     if (!promptName || !PROMPTS.some((p) => p.name === promptName)) {
                         write({
                             jsonrpc: '2.0',
@@ -874,25 +909,35 @@ export function runMcpServer(env = process.env) {
                         });
                         break;
                     }
-                    const rendered = getPrompt(store, promptName, promptArgs);
-                    if (!rendered) {
+                    try {
+                        const rendered = getPrompt(store, promptName, promptArgs);
+                        if (!rendered) {
+                            write({
+                                jsonrpc: '2.0',
+                                id,
+                                error: { code: -32602, message: `missing required arguments for prompt: ${promptName}` },
+                            });
+                            break;
+                        }
+                        write({ jsonrpc: '2.0', id, result: rendered });
+                    }
+                    catch (error) {
                         write({
                             jsonrpc: '2.0',
                             id,
-                            error: { code: -32602, message: `missing required arguments for prompt: ${promptName}` },
+                            error: { code: -32603, message: error instanceof Error ? error.message : String(error) },
                         });
-                        break;
                     }
-                    write({ jsonrpc: '2.0', id, result: rendered });
                     break;
                 }
                 case 'ping':
                     write({ jsonrpc: '2.0', id, result: {} });
                     break;
                 case 'tools/call': {
-                    const params = (message.params ?? {});
                     const name = typeof params.name === 'string' ? params.name : '';
-                    const args = (params.arguments ?? {});
+                    const args = (typeof params.arguments === 'object' && params.arguments !== null && !Array.isArray(params.arguments)
+                        ? params.arguments
+                        : {});
                     if (!name || !TOOLS.some((t) => t.name === name)) {
                         write({
                             jsonrpc: '2.0',

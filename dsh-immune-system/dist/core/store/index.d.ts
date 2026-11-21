@@ -143,7 +143,9 @@ export declare class ImmuneStore {
     retireZombies(olderThanMs: number): number[];
     /** Delete never-injected antibodies older than `olderThanMs` (not reversible). */
     pruneZombies(olderThanMs: number): number[];
-    setStatus(id: number, status: AntibodyStatus): boolean;
+    setStatus(id: number, status: AntibodyStatus, retireReason?: string): boolean;
+    /** Read the current SQLite `PRAGMA user_version` schema version. */
+    schemaVersion(): number;
     /** Write a consistent snapshot; a plain copy of a WAL db can be empty. */
     backupTo(path: string): Promise<void>;
     /** Merge proven duplicate lessons, retaining evidence and attribution. */

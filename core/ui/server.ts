@@ -16,6 +16,7 @@
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { basename, dirname } from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { ImmuneStore } from '../store/index.js';
 import { renderPage } from './page.js';
@@ -53,8 +54,26 @@ export interface UiServerHandle {
   close(): Promise<void>;
 }
 
+const LOOPBACK_HOST_RE = /^(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?$/i;
+
+function isLoopbackHost(req: IncomingMessage): boolean {
+  const host = req.headers.host;
+  if (!host) return true;
+  return LOOPBACK_HOST_RE.test(host.trim());
+}
+
+function workspaceDirForDb(dbPath: string): string {
+  if (!dbPath || dbPath === ':memory:') return process.cwd();
+  const parent = dirname(dbPath);
+  if (basename(parent).toLowerCase() === '.dsh') {
+    return dirname(parent);
+  }
+  return process.cwd();
+}
+
 export async function startUiServer(options: UiServerOptions = {}): Promise<UiServerHandle> {
   const store = new ImmuneStore(options.dbPath ? { dbPath: options.dbPath } : {});
+  const workspaceDir = workspaceDirForDb(store.dbPath);
   const token = randomBytes(24).toString('hex');
   const locale = resolveLocale() === 'en' ? 'en' : 'zh-CN';
 
@@ -75,6 +94,13 @@ export async function startUiServer(options: UiServerOptions = {}): Promise<UiSe
   }
 
   function handle(req: IncomingMessage, res: ServerResponse): void {
+    // Reject DNS-rebinding requests carrying a non-loopback Host header before
+    // serving the page containing the per-run API token.
+    if (!isLoopbackHost(req)) {
+      sendJson(res, 403, { error: 'forbidden host' });
+      return;
+    }
+
     const url = new URL(req.url ?? '/', 'http://127.0.0.1');
     const path = url.pathname;
 
@@ -86,7 +112,7 @@ export async function startUiServer(options: UiServerOptions = {}): Promise<UiSe
         'content-type': 'text/html; charset=utf-8',
         'cache-control': 'no-store',
         'content-security-policy':
-          "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'",
+          "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
         'x-content-type-options': 'nosniff',
         'referrer-policy': 'no-referrer',
       });
@@ -195,7 +221,7 @@ export async function startUiServer(options: UiServerOptions = {}): Promise<UiSe
     }
 
     if (path === '/api/insights' && req.method === 'GET') {
-      sendJson(res, 200, readInsights(store, process.cwd()));
+      sendJson(res, 200, readInsights(store, workspaceDir));
       return;
     }
 
@@ -207,7 +233,7 @@ export async function startUiServer(options: UiServerOptions = {}): Promise<UiSe
     }
 
     if (path === '/api/federate' && req.method === 'GET') {
-      sendJson(res, 200, readFederationPreview(store, process.cwd()));
+      sendJson(res, 200, readFederationPreview(store, workspaceDir));
       return;
     }
 
@@ -231,9 +257,10 @@ export async function startUiServer(options: UiServerOptions = {}): Promise<UiSe
           evaluateUiGuard(store, payload, {
             toolName: typeof parsed.toolName === 'string' ? parsed.toolName : 'Bash',
             strict: parsed.strict === true,
+            workspace: workspaceDir,
           }),
         );
-      });
+      }, 65536);
       return;
     }
 
@@ -273,20 +300,38 @@ export async function startUiServer(options: UiServerOptions = {}): Promise<UiSe
     sendJson(res, 404, { error: 'not found' });
   }
 
-  const port = await listen(server, options.port ?? 7788, options.portAttempts ?? 8);
+  let port: number;
+  try {
+    port = await listen(server, options.port ?? 7788, options.portAttempts ?? 8);
+  } catch (error) {
+    try {
+      store.close();
+    } catch {
+      // ignore close failure on bind error
+    }
+    throw error;
+  }
   const url = `http://127.0.0.1:${port}/`;
 
+  let closed = false;
   return {
     url,
     port,
-    close: () =>
-      new Promise<void>((resolve) => {
+    close: () => {
+      if (closed) return Promise.resolve();
+      closed = true;
+      return new Promise<void>((resolve) => {
         server.close(() => {
-          store.close();
+          try {
+            store.close();
+          } catch {
+            // ignore double-close
+          }
           resolve();
         });
         (server as { closeAllConnections?: () => void }).closeAllConnections?.();
-      }),
+      });
+    },
   };
 }
 
@@ -339,14 +384,27 @@ function readBody(
   req.on('data', (chunk: Buffer) => {
     if (aborted) return;
     body += chunk.toString('utf8');
-    // Small action objects by default; import raises the cap for snapshots.
+    // Small action objects by default; import and guard raise the cap.
     if (body.length > max) {
       aborted = true;
-      sendJson(res, 413, { error: 'body too large' });
-      req.destroy();
+      res.writeHead(413, {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-store',
+        'x-content-type-options': 'nosniff',
+        connection: 'close',
+      });
+      res.end(JSON.stringify({ error: 'body too large' }), () => {
+        req.destroy();
+      });
     }
   });
   req.on('end', () => {
-    if (!aborted) done(body);
+    if (aborted) return;
+    try {
+      done(body);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!res.headersSent) sendJson(res, 500, { error: message });
+    }
   });
 }

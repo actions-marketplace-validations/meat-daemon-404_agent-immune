@@ -132,14 +132,28 @@ export function readInsights(store, workspace = process.cwd()) {
     const failedCount = receipts.byOutcome.failed ?? 0;
     const prevented = s.suppressedRepeats + heldCount + guardSummary.total;
     const observedTotal = Math.max(prevented + failedCount, totalInjections);
+    const effectiveFailures = receipts.total > 0 ? failedCount : active.reduce((sum, r) => sum + Math.max(0, r.fail_count), 0);
     const lockPath = join(workspace, '.immune', 'vaccine.lock.json');
-    const lockfile = existsSync(lockPath)
-        ? { exists: true, ...verifyVaccineLockfile(readFileSync(lockPath, 'utf8')) }
-        : { exists: false, valid: false, reason: 'No .immune/vaccine.lock.json found (run `immune vaccinate`)' };
+    let lockfile;
+    if (existsSync(lockPath)) {
+        try {
+            lockfile = { exists: true, ...verifyVaccineLockfile(readFileSync(lockPath, 'utf8')) };
+        }
+        catch (error) {
+            lockfile = {
+                exists: true,
+                valid: false,
+                reason: `Unreadable lockfile: ${error instanceof Error ? error.message : String(error)}`,
+            };
+        }
+    }
+    else {
+        lockfile = { exists: false, valid: false, reason: 'No .immune/vaccine.lock.json found (run `immune vaccinate`)' };
+    }
     return {
         immunityScore: computeImmunityScore({
             totalCalls: observedTotal,
-            repeatFailures: prevented,
+            repeatFailures: effectiveFailures,
             avoidableTokens: receipts.estimatedTokensSaved,
             activeRules: active.length,
             totalInjections,

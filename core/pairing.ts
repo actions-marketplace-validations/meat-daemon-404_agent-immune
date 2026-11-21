@@ -98,14 +98,10 @@ export function normaliseTargetPath(rawPath: string, cwd?: string): string {
   return p.replace(/^\.\//, '');
 }
 
-/** Split a shell command into `program` and its first non-flag subcommand. */
-export function parseCommand(command: string): { program: string; sub: string } {
-  const tokens = command
-    .split(/\s*(?:&&|\|\||[;|])\s*/)
-    .join(' ')
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean);
+function parseSingleSegment(segment: string): { program: string; sub: string } {
+  // For a pipeline like `npm test | tail -20`, the left-most command is the primary action.
+  const primary = segment.split(/\s*\|\s*/)[0] ?? segment;
+  const tokens = primary.trim().split(/\s+/).filter(Boolean);
   // Skip leading env assignments (FOO=bar cmd), then strip a leading path from
   // the program token ("C:\tools\npm.cmd test" -> "npm.cmd") on any platform.
   let index = 0;
@@ -121,6 +117,39 @@ export function parseCommand(command: string): { program: string; sub: string } 
     break;
   }
   return { program: program.toLowerCase(), sub: sub.toLowerCase() };
+}
+
+function isProbeParsed(parsed: { program: string; sub: string }): boolean {
+  return (
+    PROBE_PROGRAMS.has(parsed.program) ||
+    (parsed.program === 'git' && GIT_PROBE_SUBCOMMANDS.has(parsed.sub))
+  );
+}
+
+/**
+ * Split a shell command into `program` and its first non-flag subcommand.
+ *
+ * For chained commands (`cd packages/api && npm test`, `echo building && cargo check`),
+ * skips leading probe/navigation segments (`cd`, `echo`, `pwd`, ...) so the real
+ * action determines both signature and `probeOnly` — a chain is probe-only only
+ * when EVERY segment is a probe (`cd /repo && git status`).
+ */
+export function parseCommand(command: string): { program: string; sub: string } {
+  const segments = command
+    .split(/\s*(?:&&|\|\||;|\r?\n)\s*/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (segments.length <= 1) {
+    return parseSingleSegment(command);
+  }
+  let fallback = { program: '', sub: '' };
+  for (const seg of segments) {
+    const parsed = parseSingleSegment(seg);
+    if (!parsed.program) continue;
+    fallback = parsed;
+    if (!isProbeParsed(parsed)) return parsed;
+  }
+  return fallback;
 }
 
 /** Compute the pairing signature for one tool call. */
@@ -237,11 +266,11 @@ export function canCloseEpisode(failedSignature: string, incoming: TargetSignatu
 
   const failedParts = failedSignature.split(':');
   const incomingParts = incoming.signature.split(':');
-  const failedTool = failedParts[0] ?? '';
-  const incomingTool = incomingParts[0] ?? '';
-  if (failedTool.toLowerCase() !== incomingTool.toLowerCase()) return false;
+  const failedTool = canonicalToolName(failedParts[0] ?? '').toLowerCase();
+  const incomingTool = canonicalToolName(incomingParts[0] ?? '').toLowerCase();
+  if (failedTool !== incomingTool) return false;
 
-  if (failedTool.toLowerCase() === 'bash') {
+  if (failedTool === 'bash') {
     const failedTarget = failedParts[1] ?? '';
     const incomingTarget = incomingParts[1] ?? '';
     if (!failedTarget || failedTarget === '?' || !incomingTarget || incomingTarget === '?') return true;

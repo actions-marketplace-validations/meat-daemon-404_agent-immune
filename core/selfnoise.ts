@@ -137,10 +137,14 @@ function unescapeTraceString(raw: string): string {
   });
 }
 
+const NON_FS_SLASH_TOKEN =
+  /^(?:application|text|image|audio|video|font|multipart)\/[a-z0-9.+-]+$|^(?:origin|upstream|refs)\/[a-z0-9._/-]+$|^\d*>&\d+$/i;
+
 function collectCommandPaths(command: string, found: string[]): void {
   const pushCandidate = (candidate: string): void => {
     const trimmed = candidate.replace(/^['"]+|['"]+$/g, '');
     if (!isSafeLocalFsCandidate(trimmed)) return;
+    if (NON_FS_SLASH_TOKEN.test(trimmed)) return;
     if (/[\\/]/.test(trimmed) && !found.includes(trimmed)) {
       found.push(trimmed);
     }

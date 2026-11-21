@@ -69,16 +69,19 @@ export function scanMagpieTelemetry(opts = {}) {
     let totalInputTokens = 0;
     let totalOutputTokens = 0;
     let totalCacheReadTokens = 0;
-    let failures = 0;
+    let usageFailures = 0;
+    let routingFailures = 0;
     let retryRecovered = 0;
     let canceled = 0;
     const folders = new Set();
-    const modelMap = new Map();
+    const usageModelMap = new Map();
+    const routingModelMap = new Map();
     const agentMap = new Map();
-    const errMap = new Map();
-    const bumpModel = (model, failed, recovered, inTok, outTok, cacheTok, msVal, ttftVal) => {
+    const usageErrMap = new Map();
+    const routingErrMap = new Map();
+    const bumpModel = (target, model, failed, recovered, inTok, outTok, cacheTok, msVal, ttftVal) => {
         const key = model.trim() || 'unknown';
-        const cur = modelMap.get(key) ?? {
+        const cur = target.get(key) ?? {
             requests: 0,
             failures: 0,
             retryRecovered: 0,
@@ -100,7 +103,7 @@ export function scanMagpieTelemetry(opts = {}) {
             cur.ms.push(msVal);
         if (typeof ttftVal === 'number' && ttftVal > 0 && ttftVal < 120_000)
             cur.ttft.push(ttftVal);
-        modelMap.set(key, cur);
+        target.set(key, cur);
     };
     if (hasUsage) {
         try {
@@ -121,12 +124,12 @@ export function scanMagpieTelemetry(opts = {}) {
                     const err = typeof obj.err === 'string' ? obj.err : '';
                     const failed = status >= 400 || Boolean(err);
                     if (failed) {
-                        failures += 1;
+                        usageFailures += 1;
                         const reason = normalizeGatewayError(err, status);
-                        errMap.set(reason, (errMap.get(reason) ?? 0) + 1);
+                        usageErrMap.set(reason, (usageErrMap.get(reason) ?? 0) + 1);
                     }
                     if (typeof obj.model === 'string' && obj.model.trim()) {
-                        bumpModel(obj.model, failed, false, inTok, outTok, cacheTok, obj.ms);
+                        bumpModel(usageModelMap, obj.model, failed, false, inTok, outTok, cacheTok, obj.ms);
                     }
                 }
                 catch {
@@ -139,10 +142,16 @@ export function scanMagpieTelemetry(opts = {}) {
         }
     }
     if (hasRouting) {
-        const files = readdirSync(routingDir)
-            .filter((f) => f.endsWith('.jsonl') || f.endsWith('.jsonl.gz'))
-            .sort()
-            .slice(-(opts.maxRoutingFiles ?? 45));
+        let files = [];
+        try {
+            files = readdirSync(routingDir)
+                .filter((f) => f.endsWith('.jsonl') || f.endsWith('.jsonl.gz'))
+                .sort()
+                .slice(-(opts.maxRoutingFiles ?? 45));
+        }
+        catch {
+            files = [];
+        }
         for (const file of files) {
             try {
                 const full = join(routingDir, file);
@@ -165,16 +174,16 @@ export function scanMagpieTelemetry(opts = {}) {
                         if (status === 499 || /canceled/i.test(String(obj.error ?? '')))
                             canceled += 1;
                         if (!ok) {
-                            failures += 1;
+                            routingFailures += 1;
                             const reason = normalizeGatewayError(obj.error, status);
-                            errMap.set(reason, (errMap.get(reason) ?? 0) + 1);
+                            routingErrMap.set(reason, (routingErrMap.get(reason) ?? 0) + 1);
                         }
                         if (recovered)
                             retryRecovered += 1;
                         const inTok = Number(obj.tokens ?? 0) || 0;
                         const outTok = Number(obj.out ?? 0) || 0;
                         if (typeof obj.model === 'string' && obj.model.trim()) {
-                            bumpModel(obj.model, !ok, recovered, inTok, outTok, 0, obj.ms, obj.ttft);
+                            bumpModel(routingModelMap, obj.model, !ok, recovered, inTok, outTok, 0, obj.ms, obj.ttft);
                         }
                         const agent = typeof obj.agent === 'string' && obj.agent.trim() ? obj.agent.trim() : 'unknown';
                         const aCur = agentMap.get(agent) ?? { requests: 0, failures: 0, retryRecovered: 0 };
@@ -195,6 +204,23 @@ export function scanMagpieTelemetry(opts = {}) {
             }
         }
     }
+    // Avoid double-counting requests/failures when both `usage.jsonl` and `routing/`
+    // exist: prefer `routing/` as the authoritative per-model source (it tracks
+    // retries, agents, and TTFT) while preserving cache-read metrics from `usage.jsonl`.
+    const modelMap = routingRequests > 0 ? routingModelMap : usageModelMap;
+    if (routingRequests > 0) {
+        for (const [model, u] of usageModelMap.entries()) {
+            const existing = modelMap.get(model);
+            if (existing) {
+                existing.cacheReadTokens = Math.max(existing.cacheReadTokens, u.cacheReadTokens);
+            }
+            else {
+                modelMap.set(model, u);
+            }
+        }
+    }
+    const failures = routingRequests > 0 ? routingFailures : usageFailures;
+    const errMap = routingRequests > 0 ? routingErrMap : usageErrMap;
     const promptDenom = totalInputTokens + totalCacheReadTokens;
     const cacheHitRatePct = promptDenom > 0 ? Number(((totalCacheReadTokens * 100) / promptDenom).toFixed(1)) : 0;
     const byModel = [...modelMap.entries()]

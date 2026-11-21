@@ -1,11 +1,11 @@
 export function renderClientScript(token, t, budget) {
-    const labelsJson = JSON.stringify(t).replace(/</g, '\\u003c');
+    const safeJson = (v) => JSON.stringify(v).replace(/</g, '\\u003c');
     return `<script>
 (function () {
-  var TOKEN = ${JSON.stringify(token)};
-  var T = ${labelsJson};
-  var BUDGET = ${JSON.stringify(budget)};
-  var BUDGET_HINT = ${JSON.stringify(t.budgetHint)};
+  var TOKEN = ${safeJson(token)};
+  var T = ${safeJson(t)};
+  var BUDGET = ${safeJson(budget)};
+  var BUDGET_HINT = ${safeJson(t.budgetHint)};
 
   var kpisEl = document.getElementById('kpis');
   var byModelEl = document.getElementById('byModel');
@@ -405,7 +405,7 @@ export function renderClientScript(token, t, budget) {
         .then(function (v) {
           if (v.error) { toast(v.error, true); return; }
           guardState.verdict = v;
-          renderGuardView();
+          if (tab === 'guard') renderGuardView();
         })
         .catch(function () { toast(T.loadFailed, true); })
         .then(function () { btn.disabled = false; });
@@ -845,8 +845,15 @@ export function renderClientScript(token, t, budget) {
   }
 
   document.addEventListener('keydown', function (e) {
-    if (e.key === '/' && document.activeElement !== qEl) { e.preventDefault(); qEl.focus(); }
-    if (e.key === 'Escape' && document.activeElement === qEl) { qEl.value = ''; syncClear(); load(); }
+    var active = document.activeElement;
+    var inEditable =
+      active &&
+      (active.tagName === 'INPUT' ||
+        active.tagName === 'TEXTAREA' ||
+        active.tagName === 'SELECT' ||
+        active.isContentEditable);
+    if (e.key === '/' && !inEditable) { e.preventDefault(); qEl.focus(); }
+    if (e.key === 'Escape' && active === qEl) { qEl.value = ''; syncClear(); load(); }
   });
 
   function selectTab(next) {

@@ -1,6 +1,6 @@
-# Evaluation & Real-World Benchmarks (`dsh-immune-system@4.0.0`)
+# Evaluation & Real-World Benchmarks (`dsh-immune-system@4.1.0`)
 
-All metrics below are directly measured on the `dsh-immune-system@4.0.0` codebase using built-in test suites and reproducible scripts under `scripts/`. None of the numbers are fabricated or extrapolated.
+All metrics below are directly measured on the `dsh-immune-system@4.1.0` codebase using built-in test suites and reproducible scripts under `scripts/`. None of the numbers are fabricated or extrapolated.
 
 ---
 
@@ -22,8 +22,8 @@ All metrics below are directly measured on the `dsh-immune-system@4.0.0` codebas
 
 | Suite / Script | Command | Result | Scope |
 | --- | --- | --- | --- |
-| Unit & Integration Suite | `npm test` | **308 / 308 passed (`0` failed, `0` skipped)** | Core store (`user_version` v4 fast-path, multi-target episodes), hygiene, rubric, Red-3 triage, `BEGIN IMMEDIATE` SHA-256 receipts + `'held'` ROI, live unified Pre-Flight Guard & `guard_events`, `explain` simulator, `wrapped` SVG, `team-sync` JSONL, `vaccinate` auto-hydration, `federate`, `diagnose`, `autopsy`, `compile-rules`, `./core` SDK, `git-hook` worktree `commondir`, 13 `connect` hosts, MCP (`27` tools + `5` resources + `3` prompts), manifests |
-| Version Sync Guard | `node scripts/check-versions.mjs` | **10/10 fields aligned at `4.0.0`** | All 7 root/plugin/DSH/ZCode/marketplace/Claude/MCP-Registry manifests |
+| Unit & Integration Suite | `npm test` | **315 / 315 passed (`0` failed, `0` skipped)** | Core store (`user_version` v4 fast-path, `BEGIN IMMEDIATE` atomicity, multi-target episodes), hygiene, rubric, Red-3 triage, `BEGIN IMMEDIATE` SHA-256 receipts + `'held'` ROI, live unified Pre-Flight Guard (chained-command & flag-order matrix) & `guard_events`, SSRF/redirect defense, DNS-rebinding UI guard, `explain` simulator, `wrapped` SVG, `team-sync` JSONL, `vaccinate` auto-hydration, `federate`, `diagnose`, `autopsy`, `compile-rules`, `./core` SDK, `git-hook` (`core.hooksPath` + worktree `commondir`), 13 `connect` hosts, MCP (`27` tools + `5` resources + `3` prompts), Doctor v4 checks, manifests |
+| Version Sync Guard | `node scripts/check-versions.mjs` | **10/10 fields aligned at `4.1.0`** | All 7 root/plugin/DSH/ZCode/marketplace/Claude/MCP-Registry manifests |
 | Dist Graph Integrity | `node scripts/verify-dist-integrity.mjs` (+ `--self-test`) | **Passed (0 failed)** | 1:1 `src -> dist` mapping & relative import resolution (`107` files, `343` imports) |
 | End-to-End A/B Simulation | `node scripts/bench-ab-simulation.mjs` | **Passed (`-95.0%` repeat pitfalls)** | 30 sessions (10 pitfall families × 3 turns): `-63.3%` total failures, `-61.4%` tokens, `0.005 ms` p50 recall |
 | DSH Outcome & Adapters | `node scripts/verify-step1.mjs` & `verify-steps23.mjs` | **15/15** & **24/24 passed** | Outcome judge, fail→success pair, inject, probes, DSH v4 message source |

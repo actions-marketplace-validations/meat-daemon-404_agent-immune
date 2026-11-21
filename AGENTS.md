@@ -471,9 +471,41 @@ identical-retry note).
 46. **Bilingual hybrid retrieval never starves CJK bigrams behind English FTS5 hits.**
     On mixed prompts (`"npm run dev 跨域报错"`), English tokens fill FTS5 `limit`
     and used to skip `cjkBigrams()` altogether. `findMatches()` now unions CJK
-    bigram candidates whenever `cjkBigrams(expanded).length > 0`, and `core/tools.ts`
-    is the single canonical tool taxonomy shared by pairing, repair tracking,
-    passive-read filtering, guards, and hook I/O.
+    bigram candidates whenever `cjkBigrams(expanded).length > 0`, reserving at
+    most `Math.max(1, Math.floor(limit / 2))` slots for CJK when `limit >= 2` so
+    neither English FTS5 nor CJK bigrams can evict 100% of the other, and
+    `core/tools.ts` is the single canonical tool taxonomy shared by pairing,
+    repair tracking, passive-read filtering, guards, and hook I/O.
+
+47. **Pre-Flight Guard evaluates shell segments individually, never whole-string whitelists.**
+    Whole-command guards were trivially bypassed by chaining (`echo ok && psql -c
+    "DROP TABLE"`, `git clean -n && git clean -fd`, `git reset --hard && git
+    stash`, `rm -rf ./dist /`). `core/guard.ts` splits chains via quote-aware
+    `splitShellSegments()`, tokenizes `rm` args with `splitShellArgs()`, checks
+    order (`git stash` must precede `git reset --hard`), rewrites only the
+    offending segment, and obeys #17 (`const apiKey = process.env.OPENAI_API_KEY;`
+    is recognized as a dynamic reference, not a hardcoded secret literal).
+
+48. **SSRF and local UI boundaries are enforced at transport and host layers.**
+    `core/llm.ts` strips trailing DNS dots (`localhost.`, `metadata.google.internal.`),
+    blocks full IPv6 private/link-local/NAT64/mapped ranges (`fe80::/10`,
+    `::ffff:7f00:1`, `::127.0.0.1`, `64:ff9b::/96`), sets `redirect: 'manual'`
+    and rejects all HTTP 3xx responses so a remote endpoint cannot bounce to
+    cloud metadata. `core/ui/server.ts` validates loopback `Host` headers (`403`)
+    and sets `frame-ancestors 'none'` to block DNS rebinding and clickjacking.
+
+49. **Transactions never swallow `SQLITE_BUSY`, and `user_version` is conditional.**
+    Nested-transaction helpers must only proceed inline when `BEGIN IMMEDIATE`
+    throws `/within a transaction/i` — swallowing `SQLITE_BUSY` forks the
+    `delivery_receipts` SHA-256 chain. `openDatabase()` stamps `PRAGMA
+    user_version` inside `BEGIN IMMEDIATE` ONLY if every migration returns `true`.
+
+50. **Telemetry and manual curation state must reflect reality, never proxies.**
+    `guard_events` records the enforced action (`warn` vs `block`), never claiming
+    a block when `IMMUNE_GUARD=warn`; `summarizeReceipts()` counts only `'held'`
+    in `byModel.held` and sums ROI over the full table; Immunity Score passes real
+    `failedCount` (not prevented count) as `repeatFailures`; and manual retirement
+    stamps `retire_reason = 'manual'` so `repairLibraryHygiene` never resurrects it.
 
 ## Verification
 

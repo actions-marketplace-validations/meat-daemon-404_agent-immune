@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { basename, extname, join, resolve } from 'node:path';
 import {
   detectProjectBaseline,
@@ -49,6 +49,8 @@ const BOILERPLATE_HEADINGS = new Set([
 
 const SKIP_DIRS = new Set(['.git', 'node_modules', 'dist', 'build', '.next', '.turbo']);
 const MAX_SKILL_FILES = 200;
+const MAX_SKILL_FILE_BYTES = 512 * 1024;
+const MAX_SKILL_DEPTH = 12;
 
 function sanitizeText(raw: string, maxLen: number): string {
   const scrubbed = redact(redactOutbound(raw))
@@ -360,26 +362,35 @@ function collectMarkdownFiles(inputs: string[], cwd: string): string[] {
   const files: string[] = [];
   const seen = new Set<string>();
 
-  const walk = (targetPath: string) => {
-    if (files.length >= MAX_SKILL_FILES) return;
+  const walk = (targetPath: string, depth: number) => {
+    if (files.length >= MAX_SKILL_FILES || depth > MAX_SKILL_DEPTH) return;
     const resolved = resolve(cwd, targetPath);
-    if (seen.has(resolved) || !existsSync(resolved)) return;
-    seen.add(resolved);
+    if (!existsSync(resolved)) return;
+    let canonical = resolved;
+    try {
+      canonical = realpathSync(resolved);
+    } catch {
+      return;
+    }
+    if (seen.has(canonical)) return;
+    seen.add(canonical);
     let st;
     try {
-      st = statSync(resolved);
+      st = statSync(canonical);
     } catch {
       return;
     }
     if (st.isFile()) {
-      const ext = extname(resolved).toLowerCase();
-      if (ext === '.md' || ext === '.mdx' || ext === '.txt') files.push(resolved);
+      const ext = extname(canonical).toLowerCase();
+      if ((ext === '.md' || ext === '.mdx' || ext === '.txt') && st.size <= MAX_SKILL_FILE_BYTES) {
+        files.push(canonical);
+      }
       return;
     }
     if (!st.isDirectory()) return;
     let entries;
     try {
-      entries = readdirSync(resolved, { withFileTypes: true }).sort((a, b) =>
+      entries = readdirSync(canonical, { withFileTypes: true }).sort((a, b) =>
         a.name.localeCompare(b.name),
       );
     } catch {
@@ -388,11 +399,11 @@ function collectMarkdownFiles(inputs: string[], cwd: string): string[] {
     for (const entry of entries) {
       if (files.length >= MAX_SKILL_FILES) break;
       if (SKIP_DIRS.has(entry.name)) continue;
-      walk(join(resolved, entry.name));
+      walk(join(canonical, entry.name), depth + 1);
     }
   };
 
-  for (const input of inputs) walk(input);
+  for (const input of inputs) walk(input, 0);
   return files;
 }
 

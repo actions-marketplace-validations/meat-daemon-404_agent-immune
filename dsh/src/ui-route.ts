@@ -70,18 +70,37 @@ function sendJson(res: ServerResponse, status: number, payload: unknown): void {
   res.end(JSON.stringify(payload));
 }
 
+class PayloadTooLargeError extends Error {
+  constructor() {
+    super('body too large');
+  }
+}
+
 function readBody(req: IncomingMessage, max = 4096): Promise<string> {
   return new Promise((resolve, reject) => {
     let body = '';
+    let settled = false;
     req.on('data', (chunk: Buffer) => {
+      if (settled) return;
       body += chunk.toString('utf8');
       if (body.length > max) {
-        reject(new Error('body too large'));
-        req.destroy();
+        settled = true;
+        reject(new PayloadTooLargeError());
+        req.resume();
       }
     });
-    req.on('end', () => resolve(body));
-    req.on('error', reject);
+    req.on('end', () => {
+      if (!settled) {
+        settled = true;
+        resolve(body);
+      }
+    });
+    req.on('error', (err) => {
+      if (!settled) {
+        settled = true;
+        reject(err);
+      }
+    });
   });
 }
 
@@ -247,10 +266,11 @@ export function registerImmuneUiRoute(
               sendJson(res, 415, { error: 'content-type must be application/json' });
               return;
             }
-            const body = await readBody(req);
+            const body = await readBody(req, 65536);
             let parsed: Record<string, unknown>;
             try {
-              parsed = (body.trim() ? JSON.parse(body) : {}) as Record<string, unknown>;
+              const raw = JSON.parse(body);
+              parsed = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {};
             } catch {
               sendJson(res, 400, { error: 'invalid json' });
               return;
@@ -299,6 +319,10 @@ export function registerImmuneUiRoute(
 
           sendJson(res, 405, { error: 'method not allowed' });
         } catch (error) {
+          if (error instanceof PayloadTooLargeError) {
+            sendJson(res, 413, { error: 'body too large' });
+            return;
+          }
           sendJson(res, 500, { error: error instanceof Error ? error.message : String(error) });
         }
       },

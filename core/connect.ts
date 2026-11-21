@@ -13,7 +13,7 @@
  * (only entries whose command matches our hook scripts are touched), and
  * must refuse to write a config it could not parse.
  */
-import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -89,9 +89,44 @@ export function vendorDist(home: string, opts: { force?: boolean } = {}): Vendor
     !existsSync(canary) ||
     !hasVendorModuleType(vendorRoot);
   if (refreshed) {
-    rmSync(distDir, { recursive: true, force: true });
-    cpSync(ownDistRoot(), distDir, { recursive: true });
     mkdirSync(vendorRoot, { recursive: true });
+    // Stage into a sibling directory and swap so concurrent host hooks never
+    // observe a missing or half-copied `dist/` tree during refresh.
+    const stageDir = join(vendorRoot, `.dist-tmp-${process.pid}-${Date.now()}`);
+    const oldDir = join(vendorRoot, `.dist-old-${process.pid}-${Date.now()}`);
+    let swapped = false;
+    try {
+      cpSync(ownDistRoot(), stageDir, { recursive: true });
+      if (existsSync(distDir)) {
+        try {
+          renameSync(distDir, oldDir);
+          renameSync(stageDir, distDir);
+          swapped = true;
+          rmSync(oldDir, { recursive: true, force: true });
+        } catch {
+          // Windows may refuse renaming a directory with an open handle;
+          // restore if needed and fall back to in-place copy.
+          if (!existsSync(distDir) && existsSync(oldDir)) {
+            try {
+              renameSync(oldDir, distDir);
+            } catch {
+              // ignore
+            }
+          }
+          rmSync(stageDir, { recursive: true, force: true });
+        }
+      } else {
+        renameSync(stageDir, distDir);
+        swapped = true;
+      }
+      if (!swapped) {
+        rmSync(distDir, { recursive: true, force: true });
+        cpSync(ownDistRoot(), distDir, { recursive: true });
+      }
+    } catch (error) {
+      rmSync(stageDir, { recursive: true, force: true });
+      throw error;
+    }
     // The package fingerprint is what core/selfnoise.ts walks up to: without
     // it, a host connected through the vendor copy would learn "episodes"
     // from failures on the immune install itself (maintenance, not pitfalls).
@@ -709,6 +744,7 @@ export function connectHost(hostId: ConnectHostId, options?: ConnectOptions): Co
     const kept = current.filter((entry) => !stale.includes(entry));
     if (currentHasWanted) {
       alreadyPresent += 1;
+      if (stale.length > 0) upgraded += stale.length;
       table[event] = kept.length > 0 ? kept : current;
     } else if (stale.length > 0) {
       upgraded += stale.length;
@@ -953,9 +989,31 @@ export interface ConnectStatusRow {
 /** Which hosts already carry immune hooks or MCP entries, without writing anything. */
 export function connectStatus(options?: ConnectOptions): ConnectStatusRow[] {
   const home = options?.home ?? homedir();
+  const hasSidecarMcp = (host: HostDefinition): boolean => {
+    if (!host.sidecarMcpConfigPath) return false;
+    const sidecarPath = join(home, host.sidecarMcpConfigPath);
+    if (!existsSync(sidecarPath)) return false;
+    try {
+      const sc = readConfig(sidecarPath).config;
+      const servers = sc.mcpServers as Record<string, unknown> | undefined;
+      return Boolean(servers && typeof servers === 'object' && MCP_SERVER_ID in servers);
+    } catch {
+      return false;
+    }
+  };
   return Object.values(HOSTS).map((host) => {
     const configPath = configPathOf(host, home);
+    const sidecarPresent = hasSidecarMcp(host);
     if (!existsSync(configPath)) {
+      if (sidecarPresent) {
+        return {
+          host: host.id,
+          label: host.label,
+          configPath,
+          state: 'connected' as const,
+          events: [`mcpServers.${MCP_SERVER_ID}`],
+        };
+      }
       return { host: host.id, label: host.label, configPath, state: 'no-config' as const, events: [] };
     }
     try {
@@ -976,6 +1034,7 @@ export function connectStatus(options?: ConnectOptions): ConnectStatusRow[] {
       const events = Object.entries(table)
         .filter(([, entries]) => Array.isArray(entries) && entries.some(isImmuneEntry))
         .map(([event]) => event);
+      if (sidecarPresent) events.push(`mcpServers.${MCP_SERVER_ID}`);
       return {
         host: host.id,
         label: host.label,
@@ -984,6 +1043,15 @@ export function connectStatus(options?: ConnectOptions): ConnectStatusRow[] {
         events,
       };
     } catch {
+      if (sidecarPresent) {
+        return {
+          host: host.id,
+          label: host.label,
+          configPath,
+          state: 'connected' as const,
+          events: [`mcpServers.${MCP_SERVER_ID}`],
+        };
+      }
       return { host: host.id, label: host.label, configPath, state: 'no-config' as const, events: [] };
     }
   });

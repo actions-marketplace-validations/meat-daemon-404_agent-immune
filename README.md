@@ -9,7 +9,7 @@
   <p>
     <a href="https://www.npmjs.com/package/dsh-immune-system"><img src="https://img.shields.io/npm/v/dsh-immune-system?label=npm%20%7C%20dsh-immune-system" alt="npm version"></a>
     <a href="https://github.com/meat-daemon-404/agent-immune/actions/workflows/ci.yml"><img src="https://github.com/meat-daemon-404/agent-immune/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-    <img src="https://img.shields.io/badge/tests-308%20passing-16a34a" alt="308 tests passing">
+    <img src="https://img.shields.io/badge/tests-315%20passing-16a34a" alt="315 tests passing">
     <img src="https://img.shields.io/badge/runtime%20deps-0-2563eb" alt="zero runtime dependencies">
     <img src="https://img.shields.io/badge/node-%5E22.19%20%7C%7C%20%3E%3D24-0ea5e9" alt="node ^22.19 || >=24">
     <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT">
@@ -409,7 +409,7 @@ Run `immune --help` or `immune <command> --help` anytime (`--json` supported acr
 Every push and PR runs on **Linux (Node 22 & 24)** and **Windows (Node 24)**:
 
 - **Outcome Judge Ground-Truth Replay** (`scripts/eval-judge.mjs`): **97.81% agreement** across **21,034 real host-labeled tool calls**, **0 false negatives**, and `2.19%` (`461`) false positives (exclusively exit-1 read-only probes such as `grep`/`git diff`, contained downstream by probe-skipping and Red-3 triage — see [AGENTS.md](AGENTS.md) #25).
-- **Automated Test & Contract Suites**: **`308 / 308` unit & integration tests** (`npm test`), **`42 / 42` multi-host vendored hook assertions** across Claude Code, Codex, Antigravity, Gemini CLI & Cursor (`scripts/verify-connected-runtime.mjs`), **`20 / 20` live Cordis event-bus assertions** (`scripts/verify-live-host.mjs`), **`15 + 24 + 10` adapter & bundle serve assertions**, **`7`-manifest / `10`-field version sync guard** (`scripts/check-versions.mjs`), and **`100%` 1:1 dist import graph verification** (`scripts/verify-dist-integrity.mjs`).
+- **Automated Test & Contract Suites**: **`315 / 315` unit & integration tests** (`npm test`), **`42 / 42` multi-host vendored hook assertions** across Claude Code, Codex, Antigravity, Gemini CLI & Cursor (`scripts/verify-connected-runtime.mjs`), **`20 / 20` live Cordis event-bus assertions** (`scripts/verify-live-host.mjs`), **`15 + 24 + 10` adapter & bundle serve assertions**, **`7`-manifest / `10`-field version sync guard** (`scripts/check-versions.mjs`), and **`100%` 1:1 dist import graph verification** (`scripts/verify-dist-integrity.mjs`).
 - **Bilingual Recall & 12-Pack Content Gate**: `scripts/bench-recall.mjs` achieves **R@1 100%, R@3 100%, FP 0%**; `scripts/bench-seed-recall.mjs` across all **72 builtin rules** achieves **R@1 100% (72/72), R@3 100% (72/72), FP 0% (0/9)**.
 - **Scale & Hot-Path Latency** (`scripts/bench-scale.mjs`, `scripts/bench-tool-latency.mjs`): 300 rules index in `60 ms` (`0.20 ms/rule`), query `p50 = 0.60 ms` / `p95 = 1.20 ms`. Tool-execution hooks never call a model (`median 1.8 ms`); LLM distillation is batched at turn end under a strict `1–60 s` clamp.
 - **Strictly Causal Counterfactual Replay** (`scripts/bench-ablation.mjs`): Walking forward across **28,961 real multi-host tool calls** intercepts **88.5% (115/130)** of recurring repeat mistakes from zero priors (**Cold-Start**), and **96.9% (126/130)** with **94.3%** total episode coverage when pre-warmed (**Warm-Start**).

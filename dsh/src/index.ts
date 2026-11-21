@@ -16,6 +16,7 @@ import { formatShareViolations, shareSanityCheck } from '../../core/share-guard.
 import { isSubstantiveHint } from '../../core/distiller.js';
 import { strings } from '../../core/i18n.js';
 import { ImmuneRuntime, clampBudgetMs, resolveDrainBudgetMs } from '../../core/runtime.js';
+import { guardMode } from '../../core/guards.js';
 import { hydrateTeamRules, maybeSyncTeamRulesAfterDrain } from '../../core/team-sync.js';
 import { registerImmuneUiRoute } from './ui-route.js';
 import {
@@ -158,14 +159,16 @@ function reportWebTabWhenComposed(ctx: DshContext, log: ReturnType<typeof makeLo
       };
       const onGraphChanged = (registry as { onGraphChanged?: (cb: () => void) => unknown } | undefined)
         ?.onGraphChanged;
-      if (typeof onGraphChanged === 'function') {
-        try {
-          onGraphChanged.call(registry, report);
-        } catch {
-          // ignore
-        }
+      const initialState = readWebTabState(registry);
+      if (initialState === 'registered' || typeof onGraphChanged !== 'function') {
+        report();
+        return;
       }
-      report();
+      try {
+        onGraphChanged.call(registry, report);
+      } catch {
+        report();
+      }
     });
   } catch {
     // ignore
@@ -255,7 +258,7 @@ function startPluginWithStore(
     const block = renderMemory(hits, t.promptPreamble, 1400);
     const streak = store.topProbeStreak(agent.id, 3);
     const thrash = streak
-      ? `探针提示 / probe note: 上一回合对 ${streak.signature} 连续探测了 ${streak.count} 次 — 一条精确命令（grep -n 关键词、单次 Read）通常一步到位。`
+      ? `探针提示 / probe note: 上一回合对 ${sanitize(streak.signature)} 连续探测了 ${streak.count} 次 — 一条精确命令（grep -n 关键词、单次 Read）通常一步到位。`
       : null;
     const stuck = store.topStuck(agent.id, 2);
     const stuckNote = stuck ? stuckHypothesisText(stuck.signature) : null;
@@ -265,7 +268,9 @@ function startPluginWithStore(
     const advisoryBlock = advisories.length > 0 ? advisories.join('\n') : null;
     const combined =
       advisoryBlock && block
-        ? `${block}\n${advisoryBlock}`
+        ? block.endsWith('\n</immune_memory>')
+          ? `${block.slice(0, -'\n</immune_memory>'.length)}\n${advisoryBlock}\n</immune_memory>`
+          : `${block}\n${advisoryBlock}`
         : advisoryBlock
           ? `<immune_memory>\n${advisoryBlock}\n</immune_memory>`
           : block;
@@ -280,11 +285,15 @@ function startPluginWithStore(
   });
 
   ctx.on(DSH_EVENTS.preToolExecute, async (exec, next): Promise<DshPreToolDecision> => {
+    const mode = guardMode();
     const guard = runtime.evaluateLiveGuard({
       sessionId: exec?.agent?.id ?? '',
       toolName: exec?.name ?? 'Bash',
       toolInput: exec?.arguments ?? {},
       workspace: process.cwd(),
+      // DSH PreToolDecision only supports allow / ask / deny — do not record
+      // phantom audit events when IMMUNE_GUARD=warn cannot surface a banner.
+      recordEvent: mode !== 'warn',
     });
     if (guard) {
       if (guard.shouldDeny) {
@@ -473,7 +482,7 @@ function registerCommands(ctx: DshContext, store: ImmuneStore): void {
       const trigger = segments[0] ?? '';
       const prescription = segments[segments.length - 1] ?? '';
       const symptom = segments.length >= 3 ? segments.slice(1, -1).join(' | ') : '';
-      if (!trigger || !prescription || segments.length > 3) {
+      if (!trigger || !prescription || segments.length < 2 || segments.length > 3) {
         return {
           kind: 'error',
           text:

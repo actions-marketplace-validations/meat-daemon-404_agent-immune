@@ -8,7 +8,7 @@
  * Two branches adding different rules merge in git without conflicts.
  */
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { deriveProjectScope } from './hygiene.js';
 import { shareSanityCheck } from './share-guard.js';
@@ -118,6 +118,12 @@ export function writeTeamRulesFile(filePath, candidates, opts = {}) {
         renameSync(tmpPath, filePath);
     }
     catch {
+        try {
+            rmSync(tmpPath, { force: true });
+        }
+        catch {
+            // ignore temp cleanup error
+        }
         writeFileSync(filePath, result.jsonl, 'utf8');
     }
     return { exported: result.exported, skippedUnsafe: result.skippedUnsafe };

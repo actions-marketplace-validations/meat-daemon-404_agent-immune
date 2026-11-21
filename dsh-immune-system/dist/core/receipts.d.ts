@@ -20,6 +20,8 @@ export declare function recordDeliveryReceipt(db: DatabaseSync, entry: {
  * delivered in `sessionId` during the current window and were NOT followed
  * by a `'failed'` receipt or already credited `'held'` in that window.
  *
+ * Executed inside ONE `BEGIN IMMEDIATE` transaction so concurrent turn-end
+ * hooks cannot double-credit the same held receipt or fork the SHA-256 chain.
  * Returns how many new `'held'` receipts were appended.
  */
 export declare function recordHeldReceiptsForSession(db: DatabaseSync, opts: {

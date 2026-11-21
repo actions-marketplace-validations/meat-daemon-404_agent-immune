@@ -24,7 +24,7 @@ export interface PruneCounts {
     detours: number;
     guardEvents: number;
 }
-/** Remember which antibodies were injected on this session's current window (accumulating unexpired deliveries). */
+/** Remember which antibodies were injected on this session's current window (accumulating unexpired deliveries atomically). */
 export declare function recordInjection(db: DatabaseSync, sessionId: string, ids: number[], prescriptions?: string[]): void;
 /** Antibody ids injected during the current turn of this session. */
 export declare function injectedIds(db: DatabaseSync, sessionId: string): number[];

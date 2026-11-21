@@ -15,9 +15,12 @@ import { ImmuneStore } from '../../core/store/index.js';
 import { GlobalStore, globalDbPathFor } from '../../core/store/global.js';
 import { resolveDbPath } from '../../core/store/path.js';
 import { findConsolidationCandidates, findLessonGroups } from '../../core/consolidate.js';
+import { guardMode } from '../../core/guards.js';
+import { readLlmConfig } from '../../core/llm.js';
 import { resolveDrainBudgetMs } from '../../core/runtime.js';
 import { sleepReviewGroupsOf } from '../../core/sleep-consolidate.js';
 import { connectStatus, verifyConnectedPaths } from '../../core/connect.js';
+import { verifyVaccineLockfile } from '../../core/vaccine.js';
 import { dshDirOf, ROOT_MARKER } from './root-marker.js';
 /** The package's engines bar, as a pure predicate so tests can pin it. */
 export function nodeVersionSatisfied(version) {
@@ -222,21 +225,64 @@ function ruleHygieneRow(store) {
  * the rule distiller on every turn and the operator never learns why.
  */
 function llmBudgetRow(env = process.env) {
-    const configured = Boolean(env.IMMUNE_LLM_BASE_URL?.trim() && env.IMMUNE_LLM_MODEL?.trim());
+    const llm = readLlmConfig(env);
     const budget = resolveDrainBudgetMs(env);
-    const rawTimeout = Number(env.IMMUNE_LLM_TIMEOUT_MS ?? '8000');
-    const timeout = Number.isFinite(rawTimeout) && rawTimeout > 0 ? rawTimeout : 8000;
-    if (!configured) {
+    if (!llm) {
         return { name: 'LLM budget', ok: true, detail: `no LLM configured - deterministic rule path (budget ${budget} ms)` };
     }
-    const tight = budget < timeout;
+    const tight = budget < llm.timeoutMs;
     return {
         name: 'LLM budget',
         ok: !tight,
         detail: tight
-            ? `clamped budget ${budget} ms < LLM timeout ${timeout} ms - turn-end distillation uses the rule path; run \`immune backfill\` or adjust IMMUNE_DISTILL_BUDGET_MS / IMMUNE_LLM_TIMEOUT_MS`
-            : `clamped budget ${budget} ms covers the ${timeout} ms LLM timeout`,
+            ? `clamped budget ${budget} ms < LLM timeout ${llm.timeoutMs} ms (${llm.model}) - turn-end distillation uses the rule path; run \`immune backfill\` or adjust IMMUNE_DISTILL_BUDGET_MS / IMMUNE_LLM_TIMEOUT_MS`
+            : `clamped budget ${budget} ms covers the ${llm.timeoutMs} ms LLM timeout (${llm.model})`,
     };
+}
+function receiptChainRow(store) {
+    const summary = store.receiptSummary(500);
+    if (summary.total === 0) {
+        return { name: 'receipt chain', ok: true, detail: '0 receipts recorded yet' };
+    }
+    const held = summary.byOutcome.held ?? 0;
+    return {
+        name: 'receipt chain',
+        ok: summary.chainValid,
+        detail: summary.chainValid
+            ? `${summary.total} receipt(s) (${held} held) · SHA-256 chain verified`
+            : `${summary.total} receipt(s) · SHA-256 chain BROKEN (possible ledger tampering)`,
+    };
+}
+function guardRow(store) {
+    const mode = guardMode();
+    const summary = store.guardEventSummary(5);
+    return {
+        name: 'pre-flight guard',
+        ok: true,
+        detail: `IMMUNE_GUARD=${mode} · ${summary.total} interception(s) logged`,
+    };
+}
+function vaccineLockfileRow() {
+    const lockPath = join(process.cwd(), '.immune', 'vaccine.lock.json');
+    if (!existsSync(lockPath))
+        return null;
+    try {
+        const report = verifyVaccineLockfile(readFileSync(lockPath, 'utf8'));
+        return {
+            name: 'vaccine lockfile',
+            ok: report.valid,
+            detail: report.valid
+                ? `${lockPath} · SHA-256 verified (${report.antibodyCount} rules)`
+                : `${lockPath} · INVALID (${report.reason})`,
+        };
+    }
+    catch (error) {
+        return {
+            name: 'vaccine lockfile',
+            ok: false,
+            detail: `${lockPath} · unreadable (${error instanceof Error ? error.message : String(error)})`,
+        };
+    }
 }
 /**
  * `immune connect` writes fixed paths into the host configs; an npx cache
@@ -299,6 +345,12 @@ export function runDoctor(store, options = {}) {
             ` / ${s.jobsPending} queued jobs / ${s.suppressedRepeats} repeats suppressed`,
     });
     results.push(storageRow(store));
+    results.push({ name: 'schema', ok: true, detail: `v${store.schemaVersion()}` });
+    results.push(guardRow(store));
+    results.push(receiptChainRow(store));
+    const vaccineRow = vaccineLockfileRow();
+    if (vaccineRow)
+        results.push(vaccineRow);
     results.push(ruleHygieneRow(store));
     results.push(lifecycleRow(store));
     results.push(llmBudgetRow());

@@ -138,10 +138,13 @@ function unescapeTraceString(raw) {
         return ch;
     });
 }
+const NON_FS_SLASH_TOKEN = /^(?:application|text|image|audio|video|font|multipart)\/[a-z0-9.+-]+$|^(?:origin|upstream|refs)\/[a-z0-9._/-]+$|^\d*>&\d+$/i;
 function collectCommandPaths(command, found) {
     const pushCandidate = (candidate) => {
         const trimmed = candidate.replace(/^['"]+|['"]+$/g, '');
         if (!isSafeLocalFsCandidate(trimmed))
+            return;
+        if (NON_FS_SLASH_TOKEN.test(trimmed))
             return;
         if (/[\\/]/.test(trimmed) && !found.includes(trimmed)) {
             found.push(trimmed);

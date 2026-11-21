@@ -24,25 +24,58 @@ export function openDatabase(dbPath) {
     if (dbPath !== ':memory:' && currentVersion === SCHEMA_VERSION) {
         return db;
     }
-    for (const statement of SCHEMA_STATEMENTS) {
-        // Index on a column that only exists after `migrate` runs on legacy DBs must
-        // not abort opening; `migrate` ensures those columns and indexes exist.
-        if (statement.includes('idx_antibodies_scope'))
-            continue;
-        db.prepare(statement).run();
-    }
-    migrate(db);
+    let migratedOk = false;
+    let began = false;
     try {
-        db.prepare('CREATE INDEX IF NOT EXISTS idx_antibodies_scope ON antibodies(status, project_scope, hit_count DESC)').run();
+        try {
+            db.exec('BEGIN IMMEDIATE');
+            began = true;
+        }
+        catch {
+            // Read-only DB or caller-owned transaction; continue best-effort below.
+        }
+        const rechecked = Number(db.prepare('PRAGMA user_version').get()
+            ?.user_version ?? 0);
+        if (dbPath !== ':memory:' && rechecked === SCHEMA_VERSION) {
+            if (began)
+                db.exec('COMMIT');
+            return db;
+        }
+        for (const statement of SCHEMA_STATEMENTS) {
+            // Index on a column that only exists after `migrate` runs on legacy DBs must
+            // not abort opening; `migrate` ensures those columns and indexes exist.
+            if (statement.includes('idx_antibodies_scope'))
+                continue;
+            db.prepare(statement).run();
+        }
+        migratedOk = migrate(db);
+        try {
+            db.prepare('CREATE INDEX IF NOT EXISTS idx_antibodies_scope ON antibodies(status, project_scope, hit_count DESC)').run();
+        }
+        catch {
+            migratedOk = false;
+        }
+        if (migratedOk) {
+            try {
+                db.prepare(`PRAGMA user_version = ${SCHEMA_VERSION}`).run();
+            }
+            catch {
+                // Read-only databases still work without stamping user_version.
+            }
+        }
+        if (began)
+            db.exec('COMMIT');
     }
-    catch {
-        // Non-fatal if opened read-only or restricted.
-    }
-    try {
-        db.prepare(`PRAGMA user_version = ${SCHEMA_VERSION}`).run();
-    }
-    catch {
-        // Read-only databases still work without stamping user_version.
+    catch (error) {
+        if (began) {
+            try {
+                db.exec('ROLLBACK');
+            }
+            catch {
+                // ignore rollback failure
+            }
+        }
+        throw error;
     }
     return db;
 }
@@ -84,14 +117,22 @@ const COLUMNS = [
 /**
  * Upgrade legacy v1-v3 `pending_failures` whose PRIMARY KEY was `(session_id, tool_name)`
  * to v4's multi-target `(session_id, tool_name, target_signature)` without losing rows.
+ * Returns false if migration could not complete so `user_version` is never stamped prematurely.
  */
 function migratePendingFailuresPrimaryKey(db) {
     try {
         const info = db.prepare('PRAGMA table_info(pending_failures)').all();
         const targetCol = info.find((row) => row.name === 'target_signature');
         if (!targetCol || Number(targetCol.pk ?? 0) > 0)
-            return;
-        db.exec('BEGIN IMMEDIATE');
+            return true;
+        let innerTx = false;
+        try {
+            db.exec('BEGIN IMMEDIATE');
+            innerTx = true;
+        }
+        catch {
+            // Already inside openDatabase's BEGIN IMMEDIATE transaction.
+        }
         try {
             db.exec(`
         CREATE TABLE pending_failures_v4 (
@@ -112,22 +153,29 @@ function migratePendingFailuresPrimaryKey(db) {
         DROP TABLE pending_failures;
         ALTER TABLE pending_failures_v4 RENAME TO pending_failures;
       `);
-            db.exec('COMMIT');
+            if (innerTx)
+                db.exec('COMMIT');
+            return true;
         }
         catch {
-            try {
-                db.exec('ROLLBACK');
+            if (innerTx) {
+                try {
+                    db.exec('ROLLBACK');
+                }
+                catch {
+                    // ignore rollback error
+                }
             }
-            catch {
-                // ignore rollback error
-            }
+            return false;
         }
     }
     catch {
-        // Non-fatal on read-only or synthetic DBs.
+        // Non-fatal on read-only or synthetic DBs, but do not stamp SCHEMA_VERSION.
+        return false;
     }
 }
 function migrate(db) {
+    let ok = true;
     let addedV2Quality = false;
     for (const { table, column, ddl } of COLUMNS) {
         try {
@@ -139,10 +187,13 @@ function migrate(db) {
                 addedV2Quality = true;
         }
         catch {
-            // A migration must never prevent the host from starting.
+            // A migration must never prevent the host from starting, but record failure
+            // so PRAGMA user_version is not stamped until a clean pass succeeds.
+            ok = false;
         }
     }
-    migratePendingFailuresPrimaryKey(db);
+    if (!migratePendingFailuresPrimaryKey(db))
+        ok = false;
     if (addedV2Quality) {
         try {
             repairLibraryHygiene(db);
@@ -151,6 +202,7 @@ function migrate(db) {
             // Best-effort v1 -> v2 hygiene heal on first schema upgrade.
         }
     }
+    return ok;
 }
 /** Default on-disk location for a store that was not given an explicit path. */
 export function defaultDbPath(base) {

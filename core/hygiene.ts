@@ -150,25 +150,41 @@ export function abstractMachinePaths(input: string, workspaceRoot?: string): str
         ? posix.resolve(trimmedRoot)
         : resolve(trimmedRoot);
     const normRoot = resolvedRoot.replace(/\\/g, '/').replace(/\/+$/, '');
-    const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const escapedFwd = escapeRe(normRoot);
-    const escapedBack = escapedFwd.replace(/\//g, '\\\\');
-    const escapedDoubleBack = escapedFwd.replace(/\//g, '\\\\\\\\');
-    out = out
-      .replace(new RegExp(escapedDoubleBack, 'gi'), '<repo>')
-      .replace(new RegExp(escapedBack, 'gi'), '<repo>')
-      .replace(new RegExp(escapedFwd, 'gi'), '<repo>');
+    // Guard against filesystem roots (`/` -> '' or `D:\` -> 'D:'): replacing an
+    // empty pattern or bare drive prefix would corrupt ordinary strings.
+    if (normRoot.length >= 2 && !/^[A-Za-z]:$/.test(normRoot)) {
+      const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const escapedFwd = escapeRe(normRoot);
+      const escapedBack = escapedFwd.replace(/\//g, '\\\\');
+      const escapedDoubleBack = escapedFwd.replace(/\//g, '\\\\\\\\');
+      out = out
+        .replace(new RegExp(escapedDoubleBack, 'gi'), '<repo>')
+        .replace(new RegExp(escapedBack, 'gi'), '<repo>')
+        .replace(new RegExp(escapedFwd, 'gi'), '<repo>');
+    }
   }
   out = out.replace(WIN_ABS_PATH_RE, (full) => {
     const clean = full.replace(/\\\\/g, '/').replace(/\\/g, '/');
-    const segs = clean
-      .split('/')
-      .filter((s) => Boolean(s) && !/^[A-Za-z]:$/.test(s) && !/^(?:Users|home)$/i.test(s));
+    const rawSegs = clean.split('/').filter(Boolean);
+    // Drop drive prefix (`C:`) and Windows user-profile home segment (`Users/<username>`)
+    // BEFORE tail slicing so short paths like `C:\Users\alice\.env` never leak `alice`.
+    let start = rawSegs.length > 0 && /^[A-Za-z]:$/.test(rawSegs[0]!) ? 1 : 0;
+    if (/^(?:Users|Documents and Settings)$/i.test(rawSegs[start] ?? '')) {
+      start += rawSegs.length > start + 1 ? 2 : 1;
+    }
+    const segs = rawSegs.slice(start).filter((s) => s !== '<user>');
     const tail = segs.slice(-2).join('/');
     return tail ? `<path>/${tail}` : '<path>';
   });
   out = out.replace(UNIX_HOME_PATH_RE, (full) => {
-    const segs = full.split('/').filter((s) => Boolean(s) && !/^(?:Users|home|root)$/i.test(s));
+    const rawSegs = full.split('/').filter(Boolean);
+    let start = 0;
+    if (/^(?:Users|home)$/i.test(rawSegs[0] ?? '')) {
+      start = rawSegs.length > 1 ? 2 : 1;
+    } else if (/^root$/i.test(rawSegs[0] ?? '')) {
+      start = 1;
+    }
+    const segs = rawSegs.slice(start).filter((s) => s !== '<user>');
     const tail = segs.slice(-2).join('/');
     return tail ? `~/<path>/${tail}` : '~/<path>';
   });
@@ -398,6 +414,17 @@ export function repairLibraryHygiene(
       WHERE id = ?`,
   );
 
+  let began = false;
+  if (!dryRun) {
+    try {
+      db.exec('BEGIN IMMEDIATE');
+      began = true;
+    } catch {
+      // Caller already holds a transaction; proceed inline.
+    }
+  }
+
+  try {
   for (const raw of rows) {
     const id = Number(raw.id);
     const status = String(raw.status) as AntibodyStatus;
@@ -409,6 +436,11 @@ export function repairLibraryHygiene(
     const failCount = Number(raw.fail_count ?? 0);
     const source = String(raw.prescription_source ?? '');
     const origin = String(raw.origin ?? '');
+    const prevGrade = String(raw.quality_grade ?? '');
+    const prevRubric = Number(raw.rubric_score ?? -1);
+    const prevRootCause = String(raw.root_cause ?? '');
+    const prevScope = String(raw.project_scope ?? '*');
+    const prevRetireReason = String(raw.retire_reason ?? '');
     let repairPath: string[] = [];
     try {
       const parsed = JSON.parse(String(raw.repair_path ?? '[]'));
@@ -432,8 +464,8 @@ export function repairLibraryHygiene(
 
     let nextStatus: AntibodyStatus = status;
     let nextSymptom = symptom;
-    let nextScope = String(raw.project_scope ?? '*');
-    let nextRetireReason = String(raw.retire_reason ?? '');
+    let nextScope = prevScope;
+    let nextRetireReason = prevRetireReason;
     const inferredScope = inferScopeFromRuleText(`${trigger} ${symptom} ${prescription}`);
 
     if (inferredScope && nextScope === '*' && !verdict.universalEligible) {
@@ -466,9 +498,12 @@ export function repairLibraryHygiene(
       verdict.score >= 60 &&
       (matchGenericLesson(nextSymptom) !== null ||
         (hitCount >= 10 && failCount < Math.max(hitCount, failCount) * 0.25)) &&
-      nextRetireReason !== 'superseded_by_env_upgrade'
+      nextRetireReason !== 'superseded_by_env_upgrade' &&
+      nextRetireReason !== 'manual' &&
+      nextRetireReason !== 'mutated_to_child'
     ) {
-      // Restore unjustly retired high-value universal/low-failure rules (e.g. #37 / #66).
+      // Restore unjustly retired high-value universal/low-failure rules (e.g. #37 / #66),
+      // while respecting explicit manual retirements and env-upgrade supersessions.
       nextStatus = 'active';
       nextRetireReason = '';
       restored += 1;
@@ -480,7 +515,15 @@ export function repairLibraryHygiene(
     }
 
     const rootCause = inferRootCause(nextSymptom, prescription, repairPath);
-    if (!dryRun) {
+    const rowChanged =
+      nextStatus !== status ||
+      nextSymptom !== symptom ||
+      nextScope !== prevScope ||
+      verdict.grade !== prevGrade ||
+      verdict.score !== prevRubric ||
+      rootCause !== prevRootCause ||
+      nextRetireReason !== prevRetireReason;
+    if (!dryRun && rowChanged) {
       updateStmt.run(
         nextStatus,
         nextSymptom,
@@ -493,6 +536,17 @@ export function repairLibraryHygiene(
         id,
       );
     }
+  }
+  if (began) db.exec('COMMIT');
+  } catch (err) {
+    if (began) {
+      try {
+        db.exec('ROLLBACK');
+      } catch {
+        // ignore rollback error
+      }
+    }
+    throw err;
   }
 
   const activeAfter = activeBefore - quarantined + restored;

@@ -72,7 +72,7 @@ const MAX_CONTEXT = 10_000;
 let activeAntigravityEvent = false;
 let activeGeminiCliEvent = false;
 let activeCursorEvent = false;
-let deniedByHook = false;
+let decisionEmittedByHook = false;
 
 export function log(message: string): void {
   try {
@@ -103,7 +103,7 @@ export function emitContext(eventName: string, additionalContext: string): void 
  * whole hook is discarded, which would silently turn a deny into an allow.
  */
 export function emitDeny(eventName: string, reason: string): void {
-  deniedByHook = true;
+  decisionEmittedByHook = true;
   const trimmedReason = reason.slice(0, MAX_CONTEXT);
   if (activeCursorEvent) {
     process.stdout.write(
@@ -126,6 +126,38 @@ export function emitDeny(eventName: string, reason: string): void {
       },
     }),
   );
+}
+
+/**
+ * Ask the user for confirmation (PreToolUse only).
+ *
+ * Returns `true` when the active host protocol supports a native `ask` decision
+ * and the JSON response has been emitted; returns `false` on hosts that only
+ * accept `allow`/`deny` (Antigravity, Gemini CLI) so the caller can fall back
+ * to advisory context injection without emitting an invalid schema.
+ */
+export function emitAsk(eventName: string, reason: string): boolean {
+  if (activeAntigravityEvent || activeGeminiCliEvent) {
+    return false;
+  }
+  decisionEmittedByHook = true;
+  const trimmedReason = reason.slice(0, MAX_CONTEXT);
+  if (activeCursorEvent) {
+    process.stdout.write(
+      `${JSON.stringify({ permission: 'ask', user_message: trimmedReason, agent_message: trimmedReason })}\n`,
+    );
+    return true;
+  }
+  process.stdout.write(
+    JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: eventName,
+        permissionDecision: 'ask',
+        permissionDecisionReason: trimmedReason,
+      },
+    }),
+  );
+  return true;
 }
 
 export function isAntigravityEvent(event: HookEvent): boolean {
@@ -367,15 +399,15 @@ export async function runHook(
   activeAntigravityEvent = false;
   activeGeminiCliEvent = false;
   activeCursorEvent = false;
-  deniedByHook = false;
+  decisionEmittedByHook = false;
   try {
     rememberPluginRoot();
     const event = await readEvent();
     const eventName = eventNameOf(event, fallbackName);
     traceRun(eventName, sessionIdOf(event));
     const context = await body(event, eventName);
-    if (deniedByHook) {
-      // emitDeny already wrote the host-formatted denial.
+    if (decisionEmittedByHook) {
+      // emitDeny / emitAsk already wrote the host-formatted decision.
     } else if (activeCursorEvent) {
       emitCursorResult(fallbackName, context);
     } else if (activeAntigravityEvent) {
@@ -385,7 +417,7 @@ export async function runHook(
     }
   } catch (error) {
     log(`hook error: ${error instanceof Error ? error.message : String(error)}`);
-    if (!deniedByHook) {
+    if (!decisionEmittedByHook) {
       if (activeCursorEvent) emitCursorResult(fallbackName, null);
       else if (activeAntigravityEvent) emitAntigravityResult(fallbackName, null);
     }

@@ -5,6 +5,12 @@ import { gitHookStatus, installGitHook, removeGitHook } from '../../../core/git-
 import { runDoctor } from '../doctor.js';
 import { flagValue } from './shared.js';
 export function cmdConnect(args) {
+    const KNOWN_CONNECT_FLAGS = new Set(['--remove', '--status', '--json', '--refresh']);
+    const unknownFlags = args.filter((arg) => arg.startsWith('-') && !KNOWN_CONNECT_FLAGS.has(arg));
+    if (unknownFlags.length > 0) {
+        process.stderr.write(`connect: unknown option(s): ${unknownFlags.join(', ')} (supported: --status, --remove, --refresh, --json)\n`);
+        return 2;
+    }
     const hostArg = args.find((arg) => !arg.startsWith('-'));
     const remove = args.includes('--remove');
     const asJson = args.includes('--json');
@@ -141,7 +147,11 @@ export function cmdConnect(args) {
 export function cmdUi(args) {
     const rawPort = flagValue(args, '--port');
     const wanted = rawPort !== undefined ? Number(rawPort) : 7788;
-    const port = Number.isInteger(wanted) && wanted >= 0 ? wanted : 7788;
+    if (rawPort !== undefined && (!Number.isInteger(wanted) || wanted < 0 || wanted > 65535)) {
+        process.stderr.write(`ui: invalid --port "${rawPort}" (expected integer 0–65535)\n`);
+        return 2;
+    }
+    const port = Number.isInteger(wanted) && wanted >= 0 && wanted <= 65535 ? wanted : 7788;
     startUiServer({ port })
         .then((handle) => {
         process.stdout.write(`免疫仪表盘 / Immune dashboard: ${handle.url}\n` +

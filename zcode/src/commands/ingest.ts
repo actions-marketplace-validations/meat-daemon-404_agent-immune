@@ -200,20 +200,26 @@ export function cmdBackfillAsync(
   const sessionRaw = flagValue(args, '--session');
   const budgetRaw = flagValue(args, '--budget-ms');
   const maxRaw = flagValue(args, '--max');
+  const daysNum = daysRaw !== undefined ? Number(daysRaw) : 120;
+  const maxNum = maxRaw !== undefined ? Number(maxRaw) : undefined;
   const report = backfill(store, {
     sourceDb: dbRaw ? resolve(dbRaw) : undefined,
-    days: daysRaw !== undefined ? Number(daysRaw) : 120,
+    days: Number.isFinite(daysNum) && daysNum > 0 ? daysNum : 120,
     sessionId: sessionRaw,
-    ...(maxRaw !== undefined ? { max: Number(maxRaw) } : {}),
+    ...(maxNum !== undefined && Number.isFinite(maxNum) && maxNum > 0 ? { max: Math.trunc(maxNum) } : {}),
     selfMarkers: selfMarkers(),
   });
-  const budget = budgetRaw !== undefined ? Number(budgetRaw) : 60_000;
+  const budgetRawNum = budgetRaw !== undefined ? Number(budgetRaw) : 60_000;
+  const totalBudget = Number.isFinite(budgetRawNum) && budgetRawNum > 0 ? budgetRawNum : 60_000;
   const noLlm = args.includes('--no-llm');
   const llm = noLlm ? null : readLlmConfig();
   let drained = 0;
+  const deadline = Date.now() + totalBudget;
   (async () => {
     for (;;) {
-      const r = await drainJobs(store, Number.isFinite(budget) ? budget : 60_000, { llm });
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) break;
+      const r = await drainJobs(store, remaining, { llm });
       drained += r.processed;
       if (store.pendingJobCount() === 0 || r.processed === 0) break;
     }
@@ -258,13 +264,14 @@ export function cmdAudit(
   }
   const days = args.includes('--all-time')
     ? 3650
-    : daysRaw !== undefined && Number.isFinite(Number(daysRaw))
+    : daysRaw !== undefined && Number.isFinite(Number(daysRaw)) && Number(daysRaw) > 0
       ? Number(daysRaw)
       : 30;
+  const maxNum = maxRaw !== undefined ? Number(maxRaw) : undefined;
   const report = auditHistory(store, {
     days,
     source: source as 'auto' | 'zcode' | 'codex' | 'claude-code' | 'antigravity',
-    ...(maxRaw !== undefined ? { max: Number(maxRaw) } : {}),
+    ...(maxNum !== undefined && Number.isFinite(maxNum) && maxNum > 0 ? { max: Math.trunc(maxNum) } : {}),
     dryRun,
     selfMarkers: selfMarkers(),
   });
@@ -286,11 +293,15 @@ export function cmdAudit(
 
   const noLlm = args.includes('--no-llm');
   const llm = noLlm ? null : readLlmConfig();
-  const budget = budgetRaw !== undefined ? Number(budgetRaw) : 60_000;
+  const budgetRawNum = budgetRaw !== undefined ? Number(budgetRaw) : 60_000;
+  const totalBudget = Number.isFinite(budgetRawNum) && budgetRawNum > 0 ? budgetRawNum : 60_000;
   let drained = 0;
+  const deadline = Date.now() + totalBudget;
   (async () => {
     for (;;) {
-      const r = await drainJobs(store, Number.isFinite(budget) ? budget : 60_000, { llm });
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) break;
+      const r = await drainJobs(store, remaining, { llm });
       drained += r.processed;
       if (store.pendingJobCount() === 0 || r.processed === 0) break;
     }

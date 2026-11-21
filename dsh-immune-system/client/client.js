@@ -220,19 +220,23 @@ window.__ModuleLoader__.load({
       var gInp = guardInputState[0];
       var setGInp = guardInputState[1];
 
+      var seqRef = React.useRef(0);
       var load = React.useCallback(
         function (nextTab, nextQuery) {
+          var reqId = (seqRef.current += 1);
           setData(function (prev) {
             return Object.assign({}, prev, { loading: true, error: '' });
           });
           if (nextTab === 'workspaces') {
             request('/workspaces')
               .then(function (body) {
+                if (reqId !== seqRef.current) return;
                 setData(function (prev) {
                   return Object.assign({}, prev, { loading: false, error: '', workspaces: body.workspaces || [] });
                 });
               })
               .catch(function (error) {
+                if (reqId !== seqRef.current) return;
                 setData(function (prev) {
                   return Object.assign({}, prev, { loading: false, error: String(error.message || error) });
                 });
@@ -249,11 +253,13 @@ window.__ModuleLoader__.load({
             }
             request('/explain?q=' + encodeURIComponent(trimmed))
               .then(function (body) {
+                if (reqId !== seqRef.current) return;
                 setData(function (prev) {
                   return Object.assign({}, prev, { loading: false, error: '', explain: body });
                 });
               })
               .catch(function (error) {
+                if (reqId !== seqRef.current) return;
                 setData(function (prev) {
                   return Object.assign({}, prev, { loading: false, error: String(error.message || error) });
                 });
@@ -263,11 +269,13 @@ window.__ModuleLoader__.load({
           if (nextTab === 'guard') {
             request('/guard-events?limit=25')
               .then(function (body) {
+                if (reqId !== seqRef.current) return;
                 setData(function (prev) {
                   return Object.assign({}, prev, { loading: false, error: '', guardEvents: body });
                 });
               })
               .catch(function (error) {
+                if (reqId !== seqRef.current) return;
                 setData(function (prev) {
                   return Object.assign({}, prev, { loading: false, error: String(error.message || error) });
                 });
@@ -277,11 +285,13 @@ window.__ModuleLoader__.load({
           if (nextTab === 'insights') {
             Promise.all([request('/insights'), request('/federate')])
               .then(function (pair) {
+                if (reqId !== seqRef.current) return;
                 setData(function (prev) {
                   return Object.assign({}, prev, { loading: false, error: '', insights: pair[0], federate: pair[1] });
                 });
               })
               .catch(function (error) {
+                if (reqId !== seqRef.current) return;
                 setData(function (prev) {
                   return Object.assign({}, prev, { loading: false, error: String(error.message || error) });
                 });
@@ -294,6 +304,7 @@ window.__ModuleLoader__.load({
             (nextQuery ? '&q=' + encodeURIComponent(nextQuery) : '');
           request(path)
             .then(function (body) {
+              if (reqId !== seqRef.current) return;
               setData(function (prev) {
                 return Object.assign({}, prev, {
                   loading: false,
@@ -306,6 +317,7 @@ window.__ModuleLoader__.load({
               });
             })
             .catch(function (error) {
+              if (reqId !== seqRef.current) return;
               setData(function (prev) {
                 return Object.assign({}, prev, {
                   loading: false,
@@ -336,18 +348,30 @@ window.__ModuleLoader__.load({
           });
       }
 
+      var timer = React.useRef(null);
       React.useEffect(
         function () {
+          if (timer.current) {
+            clearTimeout(timer.current);
+            timer.current = null;
+          }
           load(tab, q);
+          return function () {
+            if (timer.current) {
+              clearTimeout(timer.current);
+              timer.current = null;
+            }
+          };
         },
         [load, tab],
       );
 
-      var timer = React.useRef(null);
       function onQuery(value) {
         setQ(value);
         if (timer.current) clearTimeout(timer.current);
+        if (tab === 'workspaces' || tab === 'guard' || tab === 'insights') return;
         timer.current = setTimeout(function () {
+          timer.current = null;
           load(tab, value);
         }, 220);
       }
@@ -1071,7 +1095,19 @@ window.__ModuleLoader__.load({
           h(
             'div',
             { className: 'meta-row' },
-            h('span', null, (tab === 'workspaces' ? (data.workspaces || []).length : sorted.length) + ' 条结果 / results'),
+            h(
+              'span',
+              null,
+              (tab === 'workspaces'
+                ? (data.workspaces || []).length
+                : tab === 'explain'
+                  ? (data.explain && Array.isArray(data.explain.candidates) ? data.explain.candidates.length : 0)
+                  : tab === 'guard'
+                    ? (data.guardEvents && typeof data.guardEvents.total === 'number' ? data.guardEvents.total : 0)
+                    : tab === 'insights'
+                      ? (data.federate && Array.isArray(data.federate.clusters) ? data.federate.clusters.length : 0)
+                      : sorted.length) + ' 条结果 / results',
+            ),
             h('span', null, stats ? '蒸馏预算 / budget ' + formatBudget(data.budgetMs) : ''),
             h(
               'span',

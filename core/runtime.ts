@@ -175,6 +175,8 @@ export class ImmuneRuntime {
     toolInput: unknown;
     workspace?: string;
     env?: NodeJS.ProcessEnv;
+    /** Set false when the host surface cannot emit warn-only guidance (e.g. DSH PreToolDecision). */
+    recordEvent?: boolean;
   }): LiveGuardResult | null {
     const mode = guardMode(opts.env);
     if (mode === 'off') return null;
@@ -192,31 +194,43 @@ export class ImmuneRuntime {
     });
     if (verdict.decision === 'allow' || verdict.matches.length === 0) return null;
 
-    const scope = opts.workspace ? deriveProjectScope(opts.workspace) : '*';
-    this.store.recordGuardEvent({
-      sessionId: opts.sessionId ?? '',
-      toolName: opts.toolName,
-      decision: verdict.decision,
-      severity: verdict.severity,
-      blastRadius: verdict.blastRadiusScore,
-      policyIds: verdict.matches.map((m) => m.id),
-      payloadPreview: verdict.payload,
-      suggestedRewrite: verdict.suggestedRewrite,
-      projectScope: scope,
-    });
-
     const banner = formatLiveGuardBanner(verdict);
     const highRisk =
       verdict.decision === 'block' ||
       verdict.decision === 'rewrite' ||
       verdict.severity === 'critical' ||
       verdict.severity === 'high';
+    const shouldDeny = mode === 'deny' && highRisk;
+    const shouldAsk = mode === 'ask' && highRisk;
+    // Record the ENFORCED outcome (not the raw strict recommendation) so
+    // `guard_events` never claims a command was blocked when IMMUNE_GUARD=warn.
+    const enforcedDecision: GuardVerdict['decision'] = shouldDeny
+      ? 'block'
+      : verdict.decision === 'rewrite'
+        ? 'rewrite'
+        : 'warn';
+
+    if (opts.recordEvent !== false) {
+      const scope = opts.workspace ? deriveProjectScope(opts.workspace) : '*';
+      this.store.recordGuardEvent({
+        sessionId: opts.sessionId ?? '',
+        toolName: opts.toolName,
+        decision: enforcedDecision,
+        severity: verdict.severity,
+        blastRadius: verdict.blastRadiusScore,
+        policyIds: verdict.matches.map((m) => m.id),
+        payloadPreview: verdict.payload,
+        suggestedRewrite: verdict.suggestedRewrite,
+        projectScope: scope,
+      });
+    }
+
     return {
       mode,
       verdict,
       banner,
-      shouldDeny: mode === 'deny' && highRisk,
-      shouldAsk: mode === 'ask' && highRisk,
+      shouldDeny,
+      shouldAsk,
     };
   }
 

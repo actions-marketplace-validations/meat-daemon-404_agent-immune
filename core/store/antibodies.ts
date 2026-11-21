@@ -142,31 +142,56 @@ export function mutateRule(
   const refined = mergeTriggers(parent.trigger_pattern, incomingTokens);
   if (!refined || refined === parent.trigger_pattern) return null;
   const now = Date.now();
-  const info = db
-    .prepare(
-      `INSERT INTO antibodies
-         (trigger_pattern, symptom, prescription, tool_name, repair_path, origin, parent_id, mutated_at,
-          project_scope, quality_grade, rubric_score, root_cause, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .run(
-      refined,
-      parent.symptom,
-      parent.prescription,
-      parent.tool_name,
-      toRepairJson(evidence.repairPath),
-      parent.origin ?? '',
-      parentId,
-      now,
-      parent.project_scope ?? '*',
-      parent.quality_grade ?? 'advice',
-      parent.rubric_score ?? 70,
-      parent.root_cause ?? '',
-      now,
-      now,
-    );
-  db.prepare("UPDATE antibodies SET status = 'retired', updated_at = ? WHERE id = ?").run(now, parentId);
-  return Number(info.lastInsertRowid);
+  let began = false;
+  try {
+    try {
+      db.exec('BEGIN IMMEDIATE');
+      began = true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!/within a transaction/i.test(msg)) throw err;
+    }
+    const info = db
+      .prepare(
+        `INSERT INTO antibodies
+           (trigger_pattern, symptom, prescription, tool_name, repair_path,
+            prescription_source, origin, env_fingerprint, parent_id, mutated_at,
+            project_scope, quality_grade, rubric_score, root_cause, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        refined,
+        parent.symptom,
+        parent.prescription,
+        parent.tool_name,
+        toRepairJson(evidence.repairPath),
+        parent.prescription_source ?? '',
+        parent.origin ?? '',
+        parent.env_fingerprint ?? '',
+        parentId,
+        now,
+        parent.project_scope ?? '*',
+        parent.quality_grade ?? 'advice',
+        parent.rubric_score ?? 70,
+        parent.root_cause ?? '',
+        now,
+        now,
+      );
+    db.prepare(
+      "UPDATE antibodies SET status = 'retired', retire_reason = 'mutated_to_child', updated_at = ? WHERE id = ?",
+    ).run(now, parentId);
+    if (began) db.exec('COMMIT');
+    return Number(info.lastInsertRowid);
+  } catch (err) {
+    if (began) {
+      try {
+        db.exec('ROLLBACK');
+      } catch {
+        // ignore rollback error
+      }
+    }
+    throw err;
+  }
 }
 
 /** Normalise and cap an incoming action diff for storage. */
@@ -313,7 +338,7 @@ export function insertAntibody(
           AND (project_scope = ? OR project_scope = '*')
           AND tool_name IS ?
           AND symptom = ?`,
-    ).run(now, newId, effectiveScope, ab.tool_name ?? null, ab.symptom.trim());
+    ).run(now, newId, effectiveScope, ab.tool_name ?? null, symptom);
   }
   return newId;
 }
@@ -404,9 +429,10 @@ export function findMatches(
           seen.add(entry.row.id);
         }
       } else {
-        // Reserve up to half the candidate slots (min 2 when limit >= 2) for
-        // CJK bigram hits so downstream rerank sees bilingual exact matches.
-        const cjkBudget = Math.min(scored.length, Math.max(freeSlots, limit >= 2 ? Math.max(2, Math.floor(limit / 2)) : 1));
+        // Reserve at most half the candidate slots (min 1 when limit >= 2) for
+        // CJK bigram hits so FTS5 always retains at least ceil(limit / 2) hits.
+        const maxCjkSlots = limit >= 2 ? Math.max(1, Math.floor(limit / 2)) : 1;
+        const cjkBudget = Math.min(scored.length, Math.max(freeSlots, maxCjkSlots));
         const ftsKeep = Math.max(0, limit - cjkBudget);
         const merged: Antibody[] = rows.slice(0, ftsKeep);
         for (const entry of scored.slice(0, cjkBudget)) {
@@ -461,10 +487,28 @@ export function removeAntibody(db: DatabaseSync, id: number): boolean {
   return removed;
 }
 
-export function setAntibodyStatus(db: DatabaseSync, id: number, status: AntibodyStatus): boolean {
+export function setAntibodyStatus(
+  db: DatabaseSync,
+  id: number,
+  status: AntibodyStatus,
+  retireReason?: string,
+): boolean {
+  const now = Date.now();
+  if (retireReason !== undefined) {
+    const info = db
+      .prepare('UPDATE antibodies SET status = ?, retire_reason = ?, updated_at = ? WHERE id = ?')
+      .run(status, retireReason, now, id);
+    return Number(info.changes) > 0;
+  }
+  if (status === 'active') {
+    const info = db
+      .prepare("UPDATE antibodies SET status = 'active', retire_reason = '', updated_at = ? WHERE id = ?")
+      .run(now, id);
+    return Number(info.changes) > 0;
+  }
   const info = db
     .prepare('UPDATE antibodies SET status = ?, updated_at = ? WHERE id = ?')
-    .run(status, Date.now(), id);
+    .run(status, now, id);
   return Number(info.changes) > 0;
 }
 
@@ -598,6 +642,7 @@ export function setPrescription(
   source: 'rule' | 'llm' | 'human' | 'host_llm',
 ): boolean {
   const clean = redact(prescription).trim().slice(0, 200);
+  if (!clean) return false;
   const existing = getAntibodyById(db, id);
   const nextGrade = existing
     ? classifyRuleQuality({ ...existing, prescription: clean, prescription_source: source })

@@ -31,18 +31,37 @@ function sendJson(res, status, payload) {
     });
     res.end(JSON.stringify(payload));
 }
+class PayloadTooLargeError extends Error {
+    constructor() {
+        super('body too large');
+    }
+}
 function readBody(req, max = 4096) {
     return new Promise((resolve, reject) => {
         let body = '';
+        let settled = false;
         req.on('data', (chunk) => {
+            if (settled)
+                return;
             body += chunk.toString('utf8');
             if (body.length > max) {
-                reject(new Error('body too large'));
-                req.destroy();
+                settled = true;
+                reject(new PayloadTooLargeError());
+                req.resume();
             }
         });
-        req.on('end', () => resolve(body));
-        req.on('error', reject);
+        req.on('end', () => {
+            if (!settled) {
+                settled = true;
+                resolve(body);
+            }
+        });
+        req.on('error', (err) => {
+            if (!settled) {
+                settled = true;
+                reject(err);
+            }
+        });
     });
 }
 /**
@@ -192,10 +211,11 @@ export function registerImmuneUiRoute(ctx, store, getBudgetMs) {
                             sendJson(res, 415, { error: 'content-type must be application/json' });
                             return;
                         }
-                        const body = await readBody(req);
+                        const body = await readBody(req, 65536);
                         let parsed;
                         try {
-                            parsed = (body.trim() ? JSON.parse(body) : {});
+                            const raw = JSON.parse(body);
+                            parsed = typeof raw === 'object' && raw !== null ? raw : {};
                         }
                         catch {
                             sendJson(res, 400, { error: 'invalid json' });
@@ -241,6 +261,10 @@ export function registerImmuneUiRoute(ctx, store, getBudgetMs) {
                     sendJson(res, 405, { error: 'method not allowed' });
                 }
                 catch (error) {
+                    if (error instanceof PayloadTooLargeError) {
+                        sendJson(res, 413, { error: 'body too large' });
+                        return;
+                    }
                     sendJson(res, 500, { error: error instanceof Error ? error.message : String(error) });
                 }
             },

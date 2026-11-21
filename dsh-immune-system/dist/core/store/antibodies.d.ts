@@ -49,7 +49,7 @@ export declare function bumpHits(db: DatabaseSync, ids: number[]): void;
 export declare function markPromoted(db: DatabaseSync, id: number, now?: number): void;
 export declare function listAntibodies(db: DatabaseSync, includeRetired?: boolean): Antibody[];
 export declare function removeAntibody(db: DatabaseSync, id: number): boolean;
-export declare function setAntibodyStatus(db: DatabaseSync, id: number, status: AntibodyStatus): boolean;
+export declare function setAntibodyStatus(db: DatabaseSync, id: number, status: AntibodyStatus, retireReason?: string): boolean;
 export interface PenaltyContext {
     failureText: string;
     toolName: string;
